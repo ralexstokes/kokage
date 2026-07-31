@@ -2,7 +2,7 @@
 
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, RunningTree, ScopeRef,
-    host::{RawActor, RunnableActor},
+    raw::{RawActor, RunnableActor},
 };
 
 pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {

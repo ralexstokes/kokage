@@ -8,7 +8,7 @@ use crate::{
 /// A type-erased, thread-safe error type used as the `Err` half of
 /// [`ExitResult`](crate::ExitResult).
 ///
-/// This is re-exported as `kokage::host::BoxError`.
+/// This is re-exported as `kokage::BoxError`.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ExitResult> + Send + 'static>>;

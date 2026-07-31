@@ -1,4 +1,4 @@
-use kokage::{DynamicTree, host::TaskSpec};
+use kokage::{DynamicTree, TaskSpec};
 use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]

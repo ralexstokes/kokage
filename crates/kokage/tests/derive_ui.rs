@@ -22,9 +22,9 @@ fn derive_ui() {
     // configurable until the spec or slot is consumed by placement/define.
     t.pass("tests/ui/declaration-unsealed/*.rs");
 
-    // Public API tiers are intentionally disjoint: observation and raw-hosting
-    // types live outside the crate root and day-one prelude, while the
-    // low-level supervisor module and its nested-child constructor remain
-    // private implementation details.
+    // Public API tiers are intentionally disjoint: task declarations and
+    // their shared error surface live at the root, raw actor hosting and
+    // observation have named modules, and neither escape hatch is in the
+    // prelude. The low-level supervisor layer remains private.
     t.compile_fail("tests/ui/public-api/*.rs");
 }

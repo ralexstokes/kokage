@@ -5,9 +5,10 @@ use support::TreeBuilder;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
-    host::{BoxError, RawActor, RawContext, TaskSpec},
+    ActorSpec, ActorStatus, BoxError, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
+    TaskSpec,
     prelude::*,
+    raw::{RawActor, RawContext},
 };
 use tokio::sync::{Mutex, Notify, mpsc, watch};
 

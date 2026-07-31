@@ -6,8 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningTree, host::TaskSpec,
-    observe::ActorStats,
+    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningTree, TaskSpec, observe::ActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
 use serde_json::{Value, json};

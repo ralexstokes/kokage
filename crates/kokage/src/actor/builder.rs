@@ -264,7 +264,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// validation. Supervised placement rejects a zero mailbox capacity with
     /// [`BuildError`](crate::BuildError); a direct host
     /// sees the same rejection as
-    /// [`ActorRunError::ZeroMailboxCapacity`](crate::host::ActorRunError::ZeroMailboxCapacity)
+    /// [`ActorRunError::ZeroMailboxCapacity`](crate::raw::ActorRunError::ZeroMailboxCapacity)
     /// when the run starts.
     pub fn into_runnable(self) -> RunnableActor {
         self.into_deferred_node()
@@ -547,7 +547,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(crate::host::ActorRunError::ZeroMailboxCapacity { actor_id }) if actor_id == "worker"
+            Err(crate::raw::ActorRunError::ZeroMailboxCapacity { actor_id }) if actor_id == "worker"
         ));
     }
 

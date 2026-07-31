@@ -10,10 +10,10 @@ The core idea is the one that has kept telecom switches running for decades:
 organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
-Kokage needs one dependency. Its prelude covers the day-one actor
-surface; hosting and observation APIs are grouped under `kokage::host` and
-`kokage::observe`, while advanced actor APIs remain at the crate root. Actor
-applications can place raw task children with `kokage::host::TaskSpec`:
+Kokage needs one dependency. Its prelude covers the common actor, task, and
+tree surface; raw actor execution and observation APIs are grouped under
+`kokage::raw` and `kokage::observe`, while less common types remain at the
+crate root.
 
 ```toml
 [dependencies]

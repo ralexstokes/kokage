@@ -9,7 +9,7 @@ whether a navigated scope has dynamic membership.
 ## Standalone dynamic scope
 
 ```rust
-use kokage::{Actor, ExitResult, ActorSpec, DynamicTree, Context};
+use kokage::prelude::*;
 
 struct Worker;
 
@@ -90,7 +90,7 @@ The inserted `ActorSpec` carries its own mailbox, restart, shutdown, and
 message-size settings:
 
 ```rust
-# use kokage::{ActorSpec, MailboxMode, Restart};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
@@ -109,7 +109,7 @@ Mount a dynamic declaration inside an ordered tree, then navigate by subtree
 id:
 
 ```rust
-# use kokage::{ActorSpec, DynamicTree, OrderedTree};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # #[tokio::main]
@@ -142,7 +142,7 @@ A declaration's `ScopeRef` is stable before spawn, so actor factories can captur
 future dynamic scopes directly:
 
 ```rust
-# use kokage::{ActorSpec, DynamicTree, OrderedTree};
+# use kokage::prelude::*;
 # struct Router(kokage::ScopeRef);
 # impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = DynamicTree::new();
@@ -185,7 +185,7 @@ pass the bounded future to `Context::offload`, such as
 Declare a leader-owned scope explicitly:
 
 ```rust
-# use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy};
+# use kokage::prelude::*;
 # struct Leader;
 # impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let session = OrderedTree::new().subtree(

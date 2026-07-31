@@ -42,27 +42,28 @@
 //! place the resulting specs in the desired scopes. Actor ids are local to
 //! their containing scope, so sibling scopes may reuse an id.
 //!
-//! The [`prelude`] re-exports the day-one composition and actor surface plus
-//! snapshot observation. Host-facing execution types live in [`host`],
-//! lifecycle-history types live in [`observe`], and advanced actor and
-//! supervisor configuration stays at the crate root.
+//! The [`prelude`] re-exports the common composition, actor, and task surface plus
+//! snapshot observation. Raw actor execution types live in [`raw`],
+//! lifecycle-history types live in [`observe`], and less common actor and
+//! supervisor types stay at the crate root.
 //!
 //! # Core types
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`ActorSpec`] / [`ActorSlot`] | Single-actor declarations and typed cyclic wiring. |
+//! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
+//! | [`ActorSlot`] | Typed cyclic actor wiring. |
 //! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
 //! | [`RunningTree`] | Owns a spawned supervision tree and requests graceful shutdown when dropped. |
 //! | [`ScopeRef`] | Cheaply cloneable, non-owning reference and control capability for a supervision scope; [`ScopeRef::kind`] reports ordered or dynamic membership. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
-//! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
+//! | [`raw::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
-//! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
+//! | [`raw::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
 //!
 //! # Composition modes
 //!
@@ -89,11 +90,11 @@
 //! or restart wait. Applying [`tokio::time::timeout`] to `send` is lossy
 //! because cancelling that future drops its message.
 //!
-//! [`host::RawContext::recv`] returns `None` as soon as shutdown is
+//! [`raw::RawContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
 //! [`Shutdown::drain_for`] and finishes queued messages before stopping; a
-//! hand-written [`host::RawActor`] loop can inspect remaining work with
-//! [`host::RawContext::try_recv`].
+//! hand-written [`raw::RawActor`] loop can inspect remaining work with
+//! [`raw::RawContext::try_recv`].
 //!
 //! Restarts also lose queued messages: the new incarnation binds a fresh
 //! mailbox, so messages accepted behind a poison message are dropped with the
@@ -115,7 +116,7 @@
 //! transitions. The mechanisms remain separate so each keeps the identity,
 //! ordering, and delivery contract appropriate to its audience.
 //!
-//! [`host::RawContext::watch`] follows logical membership across restarts;
+//! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
 //! both actors; [`Guard::cancel`] stops future delivery, and permanent removal
 //! of either membership ends the watch. Watches, mailbox timers, offloads, and
@@ -135,7 +136,7 @@
 //! Slots let factories refer to actors declared later without string lookup:
 //!
 //! ```
-//! use kokage::prelude::*;
+//! use kokage::{ActorSlot, prelude::*};
 //! # struct Left(kokage::ActorRef<()>);
 //! # struct Right(kokage::ActorRef<()>);
 //! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
@@ -159,7 +160,7 @@
 //! ```
 //! use kokage::{
 //!     Actor, ExitResult, ActorSpec, CancellationToken, Context,
-//!     Restart, Shutdown, host::DEFAULT_SHUTDOWN_BOUND,
+//!     Restart, Shutdown, raw::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //! # struct Worker;
 //! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
@@ -239,20 +240,15 @@ mod runtime;
 mod supervision;
 mod supervisor;
 
-/// Raw actor and task-hosting machinery.
+/// Raw actor hosting machinery.
 ///
 /// Most applications use [`ActorSpec`] and a supervision tree.
 /// This module contains the lower-level execution surface for custom receive
-/// loops, directly driven runnable actors, and arbitrary supervised tasks.
-/// For task children it re-exports the types needed to name a
-/// [`host::TaskSpec::new`] factory as a standalone function; the shared
-/// [`ExitResult`] alias lives at the crate root. Nested scopes are
-/// composed with [`OrderedTree::subtree`] or
-/// [`ScopeRef::add_subtree`].
-pub mod host {
-    pub use crate::{
-        actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
-        supervisor::{BoxError, TaskContext, TaskSpec},
+/// loops and directly driven runnable actors. Handler actors, supervised task
+/// declarations, and their shared [`ExitResult`] live at the crate root.
+pub mod raw {
+    pub use crate::actor::{
+        ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
     };
 }
 
@@ -275,21 +271,20 @@ pub mod observe {
 
 /// Common imports for `kokage` consumers.
 ///
-/// This prelude is intentionally limited to the actor traits and contexts,
-/// the primary [`OrderedTree`] composition path, its [`ActorSpec`] and
-/// [`ActorSlot`] declarations,
-/// and the snapshot pair used by
-/// application health and readiness code. Advanced configuration, error,
-/// dynamic-membership, lifecycle-history, and raw-hosting types remain at the
-/// crate root or in [`observe`] and [`host`].
+/// This prelude covers the actor traits and contexts, static and dynamic tree
+/// composition, child declarations, common supervision policies, actor-owned
+/// operations, and the snapshot pair used by application health and readiness
+/// code. Errors, cyclic-wiring declarations, lifecycle-history types, and raw
+/// actor hosting remain at the crate root or in [`observe`] and [`raw`].
 ///
 /// Derive macros are explicit root imports rather than prelude members. Add
 /// `use kokage::ActorFactory;` for an unqualified `#[derive(ActorFactory)]`,
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSlot, ActorSpec, Context, ExitResult, OrderedTree, Reply,
-        StopContext,
+        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
+        MonitorEvent, OrderedTree, Reply, Restart, Shutdown, StopContext, Strategy, TaskSpec,
+        TimerKey,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -305,6 +300,6 @@ pub use actor::{
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
 pub use supervisor::{
-    Backoff, BuildError, CancellationToken, ControlError, Guard, Restart, Shutdown, Strategy,
-    SupervisorError,
+    Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, Restart, Shutdown,
+    Strategy, SupervisorError, TaskContext, TaskSpec,
 };

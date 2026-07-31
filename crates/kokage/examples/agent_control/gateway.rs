@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kokage::{
     Actor, ActorRef, Context, ExitResult,
-    host::{RawActor, RawContext},
+    raw::{RawActor, RawContext},
 };
 
 use crate::{

@@ -10,9 +10,9 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, CallError, ExitResult, MailboxMode, OrderedTree, Reply, Restart,
-    SendError, SendRejection, SendTimeoutError, TrySendError,
-    host::{BoxError, RawActor, RawContext},
+    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, OrderedTree, Reply,
+    Restart, SendError, SendRejection, SendTimeoutError, TrySendError,
+    raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
 

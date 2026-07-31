@@ -9,7 +9,7 @@ pub(crate) use crate::supervisor::BoxError;
 /// message. Call [`Context::stop`](crate::Context::stop) before
 /// returning successfully to request a clean self-stop. A custom [`RawActor`]
 /// owns its receive loop, so returning `Ok(())` simply completes that actor
-/// cleanly. A [`TaskSpec`](crate::host::TaskSpec) factory uses the same result:
+/// cleanly. A [`TaskSpec`](crate::TaskSpec) factory uses the same result:
 /// `Ok(())` is a clean task exit, while `Err` is a supervised failure.
 pub type ExitResult = Result<(), BoxError>;
 
@@ -47,7 +47,7 @@ pub trait RawActor: Send + 'static {
     type Msg: Send + 'static;
 
     /// Returns whether this actor reports readiness explicitly from
-    /// [`RawContext::mark_ready`](crate::host::RawContext::mark_ready).
+    /// [`RawContext::mark_ready`](crate::raw::RawContext::mark_ready).
     ///
     /// Handler-style [`Actor`](crate::Actor) implementations do this
     /// automatically after `on_start`; custom raw actors are ready immediately

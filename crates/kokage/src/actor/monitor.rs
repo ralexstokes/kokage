@@ -56,7 +56,7 @@ pub enum ExitReason {
 
 /// Lifecycle transition of a watched logical actor.
 ///
-/// Delivered by [`RawContext::watch`](crate::host::RawContext::watch). Events
+/// Delivered by [`RawContext::watch`](crate::raw::RawContext::watch). Events
 /// for one watch arrive in lifecycle order: every [`Started`](Self::Started)
 /// for a generation precedes its [`Exited`](Self::Exited), and
 /// [`Removed`](Self::Removed) is final.

@@ -10,8 +10,8 @@ use std::{
 
 use kokage::{
     ActorSpec, Restart, Strategy,
-    host::{RawActor, RawContext},
     prelude::*,
+    raw::{RawActor, RawContext},
 };
 use tokio::time::{sleep, timeout};
 

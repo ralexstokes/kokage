@@ -1,7 +1,7 @@
 # Task children and supervision
 
 Actors are the usual unit of a kokage application, but a supervision tree can
-also host plain async tasks. Define those tasks with [`host::TaskSpec`], place
+also host plain async tasks. Define those tasks with [`TaskSpec`], place
 them in an [`OrderedTree`] or [`DynamicTree`], and control the result through
 the same [`RunningTree`] and [`ScopeRef`] used for actor trees.
 
@@ -11,10 +11,7 @@ This example supervises a `front-desk` task that should run forever and a
 ```rust,no_run
 use std::time::Duration;
 
-use kokage::{
-    Backoff, OrderedTree, Restart, Shutdown,
-    host::TaskSpec,
-};
+use kokage::{Backoff, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -207,7 +204,7 @@ decides whether queued messages are drained or discarded. Offload deadlines
 remain independent bounds on individual offloads; they do not extend the
 child grace. A host running an actor outside a tree passes the same `Shutdown`
 value to `RunnableActor::run_until`; a conventional standalone declaration is
-`Shutdown::drain_for(`[`host::DEFAULT_SHUTDOWN_BOUND`]`)`.
+`Shutdown::drain_for(`[`raw::DEFAULT_SHUTDOWN_BOUND`]`)`.
 
 ### One shutdown clock per child
 
@@ -319,7 +316,7 @@ and lifecycle watches, but do not appear in actor message statistics.
 For dynamic actor construction and actor-owned scopes, continue to [Dynamic
 actors](dynamic-actors.md).
 
-[`host::TaskSpec`]: https://stokes.io/kokage/api/kokage/host/struct.TaskSpec.html
+[`TaskSpec`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
@@ -328,6 +325,6 @@ actors](dynamic-actors.md).
 [`Backoff`]: https://stokes.io/kokage/api/kokage/enum.Backoff.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html
-[`host::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/host/constant.DEFAULT_SHUTDOWN_BOUND.html
+[`raw::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/raw/constant.DEFAULT_SHUTDOWN_BOUND.html
 [`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html#variant.ChildExited
 [`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control

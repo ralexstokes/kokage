@@ -1,6 +1,5 @@
 use kokage::{
-    OrderedTree, Restart, TreeNode,
-    host::TaskSpec,
+    OrderedTree, Restart, TaskSpec, TreeNode,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
         SupervisorStateView,

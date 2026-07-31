@@ -7,7 +7,7 @@ topology are expressed together.
 ## Recursive composition
 
 ```rust
-# use kokage::{ActorSpec, OrderedTree, Strategy};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let tree = OrderedTree::new()
@@ -47,7 +47,7 @@ Each tree has a stable reference as soon as it is created. This lets a factory
 capture a future scope without a global cell:
 
 ```rust
-# use kokage::{ActorSpec, DynamicTree, OrderedTree};
+# use kokage::prelude::*;
 # struct Router(kokage::ScopeRef);
 # impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = DynamicTree::new();
@@ -72,7 +72,7 @@ the whole subtree; the tree's `default_restart` and `default_shutdown` still
 apply inside it:
 
 ```rust
-# use kokage::{OrderedTree, Restart, Shutdown, TreeNode};
+# use kokage::{TreeNode, prelude::*};
 let workers = OrderedTree::new();
 let app = OrderedTree::new().subtree(
     "workers",
@@ -98,7 +98,7 @@ the temporary owner is dropped at the end of the statement.
 `outline()` returns an `observe::SupervisionOutline` without spawning:
 
 ```rust
-# use kokage::{ActorSpec, OrderedTree, Strategy};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let tree = OrderedTree::new()
@@ -118,7 +118,7 @@ and lifecycle watches cover live state.
 Represent an actor and its workers with an explicit nested tree:
 
 ```rust
-# use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy};
+# use kokage::prelude::*;
 # struct Leader;
 # impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = OrderedTree::new().subtree(

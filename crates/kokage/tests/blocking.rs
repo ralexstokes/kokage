@@ -10,7 +10,7 @@ use std::{
 
 use kokage::{
     ActorSpec, ExitResult, Restart, Shutdown,
-    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use tokio::{
     sync::{Notify, oneshot},

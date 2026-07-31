@@ -1,6 +1,6 @@
 use kokage::{
     AttachedChild, AttachedChildIdentity,
-    host::TaskSpec,
+    TaskSpec,
 };
 
 fn main() {

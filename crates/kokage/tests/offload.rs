@@ -15,8 +15,8 @@ use std::{
 
 use kokage::{
     ActorSlot, Guard, MailboxMode, OffloadDeadline, Restart, ScopeRef, Shutdown,
-    host::{RawActor, RawContext},
     prelude::*,
+    raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc, oneshot};
 

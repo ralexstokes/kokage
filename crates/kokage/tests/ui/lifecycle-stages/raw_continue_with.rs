@@ -1,6 +1,6 @@
 //! A `RawActor` owns its loop and never drains the continuation queue, so
 //! `continue_with` there dropped the message silently.
-use kokage::{host::RawContext, ExitResult, host::RawActor};
+use kokage::{raw::RawContext, ExitResult, raw::RawActor};
 
 struct Custom;
 

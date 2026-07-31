@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc};
 
 use kokage::{
     ActorSpec, ExitResult, TrySendError,
-    host::{RawActor, RawContext},
+    raw::{RawActor, RawContext},
 };
 use tokio::sync::Notify;
 

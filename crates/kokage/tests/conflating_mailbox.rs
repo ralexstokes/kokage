@@ -13,7 +13,7 @@ use std::{
 
 use kokage::{
     Actor, ActorSlot, CallError, Context, ExitResult, MailboxMode, Reply, Restart, Shutdown,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
+    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;

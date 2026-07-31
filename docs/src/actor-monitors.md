@@ -6,7 +6,7 @@ identity an `ActorRef` points at — and turns each lifecycle transition into an
 ordinary typed message in the observer's mailbox:
 
 ```rust
-use kokage::{Actor, ActorRef, ExitResult, Context, MonitorEvent};
+use kokage::prelude::*;
 
 enum CoordinatorMsg {
     Worker(MonitorEvent),

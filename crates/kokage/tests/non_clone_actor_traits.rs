@@ -15,8 +15,8 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, Restart, ScopeRef, Shutdown,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
     observe::SupervisorSnapshotReceiver,
+    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::sync::mpsc;
 

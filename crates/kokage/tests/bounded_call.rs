@@ -8,7 +8,7 @@ use std::{
 
 use kokage::{
     ActorSpec, CallError, ExitResult, Reply, Restart, Shutdown,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use tokio::{
     sync::{Notify, mpsc},
