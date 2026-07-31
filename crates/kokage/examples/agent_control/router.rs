@@ -318,10 +318,9 @@ impl Actor for Router {
                             .expect("only child transitions have an alignment sequence");
                         if matches!(event.kind, LifecycleEventKind::ChildAdded)
                             && let Some(child) = event.child
-                            && let child_id = child.child_id
-                            && !self.routes_subtree(&child_id)
+                            && !self.routes_subtree(&child.child_id)
                         {
-                            self.pipeline_sweep(child_id, ctx);
+                            self.pipeline_sweep(child.child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}

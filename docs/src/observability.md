@@ -209,11 +209,9 @@ Use `handle.watch_lifecycle().direct_children()` when per-scope sequence
 alignment is the goal. Keep the default tree stream for diagnostics,
 dashboards, and any observer that needs a single feed. The
 `trading_engine` example's breaker consumes the child identity's
-`total_restarts`;
-that counter records scheduled restarts — the
-same occurrences as the restart-intensity window, including clean exits
-restarted under `Restart::always()`. Group-strategy sibling respawns do not
-increment it.
+`total_restarts`; that counter records scheduled restarts — the same
+occurrences as the restart-intensity window, including clean exits restarted
+under `Restart::always()`. Group-strategy sibling respawns do not increment it.
 
 ## Tracing And Stats
 

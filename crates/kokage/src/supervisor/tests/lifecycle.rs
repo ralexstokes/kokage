@@ -33,6 +33,17 @@ fn child_identity(event: &LifecycleEvent) -> &crate::supervisor::ChildLifecycleI
         .expect("child transition carries identity")
 }
 
+/// The envelope carries child identity exactly for `Child*` kinds. Asserting
+/// it on every polled event covers locally emitted and recursively forwarded
+/// transitions alike.
+fn assert_envelope_invariant(event: &LifecycleEvent) {
+    assert_eq!(
+        event.child.is_some(),
+        event.is_child_transition(),
+        "child identity is carried exactly by child transitions: {event:?}"
+    );
+}
+
 async fn next_matching(
     watch: &mut LifecycleWatch,
     mut predicate: impl FnMut(&LifecycleEvent) -> bool,
@@ -40,6 +51,7 @@ async fn next_matching(
     timeout(WAIT, async {
         loop {
             let event = watch.next().await.expect("lifecycle stream remains open");
+            assert_envelope_invariant(&event);
             if predicate(&event) {
                 break event;
             }
@@ -519,6 +531,7 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
     let mut stopped = false;
     timeout(WAIT, async {
         while let Some(event) = watch.next().await {
+            assert_envelope_invariant(&event);
             match event.kind {
                 LifecycleEventKind::ChildExited { .. } => exited.push(
                     event
