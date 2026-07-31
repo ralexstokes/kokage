@@ -380,8 +380,15 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
     .expect("context-scope lifecycle event arrives");
     assert!(matches!(
         scheduled.kind,
-        LifecycleEventKind::ChildRestartScheduled { ref child_id, .. } if child_id == "crasher"
+        LifecycleEventKind::ChildRestartScheduled { .. }
     ));
+    assert_eq!(
+        scheduled
+            .child
+            .expect("child transition carries identity")
+            .child_id,
+        "crasher"
+    );
 
     let handle = runtime.scope();
     shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;

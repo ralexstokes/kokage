@@ -37,10 +37,10 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildExitView, ChildMembershipView, ChildOutline, ChildSnapshot,
-            ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
-            LifecycleWatch, ScopeKind, ScopePathSegment, SupervisionOutline, SupervisorSnapshot,
-            SupervisorStateView,
+            ActorStats, ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildOutline,
+            ChildSnapshot, ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent,
+            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SupervisionOutline,
+            SupervisorSnapshot, SupervisorStateView,
         };
     }
 }
@@ -70,6 +70,13 @@ fn root_actor_slot_constructs_a_cyclic_declaration() {
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
+    event
+        .child
+        .as_ref()
+        .is_some_and(|child| child.child_id == child_id)
+}
 
 async fn named_task(ctx: kokage::TaskContext) -> kokage::ExitResult {
     ctx.shutdown_token().cancelled().await;
@@ -200,16 +207,10 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         loop {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
-                event,
-                LifecycleEvent {
-                    kind: LifecycleEventKind::ChildStarted {
-                        ref child_id,
-                        generation: 0,
-                        ..
-                    },
-                    ..
-                } if child_id == "worker"
-            ) {
+                event.kind,
+                LifecycleEventKind::ChildStarted { generation: 0 }
+            ) && child_id_is(&event, "worker")
+            {
                 break event;
             }
         }
@@ -217,16 +218,10 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .await
     .expect("timed out waiting for started event");
     assert!(matches!(
-        started,
-        LifecycleEvent {
-            kind: LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            },
-            ..
-        } if child_id == "worker"
+        started.kind,
+        LifecycleEventKind::ChildStarted { generation: 0 }
     ));
+    assert!(child_id_is(&started, "worker"));
 
     let snapshot = handle.scope().snapshot();
     assert!(
@@ -294,12 +289,9 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted {
-                    ref child_id,
-                    generation: 0,
-                    ..
-                } if child_id == "worker"
-            ) {
+                LifecycleEventKind::ChildStarted { generation: 0 }
+            ) && child_id_is(&event, "worker")
+            {
                 break;
             }
         }

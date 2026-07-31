@@ -316,7 +316,9 @@ impl Actor for Router {
                         self.alignment_seq = event
                             .seq()
                             .expect("only child transitions have an alignment sequence");
-                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
+                        if matches!(event.kind, LifecycleEventKind::ChildAdded)
+                            && let Some(child) = event.child
+                            && let child_id = child.child_id
                             && !self.routes_subtree(&child_id)
                         {
                             self.pipeline_sweep(child_id, ctx);

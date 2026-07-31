@@ -260,10 +260,10 @@ pub mod observe {
         actor::ActorStats,
         supervision::{ChildOutline, SupervisionOutline},
         supervisor::{
-            ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-            CompletionOutcome, CompletionWatch, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
-            SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildSnapshot,
+            ChildStateView, CompletionError, CompletionOutcome, CompletionWatch, LifecycleEvent,
+            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SnapshotRecvError,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }

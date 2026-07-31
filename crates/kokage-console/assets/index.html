@@ -813,6 +813,8 @@
     const scopePath = Array.isArray(envelope.scope_path) ? envelope.scope_path : [];
     const envelopeName = variantName(envelope.kind);
     const envelopePayload = variantPayload(envelope.kind);
+    const child = envelope.child && typeof envelope.child === "object" ? envelope.child : {};
+    const childId = child.child_id == null ? "unknown" : child.child_id;
     let eventName = envelopeName;
     let lifecycle = envelopePayload;
     let info;
@@ -823,12 +825,12 @@
     } else if (eventName === "SupervisorStopped") {
       info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" };
     } else if (eventName === "ChildAdded") {
-      info = { kind: "added", cls: "kind-accent", msg: "Child '" + lifecycle.child_id + "' added" };
+      info = { kind: "added", cls: "kind-accent", msg: "Child '" + childId + "' added" };
     } else if (eventName === "ChildStarted") {
       info = {
         kind: lifecycle.generation > 0 ? "restarted" : "started",
         cls: lifecycle.generation > 0 ? "kind-warn" : "kind-good",
-        msg: "Child '" + lifecycle.child_id + "' started (gen " + lifecycle.generation + ")",
+        msg: "Child '" + childId + "' started (gen " + lifecycle.generation + ")",
       };
     } else if (eventName === "ChildExited") {
       const st = formatExit(lifecycle.exit) || "unknown";
@@ -836,14 +838,14 @@
       info = {
         kind: failed ? "failed" : "exited",
         cls: failed ? "kind-critical" : "kind-muted",
-        msg: "Child '" + lifecycle.child_id + "' exited: " + st + " (gen " + lifecycle.generation + ")",
+        msg: "Child '" + childId + "' exited: " + st + " (gen " + lifecycle.generation + ")",
       };
     } else if (eventName === "ChildRemoved") {
-      info = { kind: "removed", cls: "kind-muted", msg: "Child '" + lifecycle.child_id + "' removed" };
+      info = { kind: "removed", cls: "kind-muted", msg: "Child '" + childId + "' removed" };
     } else if (eventName === "ChildRestartScheduled") {
       info = {
         kind: "scheduled", cls: "kind-accent",
-        msg: "Restart scheduled for '" + lifecycle.child_id + "' in " +
+        msg: "Restart scheduled for '" + childId + "' in " +
           formatDuration(lifecycle.delay),
       };
     } else if (eventName === "RestartIntensityExceeded") {

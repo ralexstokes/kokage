@@ -227,7 +227,7 @@ async fn reduce_completion(
         } else if event.scope_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline) {
             let needs_realign = matches!(
                 &event.kind,
-                LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }
+                LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildExited { .. }
             );
             set.apply(&event);
             if needs_realign {
@@ -304,24 +304,19 @@ impl CompletionSet {
     }
 
     fn apply(&mut self, event: &LifecycleEvent) {
-        let (child_id, lineage, transition) = match &event.kind {
-            LifecycleEventKind::ChildAdded {
-                child_id, lineage, ..
+        let Some(child) = event.child.as_ref() else {
+            return;
+        };
+        let transition = match &event.kind {
+            LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildStarted { .. } => {
+                CompletionTransition::Running
             }
-            | LifecycleEventKind::ChildStarted {
-                child_id, lineage, ..
-            } => (child_id, *lineage, CompletionTransition::Running),
-            LifecycleEventKind::ChildExited {
-                child_id,
-                lineage,
-                exit,
-                ..
-            } => (child_id, *lineage, CompletionTransition::Exited(exit)),
-            LifecycleEventKind::ChildRemoved {
-                child_id, lineage, ..
-            } => (child_id, *lineage, CompletionTransition::Removed),
+            LifecycleEventKind::ChildExited { exit, .. } => CompletionTransition::Exited(exit),
+            LifecycleEventKind::ChildRemoved => CompletionTransition::Removed,
             _ => return,
         };
+        let child_id = &child.child_id;
+        let lineage = child.lineage;
         if !self.awaits(child_id) {
             return;
         }
@@ -426,7 +421,8 @@ fn is_completed(child: &ChildSnapshot) -> bool {
 mod tests {
     use super::*;
     use crate::supervisor::{
-        ChildExitView, Strategy, event::ExitKind, snapshot::SupervisorStateView,
+        ChildExitView, ChildLifecycleIdentity, Strategy, event::ExitKind,
+        snapshot::SupervisorStateView,
     };
 
     enum TestLifecycleKind {
@@ -453,43 +449,30 @@ mod tests {
         kind: TestLifecycleKind,
     ) -> LifecycleEvent {
         let kind = match kind {
-            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
-            },
-            TestLifecycleKind::Started { generation } => LifecycleEventKind::ChildStarted {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
-                generation,
-            },
+            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded,
+            TestLifecycleKind::Started { generation } => {
+                LifecycleEventKind::ChildStarted { generation }
+            }
             TestLifecycleKind::Exited {
                 generation,
                 reason,
                 cancelled,
             } => LifecycleEventKind::ChildExited {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
                 generation,
                 exit: ChildExitView::new(reason, cancelled),
             },
-            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved {
+            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved,
+        };
+        LifecycleEvent::local_child(
+            ChildLifecycleIdentity {
                 seq,
                 child_id: child_id.to_owned(),
                 lineage,
                 total_restarts: 0,
                 child_restart_count: 0,
             },
-        };
-        LifecycleEvent::local(kind)
+            kind,
+        )
     }
 
     fn completed(seq: u64, child_id: &str) -> LifecycleEvent {
