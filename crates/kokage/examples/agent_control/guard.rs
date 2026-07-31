@@ -19,36 +19,23 @@ use crate::{
     model::ScriptedModel,
 };
 
+#[derive(kokage::ActorFactory)]
 pub struct Guard {
     budget: ActorRef<BudgetMsg>,
     router: ActorRef<RouterMsg>,
     model: ScriptedModel,
     gate: Arc<AtomicBool>,
+    #[factory(default)]
     failures: VecDeque<Instant>,
+    #[factory(default)]
     report: GuardReport,
+    #[factory(default = 1)]
     backoff_multiplier: u32,
 }
 
 const PROBE_TIMER: TimerKey = TimerKey::new("guard-probe");
 
 impl Guard {
-    pub fn new(
-        budget: ActorRef<BudgetMsg>,
-        router: ActorRef<RouterMsg>,
-        model: ScriptedModel,
-        gate: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            budget,
-            router,
-            model,
-            gate,
-            failures: VecDeque::new(),
-            report: GuardReport::default(),
-            backoff_multiplier: 1,
-        }
-    }
-
     async fn set_paused(&mut self, paused: bool, ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.report.paused == paused {
             return Ok(());

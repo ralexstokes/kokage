@@ -14,15 +14,9 @@ use crate::{
     },
 };
 
-#[derive(Clone)]
+#[derive(kokage::ActorFactory)]
 pub struct Outbound {
     chat: ChatSim,
-}
-
-impl Outbound {
-    pub fn new(chat: ChatSim) -> Self {
-        Self { chat }
-    }
 }
 
 impl Actor for Outbound {
@@ -38,15 +32,9 @@ impl Actor for Outbound {
     }
 }
 
-#[derive(Clone)]
+#[derive(kokage::ActorFactory)]
 pub struct Progress {
     chat: ChatSim,
-}
-
-impl Progress {
-    pub fn new(chat: ChatSim) -> Self {
-        Self { chat }
-    }
 }
 
 impl Actor for Progress {
@@ -65,7 +53,7 @@ impl Actor for Progress {
     }
 }
 
-#[derive(Clone)]
+#[derive(kokage::ActorFactory)]
 pub struct Inbound {
     chat: ChatSim,
     journal: ActorRef<JournalMsg>,
@@ -73,14 +61,6 @@ pub struct Inbound {
 }
 
 impl Inbound {
-    pub fn new(chat: ChatSim, journal: ActorRef<JournalMsg>, router: ActorRef<RouterMsg>) -> Self {
-        Self {
-            chat,
-            journal,
-            router,
-        }
-    }
-
     async fn delivery(&self, delivery: crate::messages::ChatDelivery) -> ExitResult {
         let ack = self
             .journal

@@ -134,10 +134,10 @@ use std::{
 use kokage::{DynamicScopeRef, Guard as OperationGuard, Mailbox, ScopeRef, Strategy, prelude::*};
 use tokio::time::Instant;
 
-use budget::Budget;
+use budget::{Budget, BudgetFactory};
 use chat::ChatSim;
-use gateway::{Inbound, Outbound, Progress};
-use guard::Guard;
+use gateway::{Inbound, InboundFactory, Outbound, OutboundFactory, Progress, ProgressFactory};
+use guard::{Guard, GuardFactory};
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
@@ -236,33 +236,24 @@ async fn build_app() -> Result<App, AnyError> {
     let session_epoch = Arc::new(AtomicU64::new(0));
     let (tree, handles) = ControlPlane::tree(|handles| ControlPlaneFactories {
         gateway: GatewayTreeFactories {
-            outbound: {
-                let chat = chat.clone();
-                move || Outbound::new(chat.clone())
-            },
-            progress: {
-                let chat = chat.clone();
-                move || Progress::new(chat.clone())
-            },
-            inbound: {
-                let chat = chat.clone();
-                let journal = handles.core.journal.clone();
-                let router = handles.core.router.clone();
-                move || Inbound::new(chat.clone(), journal.clone(), router.clone())
+            outbound: OutboundFactory { chat: chat.clone() },
+            progress: ProgressFactory { chat: chat.clone() },
+            inbound: InboundFactory {
+                chat: chat.clone(),
+                journal: handles.core.journal.clone(),
+                router: handles.core.router.clone(),
             },
         },
         core: CoreTreeFactories {
             journal: Journal::default,
-            budget: {
-                let guard = handles.core.guard.clone();
-                move || Budget::new(guard.clone())
+            budget: BudgetFactory {
+                guard: handles.core.guard.clone(),
             },
-            guard: {
-                let budget = handles.core.budget.clone();
-                let router = handles.core.router.clone();
-                let model = model.clone();
-                let gate = gate.clone();
-                move || Guard::new(budget.clone(), router.clone(), model.clone(), gate.clone())
+            guard: GuardFactory {
+                budget: handles.core.budget.clone(),
+                router: handles.core.router.clone(),
+                model: model.clone(),
+                gate: gate.clone(),
             },
             tool_host: ToolHost::default,
             // Router state dies with a router incarnation; its generated
