@@ -1485,6 +1485,10 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// `key` exactly replaces the pending entry, and
     /// [`clear_timeout`](Self::clear_timeout) exactly retracts it until delivery.
     /// Timeouts at other keys are unchanged.
+    ///
+    /// The timer table belongs to this actor incarnation: a stop or restart
+    /// drops every pending entry, and an elapsed timeout is not delivered once
+    /// the loop begins stopping, including during shutdown drain.
     pub fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
         self.cx.timers.insert(key, message, delay);
     }
