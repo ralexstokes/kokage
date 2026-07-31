@@ -1,70 +1,64 @@
-# Where to go next
+# Next Steps
 
-## API documentation
+You have taken the print shop from one actor to a supervised, observable,
+dynamically growing system. Here is where to go from the end of the
+tutorial.
 
-The rustdocs are the reference companion to this tutorial — the crate-level
-docs in particular are worth reading in full:
+## Read the examples
+
+Every feature in this book has a runnable counterpart under
+[`crates/kokage/examples/`](https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples)
+— run any of them with `cargo run -p kokage --example <name>`:
+
+- `supervised_actors`, `individual_actor_policies`, `graph_failures` —
+  restart policies and strategies in action.
+- `mailbox_backpressure`, `send_vs_try_send`, `drain_policy` — mailboxes,
+  send flavors, and shutdown draining.
+- `supervision`, `ref_rebind`, `builder_validation` — cyclic wiring, refs
+  riding through restarts, spawn-time validation.
+- `dynamic_actors`, `directory` — runtime membership and a userland name
+  directory.
+- `blocking_work`, `blocking_lifecycle` — cooperative and detached blocking
+  work.
+- `task_*` — the task-supervision family: strategies, nesting, dynamic
+  children, restart intensity, snapshots, lifecycle watches.
+- `actor_metrics`, `actor_tracing`, `task_metrics`, `task_tracing`,
+  `supervisor_snapshot_trace` — observability patterns ready to adapt.
+- `json_edge` — decoding a byte-oriented edge into typed messages.
+
+Two larger examples put everything together the way this book did, and are
+kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
+reconciler, telemetry) and **`agent_control`** (an LLM-agent control loop
+with offloaded model calls) — both run with `--features metrics`.
+
+## Watch a tree live
+
+The experimental `kokage-console` crate serves a local web dashboard over a
+running supervision tree — spawn your tree, point your browser at it, and
+watch restarts and mailboxes in real time:
 
 ```sh
-just doc   # cargo doc --workspace --no-deps --open
+cargo run -p kokage-console --example console
 ```
 
-## Runnable examples
+## Reference material
 
-Every feature covered here (and a few that weren't) has a focused, runnable
-example. Run any of them with:
+- The [API documentation](https://stokes.io/kokage/api/) covers the full
+  surface, including corners this tutorial only brushed — the `raw` module,
+  the `observe` module's view types, and every builder option.
+- The crate-level rustdoc for `kokage` doubles as a dense architectural
+  summary: delivery contracts, lifecycle model, and the reasoning behind
+  them.
 
-```sh
-cargo run -p <crate> --example <name>
-```
+## A word on maturity
 
-### `kokage`
+Kokage is early-stage and evolving: the crates are not yet published to
+crates.io (use a git dependency), and APIs may change. The delivery
+contract, ownership model, and supervision semantics described in this book
+are the stable core of the design — and since this book is compiled and run
+against the sources on every change, it will keep telling you the truth as
+the edges move.
 
-| Example | Shows |
-|---------|-------|
-| `task_one_for_one_restart` | Basic task restart behaviour. |
-| `task_one_for_all_pipeline` | Interdependent task children with `OneForAll`. |
-| `task_nested_supervisor` | Nested task supervision trees. |
-| `task_dynamic_children` | Adding and removing task children at runtime. |
-| `task_per_child_restart_intensity` | Per-child intensity overrides. |
-| `task_shutdown_with_cancellation_token` | Graceful shutdown driven by a signal. |
-| `task_watch_lifecycle_recursive` | Reacting to lifecycle events across a tree. |
-| `task_subscribe_to_snapshots` | Polling supervisor state. |
-| `task_tracing` | Structured logging output. |
-| `task_metrics` | Prometheus metrics (needs `--features metrics`). |
-| `supervised_actors` | Per-actor supervision with default policies. |
-| `supervision` | A typed cycle wired explicitly with `ActorSlot`. |
-| `individual_actor_policies` | Per-actor restart/shutdown overrides. |
-| `dynamic_actors` | Adding and removing actors at runtime, refs distributed by message. |
-| `directory` | A typed, userland name-directory actor (registry replacement pattern). |
-| `drain_policy` | Draining queued actor messages within one shutdown bound. |
-| `ref_rebind` | Stable typed actor refs across supervised restarts. |
-| `send_vs_try_send` | Waiting, fail-fast, and bounded sends across a restart window. |
-| `mailbox_backpressure` | Bounded mailbox back-pressure. |
-| `graph_failures` | Supervisor policy around actor failures. |
-| `builder_validation` | Tree validation errors reported at spawn. |
-| `blocking_work` | Awaiting cooperative blocking work with `run_blocking`. |
-| `blocking_lifecycle` | Detached blocking work returning results as actor messages. |
-| `actor_tracing` | Structured actor and message tracing. |
-| `supervisor_snapshot_trace` | Observing runtime state in detail. |
-| `actor_metrics` | Pull-based actor stats and user-owned export sampling. |
-| `console` | The experimental live web console (`cargo run -p kokage-console --example console`). |
-
-## Design notes
-
-Things this tutorial glossed over that matter in production:
-
-- **Messages are ordinary owned Rust values.** Use enums to model protocol
-  variants and put `Reply<T>` in a variant when callers need a response.
-- **Messages in a failed actor's mailbox are lost** when it restarts. If an
-  order must survive a press jam, persist it outside the actor and re-inject
-  it — the same discipline OTP asks of you.
-- **Restart budgets are your circuit breakers.** Tune `Restart` so a
-  persistent fault escalates to something (a parent supervisor, your process
-  manager, an alert) instead of looping forever.
-- **Application-level breakers must not infer restarts from event pairs.** A
-  lag marker means transition detail was dropped. Drive a breaker from
-  `watch_lifecycle()` and the cumulative counters on its event envelope, or
-  from snapshots — see the observability chapter.
-- **Blocking work needs cancellation checks.** Cooperative shutdown is only as
-  graceful as your `token.is_cancelled()` checks are frequent.
+Found something unclear, or a failure story the supervisor handled badly?
+Issues and discussions are welcome on
+[GitHub](https://github.com/ralexstokes/kokage).

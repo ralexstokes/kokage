@@ -1,39 +1,86 @@
-# Getting started
+# Getting Started
 
-## Dependencies
+Our print shop opens with a single machine: a press. In this chapter you will
+define it as an actor, place it in a supervision tree, send it work, and shut
+the shop down cleanly.
 
-Add the actor crate:
+## Defining an actor
 
-```toml
-[dependencies]
-kokage = { git = "https://github.com/ralexstokes/kokage" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-`kokage::prelude` covers the common actor traits, contexts, declarations,
-typed refs, tree types, supervision policies, operations, and snapshot types.
-Import less common errors, control types, and escape hatches explicitly.
-
-## Your first actor
-
-An actor implements `Actor`. An `ActorSpec` pairs its incarnation factory
-with a scope-local id and exposes the stable typed ref before the declaration
-moves into a tree.
+An actor is a value that owns some state and processes messages one at a time.
+You define one by implementing the [`Actor`] trait:
 
 ```rust
 use kokage::prelude::*;
 
-struct Greeter;
+struct Press {
+    jobs_done: u64,
+}
 
-impl Actor for Greeter {
+impl Actor for Press {
     type Msg = String;
 
-    async fn handle(
-        &mut self,
-        name: String,
-        _ctx: &mut Context<'_, Self>,
-    ) -> ExitResult {
-        println!("hello, {name}");
+    async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.jobs_done += 1;
+        println!("printing: {job}");
+        Ok(())
+    }
+}
+```
+
+Three things to notice:
+
+- `type Msg` is the *only* message type this actor accepts. Everyone who
+  talks to the press does so through an `ActorRef<String>`, and the compiler
+  keeps them honest.
+- `handle` is `async` and takes `&mut self`: the actor processes one message
+  at a time, so it can mutate its state freely with no locks.
+- The return type [`ExitResult`] is `Result<(), BoxError>`. Returning `Ok(())`
+  means "ready for the next message". Returning an `Err` means the actor
+  *failed* — the supervisor tears this run down and applies its restart
+  policy. We put that to work in [Let It Crash](let-it-crash.md).
+
+`handle` is the only required method. (There are optional lifecycle hooks —
+`on_start` and `on_stop` — covered in
+[Lifecycle and Timers](lifecycle-and-timers.md).)
+
+## Declaring and spawning
+
+An actor definition alone does not run anything. You *declare* an instance
+with [`ActorSpec`], giving it an id and a **factory** — a closure that builds
+a fresh actor value:
+
+```rust
+# use kokage::prelude::*;
+# struct Press { jobs_done: u64 }
+# impl Actor for Press {
+#     type Msg = String;
+#     async fn handle(&mut self, _job: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
+# }
+let spec = ActorSpec::new("press", || Press { jobs_done: 0 });
+```
+
+The factory matters: it is called once for the first start *and once for every
+restart*, so each incarnation begins from a clean state. Anything the actor
+should keep across restarts must live outside it (or be re-derived in
+`on_start`).
+
+Declarations go into an [`OrderedTree`], the simplest supervision tree.
+`add_actor` returns the typed [`ActorRef`] for reaching the actor, and
+`spawn` brings the whole tree to life:
+
+```rust
+use kokage::prelude::*;
+
+struct Press {
+    jobs_done: u64,
+}
+
+impl Actor for Press {
+    type Msg = String;
+
+    async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.jobs_done += 1;
+        println!("printing: {job}");
         Ok(())
     }
 }
@@ -41,41 +88,51 @@ impl Actor for Greeter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = OrderedTree::new();
-    let greeter = tree.add_actor(ActorSpec::new("greeter", || Greeter));
-
+    let press = tree.add_actor(ActorSpec::new("press", || Press { jobs_done: 0 }));
     let runtime = tree.spawn()?;
-    greeter.send("world".to_owned()).await?;
+
+    press.send("100 business cards".to_owned()).await?;
+    press.send("flyers, glossy".to_owned()).await?;
+
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
 
-The important boundaries are:
+Run it and the press prints both jobs before the program exits.
 
-- the factory is retained and invoked again for every supervised restart;
-- `ActorRef<M>` is cloneable and follows the logical actor across those
-  incarnations;
-- `ActorSpec<M>` and trees are single-use declarations with one runtime owner;
-- actor ids are unique only within their immediate scope.
+## Who owns what
 
-`spawn()` returns the owning `RunningTree`. Dropping it requests graceful
-shutdown, so do not discard it with `let _ = ...`. Use `runtime.scope()`
-for non-owning control and observation.
+That short `main` demonstrates the two handle types you will use constantly:
 
-## Supervision vocabulary
+- **[`ActorRef`]** (`press` above) is a cheap, cloneable, *typed sender*.
+  `send` waits for mailbox capacity, delivers the message, and — crucially —
+  keeps working across supervised restarts of the actor. Clone it freely and
+  hand copies to anyone who needs to talk to the press.
+- **[`RunningTree`]** (`runtime` above) *owns* the spawned tree. Keep it
+  alive for as long as the application should run: dropping it requests a
+  graceful shutdown. In particular, `let _ = tree.spawn()?;` shuts the tree
+  down immediately — bind it to a real name.
 
-A **child** is one actor, task, or nested supervisor. A **strategy** selects
-which siblings restart together. A **restart policy** decides whether a
-particular exit is restartable. A **restart budget** prevents an endless crash
-loop. A **shutdown policy** controls graceful-stop bounds.
+`shutdown_and_wait` asks every child to stop and waits until they have. By
+default each actor *drains*: it finishes the messages already in its mailbox
+(within a 5-second grace period) before stopping, which is why both jobs
+print. Shutdown policy is configurable per actor — see
+[Ownership and Shutdown](ownership-and-shutdown.md).
 
-`OrderedTree` composes static children recursively. `DynamicTree` is a
-runtime membership boundary. Both produce the same runtime-handle and
-observation model.
+## Where's the error handling?
 
-## One tree for actors and tasks
+`press.send(...).await?` can fail only if the press is permanently gone
+(tree shut down, actor removed). It does not fail when the press is busy —
+the call waits — nor when the press is mid-restart. That is the "shade" of
+the supervision tree: callers do not track the lifecycle of their
+collaborators; they hold a ref and send.
 
-Actors and raw task children share a supervision tree. Place actors with
-`OrderedTree::add_actor`, nested scopes with `add_subtree`, and task children
-with `add_task`. The following chapters apply the same supervision vocabulary
-to each kind.
+Next, let's make the conversation two-way.
+
+[`Actor`]: https://stokes.io/kokage/api/kokage/trait.Actor.html
+[`ExitResult`]: https://stokes.io/kokage/api/kokage/type.ExitResult.html
+[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
+[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`ActorRef`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html
+[`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html

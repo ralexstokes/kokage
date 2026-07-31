@@ -2,21 +2,32 @@
 
 [Introduction](introduction.md)
 
-# Tutorial
+# First Steps
 
-- [Getting started](getting-started.md)
-- [Actor wiring](actor-trees.md)
-- [Delivery bounds and request/reply](request-reply.md)
-- [Bounded actor offloads](actor-offloads.md)
-- [Supervised actors](supervised-actors.md)
-- [Task children and supervision](supervision.md)
-- [Inspectable supervision trees](supervision-trees.md)
-- [Actor timers](actor-timers.md)
-- [Watching actors](actor-monitors.md)
-- [Dynamic actors](dynamic-actors.md)
-  - [Ownership during membership transitions](ownership-transitions.md)
+- [Getting Started](getting-started.md)
+- [Request and Reply](request-reply.md)
+- [Mailboxes and Backpressure](mailboxes.md)
+
+# Fault Tolerance
+
+- [Let It Crash](let-it-crash.md)
+- [Supervision Trees](supervision-trees.md)
+- [Task Children](task-children.md)
+
+# The Actor Toolkit
+
+- [Lifecycle and Timers](lifecycle-and-timers.md)
+- [Blocking Work and Offloads](blocking-and-offloads.md)
+- [Watching Peers](watching-peers.md)
+
+# Advanced Composition
+
+- [Dynamic Trees](dynamic-trees.md)
+- [Wiring Patterns](wiring-patterns.md)
+- [Ownership and Shutdown](ownership-and-shutdown.md)
+- [Raw Actors](raw-actors.md)
+
+# In Production
+
 - [Observability](observability.md)
-
-# Appendix
-
-- [Where to go next](next-steps.md)
+- [Next Steps](next-steps.md)
