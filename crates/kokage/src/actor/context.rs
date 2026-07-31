@@ -111,6 +111,10 @@ impl<M> ActorRef<M> {
         &self.actor_id
     }
 
+    pub(crate) fn identity(&self) -> &Arc<()> {
+        &self.identity
+    }
+
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///

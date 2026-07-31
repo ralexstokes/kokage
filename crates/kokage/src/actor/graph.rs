@@ -613,6 +613,10 @@ impl RunnableActor {
         &self.inner.actor_id
     }
 
+    pub(crate) fn identity(&self) -> &Arc<()> {
+        self.inner.binding_lifecycle.identity()
+    }
+
     pub(crate) fn stats(&self) -> ActorStats {
         self.inner.binding_lifecycle.stats()
     }

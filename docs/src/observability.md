@@ -6,8 +6,8 @@ the system can tell you exactly what has been happening. Kokage exposes three
 observation contracts:
 
 1. `snapshot()` / `snapshots()` for conflated current state;
-2. `changes()` for self-resynchronizing direct-child history, with
-   `observe_children()` / `lifecycle_events()` as lower-level escape hatches;
+2. `lifecycle_events()` for ordered history, with `observe_children()` as the
+   gap-free direct-child state-and-events primitive;
 3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
 
 Tracing, actor stats, metrics, and `kokage-console` project those contracts for
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_tree = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = running_tree.snapshots();
+    let mut snapshots = running_tree.scope().snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -87,28 +87,15 @@ the latest truth, never a backlog), so predicates passed to `wait_for` /
 `generation == baseline + 1`, because intermediate states may be skipped.
 You saw this pattern in [Let It Crash](let-it-crash.md).
 
-## State and events without manual resynchronization
+## Aligning current state with direct-child events
 
-The common stateful lifecycle entry point is [`changes`]. Every stream starts
-with [`ScopeChange`]`::Reset(snapshot)`, followed by ordered direct-child events
-paired with the current authoritative snapshot.
-If the consumer falls behind, Kokage registers a fresh gap-free subscription
-and yields another reset instead of exposing bookkeeping as application logic:
-
-```rust,ignore
-let mut changes = running_tree.scope().changes();
-while let Some(change) = changes.next().await {
-    match change {
-        ScopeChange::Reset(snapshot) => state = snapshot,
-        ScopeChange::Event { snapshot, .. } => state = snapshot,
-    }
-}
-```
-
-The lower-level [`observe_children`] method returns the aligned snapshot and
-event stream separately when a consumer needs its own reducer or lag policy.
-Initialize from its snapshot, then apply events whose child sequence is greater
-than `snapshot.lifecycle_seq`.
+Most stateful consumers should use [`snapshot`] or [`snapshots`] and avoid
+maintaining a second copy of runtime state. When a consumer does need its own
+direct-child reducer or lag policy, [`observe_children`] atomically returns an
+aligned snapshot and event stream. Initialize from the snapshot, then apply
+events whose child sequence is greater than `snapshot.lifecycle_seq`. After a
+`Lagged` marker, call `observe_children` again and replace local state with the
+fresh snapshot before continuing from its new stream.
 
 ## The recursive lifecycle stream: what happened, in order
 
@@ -151,12 +138,12 @@ removals. The enums are `#[non_exhaustive]`; always match with a catch-all arm.
 
 Delivery is buffered, not conflated. A lower-level consumer that falls far
 behind gets the oldest details collapsed into one `Lagged { dropped }` marker
-— the stream never lies by omission. Prefer `changes()` when automatic
-direct-child realignment is sufficient. Recursive streams have per-scope
-sequence spaces, so a custom recursive reducer must resynchronize each
-affected scope from its snapshot. To feed events into an actor instead of a
-loop, choose the desired stream and call [`LifecycleWatch::forward_to`]. It
-maps events into any `ActorRef` and returns a `Guard`.
+— the stream never lies by omission. Recursive streams have per-scope sequence
+spaces, so a custom recursive reducer must resynchronize each affected scope
+from its snapshot. A direct-child reducer can resubscribe through
+`observe_children` after lag. To feed events into an actor instead of a loop,
+choose the desired stream and call [`LifecycleWatch::forward_to`]. It maps
+events into any `ActorRef` and returns a `Guard`.
 
 Note how this differs from a peer [`MonitorEvent`] watch
 ([Watching Peers](watching-peers.md)): monitors give one actor a typed,
@@ -164,8 +151,8 @@ mailbox-ordered view of one collaborator; the lifecycle stream gives
 operators the whole tree with paths and counters. Same underlying model, a
 projection per audience.
 
-With the `serde` feature, snapshot, lifecycle, and scope-change representations
-have checked wire fixtures, but remain deliberately unversioned during `0.x`.
+With the `serde` feature, snapshot and lifecycle representations have checked
+wire fixtures, but remain deliberately unversioned during `0.x`.
 Treat them as a same-Kokage-version adapter boundary: mixed-version producers
 and consumers, or long-lived persisted event logs, need an application-owned
 versioned envelope and migration policy.
@@ -225,8 +212,6 @@ serves a web dashboard over a running tree
 [`ChildSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildSnapshot.html
 [`ExitStatus`]: https://stokes.io/kokage/api/kokage/observe/enum.ExitStatus.html
 [`observe_children`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.observe_children
-[`changes`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.changes
-[`ScopeChange`]: https://stokes.io/kokage/api/kokage/enum.ScopeChange.html
 [`lifecycle_events`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.lifecycle_events
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
 [`ChildEvent`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildEvent.html

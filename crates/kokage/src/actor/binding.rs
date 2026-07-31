@@ -879,6 +879,7 @@ impl<M> Clone for BindingState<M> {
 }
 
 pub(crate) trait BindingLifecycle: Send + Sync {
+    fn identity(&self) -> &Arc<()>;
     fn unbind(&self);
     fn terminate(&self);
     fn monitor_run(&self) -> MonitorRun;
@@ -1097,6 +1098,10 @@ impl<M> BindingCore<M> {
 }
 
 impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
+    fn identity(&self) -> &Arc<()> {
+        BindingCore::identity(self)
+    }
+
     fn unbind(&self) {
         BindingCore::unbind(self);
     }

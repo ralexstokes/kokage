@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
 
-    scope
+    let cache_warmer = scope
         .add_task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    scope.remove_child("cache-warmer").await?;
+    scope.remove_task(&cache_warmer).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested supervisor added at runtime");
 
-    nested
+    let nested_cache = nested
         .add_task("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested.remove_child("nested-cache").await?;
+    nested.remove_task(&nested_cache).await?;
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),

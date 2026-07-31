@@ -50,7 +50,8 @@ pub(crate) enum ChildKind {
 ///
 /// Construct one with [`new`](Self::new), then apply restart, shutdown, and
 /// membership-retention policies. Nested scopes are built through Kokage's
-/// tree APIs.
+/// tree APIs. For finite dynamic work backed by a consuming factory, use
+/// [`OneShotTaskSpec`] instead.
 pub struct TaskSpec {
     pub(crate) spec: ChildSpec,
 }
@@ -183,14 +184,6 @@ impl TaskSpec {
         }
     }
 
-    /// Marks finite dynamic work as non-restarting and removable on completion.
-    #[must_use]
-    pub fn temporary(self) -> Self {
-        Self {
-            spec: self.spec.restart(RestartPolicy::never()).remove_when_done(),
-        }
-    }
-
     /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
     /// before it is considered started.
     ///
@@ -273,8 +266,13 @@ impl OneShotTaskSpec {
 
     /// Keeps the terminal membership visible after the one-shot task exits.
     ///
-    /// The default removes it after completion. The returned [`TaskRef`](crate::TaskRef)
-    /// retains the terminal outcome either way.
+    /// This is useful when scope-level snapshot observers need to discover the
+    /// terminal state without already holding its [`TaskRef`](crate::TaskRef).
+    /// The retained membership continues to occupy its child id until it is
+    /// passed to [`DynamicScopeRef::remove_task`](crate::DynamicScopeRef::remove_task)
+    /// or the scope shuts down. The default removes the membership after
+    /// completion; the returned `TaskRef` retains the terminal outcome either
+    /// way.
     #[must_use]
     pub fn retain_when_done(self) -> Self {
         Self {

@@ -80,7 +80,7 @@ pub use lifecycle::{
     LifecycleWatch,
 };
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, RestartPolicy, RestartSettings};
+pub use restart::{Backoff, RestartPolicy};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{

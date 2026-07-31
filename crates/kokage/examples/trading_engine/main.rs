@@ -495,7 +495,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     assert!(
         final_status.exit_reasons[VENUE_A]
             .iter()
-            .any(kokage::ExitStatus::is_failure),
+            .any(kokage::observe::ExitStatus::is_failure),
         "venue-a monitor must report the scripted panic as Failure"
     );
     assert!(!bounded_call(&app.health, |reply| HealthMsg::Tripped { reply }).await?);

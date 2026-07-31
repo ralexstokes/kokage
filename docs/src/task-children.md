@@ -92,23 +92,27 @@ supervisor holds back the next declared child until the mark. There is no
 built-in timeout on that wait, so make sure a `wait_for_ready` task always
 reaches `mark_ready` (or exits).
 
-## Policies and one-shot jobs
+## Supervised service policies
 
 Tasks take the same per-child configuration as actors:
 
 ```rust
 # use std::time::Duration;
 # use kokage::prelude::*;
-let spec = TaskSpec::new("indexer", |_ctx| async move { Ok(()) })
-    .shutdown(Shutdown::abort())
-    .temporary();
+let spec = TaskSpec::new("indexer", |ctx| async move {
+    ctx.shutdown_token().cancelled().await;
+    Ok(())
+})
+    .restart(RestartPolicy::on_failure())
+    .shutdown(Shutdown::abort());
 # let _ = spec;
 ```
 
-`temporary()` is the job-style preset: never restart, and remove the
-membership after completion rather than leaving a stopped child in the
-scope. Combined with dynamic trees, this is the substrate for "run a job,
-then forget it" — see [Dynamic Trees](dynamic-trees.md).
+`TaskSpec` takes a repeatable `Fn` factory because the supervisor may need to
+create another incarnation. Finite dynamic work has a separate, narrower
+declaration: `OneShotTaskSpec` takes a consuming `FnOnce` factory, never
+restarts, and removes its membership by default. Its concise entry point is
+`DynamicScopeRef::spawn_once`; see [Dynamic Trees](dynamic-trees.md).
 
 `ctx.generation()` tells a task which incarnation it is (0 for the first
 run), which is handy for logging and for warm-up work that only the first

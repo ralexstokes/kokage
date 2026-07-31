@@ -213,7 +213,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount.remove_child_named(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -236,7 +236,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount.remove_child_named(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))

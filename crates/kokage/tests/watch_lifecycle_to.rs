@@ -336,7 +336,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child("watched")
+        .remove_child_named("watched")
         .await
         .expect("watched subtree removed");
     let (_, final_event) = recv_event(&mut observed).await;
@@ -363,7 +363,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child("sink")
+        .remove_child_named("sink")
         .await
         .expect("target removed");
     timeout(Duration::from_secs(2), guard.finished())

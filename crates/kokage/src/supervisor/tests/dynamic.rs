@@ -193,7 +193,11 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::new("temporary", |_ctx| async move { Ok(()) }).temporary())
+        .add_child(
+            TaskSpec::new("temporary", |_ctx| async move { Ok(()) })
+                .restart(RestartPolicy::never())
+                .remove_when_done(),
+        )
         .await
         .expect("temporary child added");
 

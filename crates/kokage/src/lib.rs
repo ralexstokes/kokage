@@ -234,7 +234,6 @@ pub mod observe {
     pub use crate::supervision::{ChildOutline, SupervisionOutline};
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
-        runtime::{ScopeChange, ScopeChanges},
         supervisor::{
             ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot, ChildStateView,
             ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
@@ -248,10 +247,9 @@ pub mod observe {
 ///
 /// This prelude covers the actor traits and contexts, static and dynamic tree
 /// composition, child declarations, common supervision policies and errors,
-/// actor-owned operations, and the snapshot pair used by application health
-/// and readiness code. Cyclic-wiring declarations, specialized errors,
-/// lifecycle-history types, and raw actor hosting remain at the crate root or
-/// in [`observe`] and [`raw`].
+/// and actor-owned operations. Cyclic-wiring declarations and specialized
+/// errors remain at the crate root; snapshots and lifecycle types live in
+/// [`observe`], and raw actor hosting lives in [`raw`].
 ///
 /// With the `derive` feature enabled, derive macros are explicit root imports
 /// rather than prelude members. Import `ActorFactory` or `Supervision` for an
@@ -260,10 +258,9 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
         DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
-        OneShotTaskSpec, Reply, RestartPolicy, RestartSettings, RunningDynamicTree, RunningTree,
-        ScopeChange, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy,
-        TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
-        observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
+        OneShotTaskSpec, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
+        SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec,
+        TimerKey, Tree,
     };
 }
 
@@ -275,15 +272,11 @@ pub use actor::{
     ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{
-    DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeChange, ScopeChanges, ScopeRef,
-    TaskError, TaskRef,
-};
+pub use runtime::{DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeRef, TaskError, TaskRef};
 #[cfg(feature = "derive")]
 pub use supervision::{DynamicScope, Supervision, SupervisionFactories};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
-    Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
-    MailboxShutdown, OneShotTaskSpec, RestartPolicy, RestartSettings, Shutdown, Strategy,
-    SupervisorError, TaskContext, TaskSpec,
+    Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, MailboxShutdown,
+    OneShotTaskSpec, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
 };

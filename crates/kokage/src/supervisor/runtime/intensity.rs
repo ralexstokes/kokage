@@ -30,16 +30,9 @@ pub(crate) struct RestartTracker {
 
 impl RestartTracker {
     pub(crate) fn new(intensity: RestartPolicy) -> Self {
-        let (max_restarts, within, backoff) = intensity
-            .settings()
-            .map(|settings| {
-                (
-                    settings.max_restarts(),
-                    settings.within(),
-                    settings.backoff_policy(),
-                )
-            })
-            .unwrap_or((0, Duration::from_secs(30), Backoff::None));
+        let max_restarts = intensity.max_restarts().unwrap_or(0);
+        let within = intensity.within().unwrap_or(Duration::from_secs(30));
+        let backoff = intensity.backoff_policy().unwrap_or(Backoff::None);
         Self {
             max_restarts,
             within,
@@ -190,11 +183,10 @@ mod tests {
         let intensity = RestartPolicy::on_failure()
             .limit(10, Duration::from_secs(10))
             .backoff(policy);
-        let settings = intensity.settings().expect("restartable policy");
         RestartTracker {
-            max_restarts: settings.max_restarts(),
-            within: settings.within(),
-            backoff: settings.backoff_policy(),
+            max_restarts: intensity.max_restarts().expect("restartable policy"),
+            within: intensity.within().expect("restartable policy"),
+            backoff: intensity.backoff_policy().expect("restartable policy"),
             times: VecDeque::new(),
             rng: JitterRng {
                 state: 0x1234_5678_9abc_def0,

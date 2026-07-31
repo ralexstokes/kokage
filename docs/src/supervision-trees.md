@@ -50,13 +50,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The shop: the press room first, then the front desk that feeds it.
     let mut shop = Tree::new();
-    shop.add_subtree("press-room", press_room);
+    let press_room = shop.add_subtree("press-room", press_room);
     let desk = shop.add_actor("front-desk", move || FrontDesk {
         presses: vec![press_a.clone(), press_b.clone()],
         next: 0,
     });
 
     let running_tree = shop.spawn()?;
+    press_room.wait_started().await?;
 
     desk.send("posters x20".to_owned()).await?;
     desk.send("stickers x300".to_owned()).await?;
