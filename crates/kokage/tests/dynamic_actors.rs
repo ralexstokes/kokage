@@ -19,7 +19,7 @@ use kokage::{
     DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
     RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
     StopContext, SupervisorError, TaskSpec, Tree,
-    observe::ChildMembershipView,
+    observe::{ChildMembershipView, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -332,7 +332,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
             .scope()
             .actor_stats()
             .into_iter()
-            .find(|stats| stats.actor_id == "sink")
+            .find(|stats| stats.stats.actor_id == "sink")
             .expect("sink stats available")
             .lineage,
         initial_lineage
@@ -377,7 +377,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .scope()
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "sink")
+        .find(|stats| stats.stats.actor_id == "sink")
         .expect("replacement stats available")
         .lineage;
     assert_eq!(replacement_lineage, replacement_snapshot_lineage);
@@ -1091,11 +1091,11 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .scope()
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "sink")
+        .find(|stats| stats.stats.actor_id == "sink")
         .expect("dynamic actor stats available");
-    assert_eq!(stats.message_bytes_accepted, Some(12));
+    assert_eq!(stats.stats.message_bytes_accepted, Some(12));
     assert_eq!(second_ref.stats().message_bytes_accepted, Some(12));
-    assert_eq!(stats.mailbox_capacity, 1);
+    assert_eq!(stats.stats.mailbox_capacity, 1);
 
     shutdown_dynamic_runtime(&runtime, "message-size observation test shutdown").await;
 }
@@ -1113,6 +1113,120 @@ impl RawActor for GatedDrain {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
+}
+
+enum MailboxShutdownProbe {
+    Gate,
+    Count,
+}
+
+struct GatedMailboxProbe {
+    id: &'static str,
+    entered: mpsc::UnboundedSender<&'static str>,
+    handled: mpsc::UnboundedSender<&'static str>,
+    release: Arc<Notify>,
+}
+
+impl Actor for GatedMailboxProbe {
+    type Msg = MailboxShutdownProbe;
+
+    async fn handle(
+        &mut self,
+        message: MailboxShutdownProbe,
+        _ctx: &mut Context<'_, Self>,
+    ) -> ExitResult {
+        match message {
+            MailboxShutdownProbe::Gate => {
+                self.entered.send(self.id).expect("probe receiver alive");
+                self.release.notified().await;
+            }
+            MailboxShutdownProbe::Count => {
+                self.handled.send(self.id).expect("probe receiver alive");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
+    let runtime = DynamicTree::new()
+        .default_mailbox_shutdown(MailboxShutdown::Discard)
+        .spawn()
+        .expect("dynamic tree builds");
+    let scope = support::dynamic_root(&runtime);
+    let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+    let (handled_tx, mut handled_rx) = mpsc::unbounded_channel();
+    let discard_release = Arc::new(Notify::new());
+    let drain_release = Arc::new(Notify::new());
+
+    let discarded = scope
+        .add_actor("discarded", {
+            let entered = entered_tx.clone();
+            let handled = handled_tx.clone();
+            let release = discard_release.clone();
+            move || GatedMailboxProbe {
+                id: "discarded",
+                entered: entered.clone(),
+                handled: handled.clone(),
+                release: release.clone(),
+            }
+        })
+        .await
+        .expect("defaulted actor added");
+    let drained = scope
+        .add_actor_spec(
+            ActorSpec::new("drained", {
+                let entered = entered_tx.clone();
+                let handled = handled_tx.clone();
+                let release = drain_release.clone();
+                move || GatedMailboxProbe {
+                    id: "drained",
+                    entered: entered.clone(),
+                    handled: handled.clone(),
+                    release: release.clone(),
+                }
+            })
+            .mailbox_shutdown(MailboxShutdown::Drain),
+        )
+        .await
+        .expect("overridden actor added");
+
+    discarded
+        .send(MailboxShutdownProbe::Gate)
+        .await
+        .expect("discard gate accepted");
+    drained
+        .send(MailboxShutdownProbe::Gate)
+        .await
+        .expect("drain gate accepted");
+    let first = entered_rx.recv().await.expect("first probe entered");
+    let second = entered_rx.recv().await.expect("second probe entered");
+    assert_ne!(first, second);
+    discarded
+        .send(MailboxShutdownProbe::Count)
+        .await
+        .expect("discard count queued");
+    drained
+        .send(MailboxShutdownProbe::Count)
+        .await
+        .expect("drain count queued");
+
+    let mut snapshots = runtime.subscribe_snapshots();
+    runtime.shutdown();
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for(|snapshot| snapshot.state == SupervisorStateView::Stopping),
+    )
+    .await
+    .expect("shutdown state published")
+    .expect("snapshot stream remains open");
+    discard_release.notify_one();
+    drain_release.notify_one();
+    shutdown_dynamic_runtime(&runtime, "mailbox shutdown default test").await;
+
+    assert_eq!(handled_rx.recv().await, Some("drained"));
+    assert!(handled_rx.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -1330,7 +1444,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
             .scope()
             .actor_stats()
             .iter()
-            .all(|stats| stats.actor_id != "dynamic"),
+            .all(|stats| stats.stats.actor_id != "dynamic"),
         "timed-out removal immediately forgets actor stats"
     );
     assert!(matches!(

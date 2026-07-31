@@ -3,9 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use kokage::observe::{
-    LifecycleEvent, ScopedActorStats, SupervisorSnapshot, SupervisorSnapshotReceiver,
-};
+use kokage::observe::{LifecycleEvent, ScopedActorStats, SupervisorSnapshot};
 use tokio::time::{self, Duration};
 
 use crate::server::AppState;
@@ -71,8 +69,7 @@ fn stats_message(stats: &[ScopedActorStats]) -> Message {
     )
 }
 
-async fn send_snapshot(socket: &mut WebSocket, snapshots: &mut SupervisorSnapshotReceiver) -> bool {
-    let snapshot = snapshots.latest();
+async fn send_snapshot(socket: &mut WebSocket, snapshot: SupervisorSnapshot) -> bool {
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 
@@ -102,7 +99,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut lifecycle = (state.lifecycle)();
 
     // Send current snapshot immediately on connect.
-    if !send_snapshot(&mut socket, &mut snapshots).await {
+    if !send_snapshot(&mut socket, snapshots.latest()).await {
         return;
     }
     let mut last_sent_stats = (state.stats)();
@@ -116,10 +113,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             result = snapshots.changed() => {
-                if result.is_err() {
+                let Ok(snapshot) = result else {
                     break;
-                }
-                if !send_snapshot(&mut socket, &mut snapshots).await {
+                };
+                if !send_snapshot(&mut socket, snapshot).await {
                     break;
                 }
             }

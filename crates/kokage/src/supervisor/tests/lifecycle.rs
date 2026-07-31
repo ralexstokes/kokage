@@ -100,28 +100,6 @@ fn assert_envelope_invariant(event: &LifecycleEvent) {
     );
 }
 
-trait LifecycleEventTestExt {
-    fn seq(&self) -> Option<u64>;
-    fn total_restarts(&self) -> Option<u64>;
-}
-
-impl LifecycleEventTestExt for LifecycleEvent {
-    fn seq(&self) -> Option<u64> {
-        try_child_identity(self).map(|child| child.seq)
-    }
-
-    fn total_restarts(&self) -> Option<u64> {
-        try_child_identity(self)
-            .map(|child| child.total_restarts)
-            .or(match self.kind {
-                LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
-                    Some(total_restarts)
-                }
-                _ => None,
-            })
-    }
-}
-
 async fn next_matching(
     watch: &mut LifecycleWatch,
     mut predicate: impl FnMut(&LifecycleEvent) -> bool,

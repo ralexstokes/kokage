@@ -8,8 +8,8 @@ use tokio::{
 };
 
 use kokage::{
-    ActorSpec, BuildError, DynamicTree, MailboxMode, RestartMode, RestartPolicy, Shutdown,
-    Strategy, SubtreeSpec, TaskSpec,
+    ActorSpec, BuildError, DynamicTree, MailboxMode, MailboxShutdown, RestartMode, RestartPolicy,
+    Shutdown, Strategy, SubtreeSpec, TaskSpec,
     observe::ScopeKind,
     prelude::*,
     raw::{RawActor, RawContext},
@@ -63,7 +63,8 @@ fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let mut tree = Tree::new()
         .strategy(Strategy::RestForOne)
-        .default_restart(RestartPolicy::always());
+        .default_restart(RestartPolicy::always())
+        .default_mailbox_shutdown(MailboxShutdown::Discard);
     tree.add_subtree("workers", Tree::new().strategy(Strategy::OneForAll));
     tree.add_task_spec(
         TaskSpec::new("clock", |ctx| async move {
@@ -73,7 +74,11 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
         .restart(RestartMode::Always)
         .shutdown(Shutdown::abort()),
     );
-    tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
+    tree.add_actor_spec(
+        ActorSpec::new("ingest", || Worker)
+            .restart(RestartMode::Never)
+            .mailbox_shutdown(MailboxShutdown::Drain),
+    );
     tree.add_actor_spec(ActorSpec::new("parse", || Worker));
     let outline = tree.outline();
 
@@ -81,6 +86,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     assert_eq!(outline.strategy, Strategy::RestForOne);
     assert_eq!(outline.default_restart, RestartPolicy::always());
     assert_eq!(outline.default_shutdown, Shutdown::default());
+    assert_eq!(outline.default_mailbox_shutdown, MailboxShutdown::Discard);
     assert_eq!(outline.child_ids(), ["workers", "clock", "ingest", "parse"]);
 
     let ChildOutline::Scope {
@@ -101,20 +107,43 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     assert_eq!(*restart, RestartPolicy::always());
     assert_eq!(*shutdown, Shutdown::abort());
 
-    let ChildOutline::Actor { restart, .. } = outline.child("ingest").expect("ingest is present")
+    let ChildOutline::Actor {
+        restart,
+        mailbox_shutdown,
+        ..
+    } = outline.child("ingest").expect("ingest is present")
     else {
         panic!("expected an actor");
     };
     assert_eq!(*restart, RestartPolicy::never());
-    let ChildOutline::Actor { restart, .. } = outline.child("parse").expect("parse is present")
+    assert_eq!(*mailbox_shutdown, MailboxShutdown::Drain);
+    let ChildOutline::Actor {
+        restart,
+        mailbox_shutdown,
+        ..
+    } = outline.child("parse").expect("parse is present")
     else {
         panic!("expected an actor");
     };
     assert_eq!(*restart, RestartPolicy::always());
+    assert_eq!(*mailbox_shutdown, MailboxShutdown::Discard);
     assert!(matches!(
         outline.child("clock"),
         Some(ChildOutline::Task { .. })
     ));
+}
+
+#[test]
+fn tree_debug_includes_nested_declarations_without_serde() {
+    let mut workers = Tree::new().default_mailbox_shutdown(MailboxShutdown::Discard);
+    workers.add_actor("press", || Worker);
+    let mut tree = Tree::new();
+    tree.add_subtree("workers", workers);
+
+    let debug = format!("{tree:#?}");
+    assert!(debug.contains("workers"));
+    assert!(debug.contains("press"));
+    assert!(debug.contains("default_mailbox_shutdown: Discard"));
 }
 
 #[test]
@@ -200,7 +229,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
     }));
     let inserted = dynamic
         .scope()
-        .add_subtree_spec(
+        .add_subtree(
             "inserted",
             SubtreeSpec::from(stubborn)
                 .restart(RestartMode::Never)
@@ -259,7 +288,7 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
         .scope()
         .actor_stats()
         .into_iter()
-        .map(|stats| stats.actor_id.to_string())
+        .map(|stats| stats.stats.actor_id)
         .collect();
     labels.sort();
     assert_eq!(labels, ["ingest", "parse"]);
@@ -442,11 +471,16 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
     let customized = DynamicTree::new()
         .default_restart(RestartPolicy::never())
         .default_shutdown(Shutdown::abort())
+        .default_mailbox_shutdown(MailboxShutdown::Discard)
         .outline();
 
     assert_ne!(standard, customized);
     assert_eq!(customized.default_restart, RestartPolicy::never());
     assert_eq!(customized.default_shutdown, Shutdown::abort());
+    assert_eq!(
+        customized.default_mailbox_shutdown,
+        MailboxShutdown::Discard
+    );
 }
 
 #[tokio::test]
@@ -567,7 +601,9 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
 #[test]
 fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let (graph, _ingest, _parse) = two_actor_tree();
-    let mut graph = graph.strategy(Strategy::RestForOne);
+    let mut graph = graph
+        .strategy(Strategy::RestForOne)
+        .default_mailbox_shutdown(MailboxShutdown::Discard);
     graph.add_subtree(
         "workers",
         DynamicTree::new()
@@ -584,6 +620,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let decoded: kokage::observe::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
+    assert_eq!(decoded.default_mailbox_shutdown, MailboxShutdown::Discard);
     let ChildOutline::Scope {
         outline: workers, ..
     } = decoded.child("workers").expect("dynamic scope survives")
@@ -602,76 +639,8 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     assert!(matches!(
         decoded.child("ingest"),
         Some(ChildOutline::Actor {
+            mailbox_shutdown: MailboxShutdown::Discard,
             remove_when_done: true,
-            ..
-        })
-    ));
-}
-
-#[cfg(feature = "serde")]
-#[test]
-fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
-    let (graph, _ingest, _parse) = two_actor_tree();
-    let mut graph = graph;
-    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
-    graph.add_subtree("workers", DynamicTree::new());
-    let mut value = serde_json::to_value(graph.outline()).expect("outline serializes");
-    let children = value["children"]
-        .as_array_mut()
-        .expect("outline children serialize as an array");
-
-    for child in children {
-        if let Some(spec) = child.get_mut("Scope") {
-            // Subtree edges never gain the new sibling field, so a persisted
-            // nested flag has nowhere to migrate to. It must still parse.
-            spec["restart"]["remove_when_done"] = serde_json::Value::Bool(true);
-            continue;
-        }
-        let key = if child.get("Actor").is_some() {
-            "Actor"
-        } else {
-            "Task"
-        };
-        let Some(spec) = child
-            .get_mut(key)
-            .and_then(serde_json::Value::as_object_mut)
-        else {
-            continue;
-        };
-        if spec["remove_when_done"] == serde_json::Value::Bool(true) {
-            spec.remove("remove_when_done");
-            spec["restart"]["remove_when_done"] = serde_json::Value::Bool(true);
-        }
-    }
-
-    let decoded: kokage::observe::SupervisionOutline =
-        serde_json::from_value(value.clone()).expect("legacy outline deserializes");
-    assert!(matches!(
-        decoded.child("ingest"),
-        Some(ChildOutline::Actor {
-            remove_when_done: true,
-            ..
-        })
-    ));
-    assert!(matches!(
-        decoded.child("clock"),
-        Some(ChildOutline::Task {
-            remove_when_done: true,
-            ..
-        })
-    ));
-    assert!(matches!(
-        decoded.child("workers"),
-        Some(ChildOutline::Scope { .. })
-    ));
-
-    value["children"][0]["Actor"]["remove_when_done"] = serde_json::Value::Bool(false);
-    let decoded: kokage::observe::SupervisionOutline =
-        serde_json::from_value(value).expect("new outline field takes precedence");
-    assert!(matches!(
-        decoded.child("ingest"),
-        Some(ChildOutline::Actor {
-            remove_when_done: false,
             ..
         })
     ));
@@ -682,16 +651,6 @@ fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(RestartPolicy::on_failure()).expect("restart serializes");
     assert!(restart.get("remove_when_done").is_none());
-    // A `RestartPolicy` persisted while it still carried retention must keep
-    // deserializing; the flag now lives beside it and is dropped here.
-    let mut legacy_restart = restart.clone();
-    legacy_restart["remove_when_done"] = serde_json::Value::Bool(true);
-    assert_eq!(
-        serde_json::from_value::<RestartPolicy>(legacy_restart)
-            .expect("legacy restart deserializes"),
-        RestartPolicy::on_failure()
-    );
-
     let exponential =
         Backoff::exponential_with_jitter(Duration::from_millis(25), 3, Duration::from_secs(2));
     let backoff = serde_json::to_value(exponential).expect("backoff serializes");
@@ -747,43 +706,4 @@ fn policy_enums_use_their_direct_wire_shape() {
         .is_err(),
         "the former shutdown struct shape is intentionally unsupported"
     );
-}
-
-#[cfg(feature = "serde")]
-#[test]
-fn an_outline_without_scope_edge_policies_inherits_the_parent_defaults() {
-    // Outlines persisted before scope edges carried explicit policies must
-    // keep their meaning: a missing edge policy meant "inherit the enclosing
-    // scope's defaults", not the global defaults.
-    let (graph, _ingest, _parse) = two_actor_tree();
-    let mut graph = graph
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort());
-    graph.add_subtree("workers", DynamicTree::new());
-    let outline = graph.outline();
-
-    let mut json = serde_json::to_value(&outline).expect("outline serializes");
-    let workers = json["children"]
-        .as_array_mut()
-        .expect("children serialize as an array")
-        .iter_mut()
-        .find_map(|child| child.get_mut("Scope"))
-        .expect("scope child serializes under its public tag");
-    let workers = workers.as_object_mut().expect("scope body is an object");
-    assert!(workers.remove("restart").is_some(), "edge restart present");
-    assert!(
-        workers.remove("shutdown").is_some(),
-        "edge shutdown present"
-    );
-
-    let decoded: kokage::observe::SupervisionOutline =
-        serde_json::from_value(json).expect("pre-edge-policy outline deserializes");
-    let ChildOutline::Scope {
-        restart, shutdown, ..
-    } = decoded.child("workers").expect("scope child survives")
-    else {
-        panic!("expected scope child");
-    };
-    assert_eq!(*restart, RestartPolicy::always());
-    assert_eq!(*shutdown, Shutdown::abort());
 }

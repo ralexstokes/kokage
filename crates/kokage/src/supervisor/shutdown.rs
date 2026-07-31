@@ -73,9 +73,14 @@ impl Default for Shutdown {
 
 /// How a handler actor treats messages already accepted when shutdown begins.
 ///
-/// This policy is actor-only. It lives on [`ActorSpec`](crate::ActorSpec), not
-/// [`TaskSpec`](crate::TaskSpec) or [`SubtreeSpec`](crate::SubtreeSpec), so
-/// queue behavior cannot be configured where no mailbox exists.
+/// This policy is actor-only. Configure an individual actor through
+/// [`ActorSpec`](crate::ActorSpec), or actors directly inside a scope through
+/// [`Tree::default_mailbox_shutdown`](crate::Tree::default_mailbox_shutdown)
+/// and
+/// [`DynamicTree::default_mailbox_shutdown`](crate::DynamicTree::default_mailbox_shutdown).
+/// It does not live on [`TaskSpec`](crate::TaskSpec) or
+/// [`SubtreeSpec`](crate::SubtreeSpec), so queue behavior cannot be configured
+/// where no mailbox exists.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

@@ -185,7 +185,7 @@ pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_options: ActorOptions<M>,
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
-    pub(crate) mailbox_shutdown: MailboxShutdown,
+    pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
     pub(crate) remove_when_done: bool,
 }
 
@@ -204,7 +204,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
-            mailbox_shutdown: MailboxShutdown::default(),
+            mailbox_shutdown: None,
             remove_when_done: false,
         }
     }
@@ -264,7 +264,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// Selects how accepted mailbox messages are handled during shutdown.
     #[must_use]
     pub fn mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
-        self.mailbox_shutdown = policy;
+        self.mailbox_shutdown = Some(policy);
         self
     }
 
@@ -306,7 +306,7 @@ impl<M: Send + 'static> ActorSpec<M> {
         let actor = node
             .actor
             .expect("materialized actor declaration carries its runnable actor");
-        ActorHost::new(actor, node.mailbox_shutdown)
+        ActorHost::new(actor, node.mailbox_shutdown.unwrap_or_default())
     }
 
     pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
@@ -359,7 +359,7 @@ pub(crate) struct ActorNode {
     pub(crate) deferred: Option<DeferredActor>,
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
-    pub(crate) mailbox_shutdown: MailboxShutdown,
+    pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
     pub(crate) remove_when_done: bool,
 }
 
@@ -450,7 +450,7 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
-            mailbox_shutdown: MailboxShutdown::default(),
+            mailbox_shutdown: None,
             remove_when_done: false,
         }
     }
@@ -581,7 +581,7 @@ mod tests {
             spec.shutdown,
             Some(Shutdown::graceful_for(Duration::from_secs(1)))
         );
-        assert_eq!(spec.mailbox_shutdown, MailboxShutdown::Discard);
+        assert_eq!(spec.mailbox_shutdown, Some(MailboxShutdown::Discard));
         assert!(!spec.remove_when_done);
     }
 

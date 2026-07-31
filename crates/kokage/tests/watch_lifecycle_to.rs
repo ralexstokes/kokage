@@ -28,14 +28,10 @@ enum SinkMsg {
 }
 
 fn child_seq(event: &LifecycleEvent) -> u64 {
-    match event.kind {
-        LifecycleEventKind::ChildAdded { seq, .. }
-        | LifecycleEventKind::ChildStarted { seq, .. }
-        | LifecycleEventKind::ChildExited { seq, .. }
-        | LifecycleEventKind::ChildRemoved { seq, .. }
-        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => seq,
-        _ => panic!("expected child lifecycle event: {event:?}"),
-    }
+    event
+        .kind
+        .seq()
+        .unwrap_or_else(|| panic!("expected child lifecycle event: {event:?}"))
 }
 
 struct Sink {

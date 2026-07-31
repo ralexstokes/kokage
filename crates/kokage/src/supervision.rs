@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartMode,
-    RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
+    BuildError, ChildSpec, DynamicSupervisorBuilder, MailboxShutdown, OrderedSupervisorBuilder,
+    RestartMode, RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
 use crate::{
@@ -24,6 +24,7 @@ struct ScopeConfig {
     strategy: Strategy,
     default_restart: RestartPolicy,
     default_shutdown: Shutdown,
+    default_mailbox_shutdown: MailboxShutdown,
     mailbox_capacity: usize,
     reservation: Option<u64>,
 }
@@ -34,6 +35,7 @@ impl ScopeConfig {
             strategy: Strategy::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: Shutdown::default(),
+            default_mailbox_shutdown: MailboxShutdown::default(),
             mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
             reservation: None,
         }
@@ -256,6 +258,18 @@ macro_rules! tree_common_methods {
         #[must_use]
         pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
             self.inner = self.inner.default_shutdown(shutdown);
+            self
+        }
+
+        /// Sets the mailbox shutdown policy inherited by actors in this scope.
+        ///
+        /// This actor-only default does not apply to tasks or subtree edges.
+        /// Nested scopes do not inherit it; configure each subtree explicitly
+        /// when it needs a different default. Individual actors can override
+        /// it with [`ActorSpec::mailbox_shutdown`](crate::ActorSpec::mailbox_shutdown).
+        #[must_use]
+        pub fn default_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+            self.inner = self.inner.default_mailbox_shutdown(policy);
             self
         }
 
@@ -571,6 +585,13 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
         self
     }
 
+    /// Sets the mailbox shutdown policy inherited by actor nodes.
+    #[must_use]
+    fn default_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+        self.config_mut().default_mailbox_shutdown = policy;
+        self
+    }
+
     #[must_use]
     fn mailbox_capacity(mut self, capacity: usize) -> Self {
         self.config_mut().mailbox_capacity = capacity;
@@ -581,7 +602,7 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
         IdentityTree::new(self)
     }
 
-    /// Projects the executable scope to comparable, payload-free data.
+    /// Projects the executable scope to serializable, payload-free data.
     #[cfg(feature = "serde")]
     fn outline(&self) -> SupervisionOutline {
         self.node.outline()
@@ -608,7 +629,13 @@ impl ScopeNode {
         let children = match self {
             Self::Ordered { children, .. } => children
                 .iter()
-                .map(|child| child.outline(config.default_restart, config.default_shutdown))
+                .map(|child| {
+                    child.outline(
+                        config.default_restart,
+                        config.default_shutdown,
+                        config.default_mailbox_shutdown,
+                    )
+                })
                 .collect(),
             Self::Dynamic { .. } => Vec::new(),
         };
@@ -617,6 +644,7 @@ impl ScopeNode {
             strategy: config.strategy,
             default_restart: config.default_restart,
             default_shutdown: config.default_shutdown,
+            default_mailbox_shutdown: config.default_mailbox_shutdown,
             children,
         }
     }
@@ -644,6 +672,7 @@ impl ScopeNode {
                     actor_builder.clone(),
                     config.default_restart,
                     config.default_shutdown,
+                    config.default_mailbox_shutdown,
                 ))
             },
             |reservation| Arc::clone(&reservation.actors),
@@ -652,6 +681,7 @@ impl ScopeNode {
             actor_builder,
             config.default_restart,
             config.default_shutdown,
+            config.default_mailbox_shutdown,
         );
 
         match self {
@@ -686,6 +716,7 @@ impl ScopeNode {
                         &actors,
                         config.default_restart,
                         config.default_shutdown,
+                        config.default_mailbox_shutdown,
                         reservations,
                     )?;
                 }
@@ -705,12 +736,18 @@ impl SupervisionChild {
     }
 
     #[cfg(feature = "serde")]
-    fn outline(&self, default_restart: RestartPolicy, default_shutdown: Shutdown) -> ChildOutline {
+    fn outline(
+        &self,
+        default_restart: RestartPolicy,
+        default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
+    ) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
                 id: actor.label().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
+                mailbox_shutdown: actor.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
                 remove_when_done: actor.remove_when_done,
             },
             Self::Task(child) => {
@@ -743,6 +780,7 @@ impl SupervisionChild {
         actors: &Arc<ActorRuntimeState>,
         default_restart: RestartPolicy,
         default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, BuildError> {
         Ok(match self {
@@ -764,7 +802,7 @@ impl SupervisionChild {
                     ActorChildOptions::new(
                         restart.unwrap_or(default_restart),
                         shutdown.unwrap_or(default_shutdown),
-                        mailbox_shutdown,
+                        mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
                         remove_when_done,
                     ),
                 ))
@@ -801,6 +839,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             RunnableActorBuilder::with_mailbox_capacity(tree.config().mailbox_capacity),
             tree.config().default_restart,
             tree.config().default_shutdown,
+            tree.config().default_mailbox_shutdown,
         ));
         let builder = match tree.node {
             ScopeNode::Ordered { .. } => ReservedScopeBuilder::Ordered(Some(Supervisor::ordered())),
@@ -868,6 +907,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             RunnableActorBuilder::with_mailbox_capacity(config.mailbox_capacity),
             config.default_restart,
             config.default_shutdown,
+            config.default_mailbox_shutdown,
         );
         if let ReservedScopeBuilder::Ordered(builder) = &mut reservation.builder {
             let configured = builder
@@ -910,12 +950,18 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         self.map_tree(|tree| tree.default_shutdown(shutdown))
     }
 
+    /// Sets the mailbox shutdown policy inherited by actor nodes.
+    #[must_use]
+    fn default_mailbox_shutdown(self, policy: MailboxShutdown) -> Self {
+        self.map_tree(|tree| tree.default_mailbox_shutdown(policy))
+    }
+
     #[must_use]
     fn mailbox_capacity(self, capacity: usize) -> Self {
         self.map_tree(|tree| tree.mailbox_capacity(capacity))
     }
 
-    /// Projects the executable scope to comparable, payload-free data.
+    /// Projects the executable scope to serializable, payload-free data.
     #[cfg(feature = "serde")]
     fn outline(&self) -> SupervisionOutline {
         self.tree.outline()
@@ -979,33 +1025,110 @@ impl<const DYNAMIC: bool> std::fmt::Debug for IdentityTree<DYNAMIC> {
 
 impl<const DYNAMIC: bool> std::fmt::Debug for TreeData<DYNAMIC> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let config = self.node.config();
-        let children = match &self.node {
-            ScopeNode::Ordered { children, .. } => children
-                .iter()
-                .map(SupervisionChild::declared_id)
-                .collect::<Vec<_>>(),
-            ScopeNode::Dynamic { .. } => Vec::new(),
+        DebugScope(&self.node).fmt(f)
+    }
+}
+
+struct DebugScope<'a>(&'a ScopeNode);
+
+impl std::fmt::Debug for DebugScope<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let config = self.0.config();
+        let children = match self.0 {
+            ScopeNode::Ordered { children, .. } => children.as_slice(),
+            ScopeNode::Dynamic { .. } => &[],
         };
         f.debug_struct("SupervisionTree")
-            .field("kind", &self.node.kind())
+            .field("kind", &self.0.kind())
             .field("strategy", &config.strategy)
             .field("default_restart", &config.default_restart)
             .field("default_shutdown", &config.default_shutdown)
-            .field("children", &children)
+            .field("default_mailbox_shutdown", &config.default_mailbox_shutdown)
+            .field("children", &DebugChildren { children, config })
             .finish()
     }
 }
 
-/// Payload-free declaration tree suitable for comparison and serialization.
+struct DebugChildren<'a> {
+    children: &'a [SupervisionChild],
+    config: &'a ScopeConfig,
+}
+
+impl std::fmt::Debug for DebugChildren<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.children.iter().map(|child| DebugChild {
+                child,
+                config: self.config,
+            }))
+            .finish()
+    }
+}
+
+struct DebugChild<'a> {
+    child: &'a SupervisionChild,
+    config: &'a ScopeConfig,
+}
+
+impl std::fmt::Debug for DebugChild<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.child {
+            SupervisionChild::Actor(actor) => f
+                .debug_struct("Actor")
+                .field("id", &actor.label())
+                .field(
+                    "restart",
+                    &actor.restart.unwrap_or(self.config.default_restart),
+                )
+                .field(
+                    "shutdown",
+                    &actor.shutdown.unwrap_or(self.config.default_shutdown),
+                )
+                .field(
+                    "mailbox_shutdown",
+                    &actor
+                        .mailbox_shutdown
+                        .unwrap_or(self.config.default_mailbox_shutdown),
+                )
+                .field("remove_when_done", &actor.remove_when_done)
+                .finish(),
+            SupervisionChild::Task(task) => {
+                let (restart, shutdown) = task
+                    .resolved_policies(self.config.default_restart, self.config.default_shutdown);
+                f.debug_struct("Task")
+                    .field("id", &task.id())
+                    .field("restart", &restart)
+                    .field("shutdown", &shutdown)
+                    .field("remove_when_done", &task.removes_when_done())
+                    .finish()
+            }
+            SupervisionChild::Scope {
+                id,
+                node,
+                restart,
+                shutdown,
+            } => f
+                .debug_struct("Scope")
+                .field("id", id)
+                .field("restart", &restart.unwrap_or(self.config.default_restart))
+                .field(
+                    "shutdown",
+                    &shutdown.unwrap_or(self.config.default_shutdown),
+                )
+                .field("tree", &DebugScope(node))
+                .finish(),
+        }
+    }
+}
+
+/// Serializable, payload-free declaration tree for persisted comparison.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "outline_wire::WireOutline")]
 #[non_exhaustive]
 pub struct SupervisionOutline {
     /// Immutable scope kind.
     pub kind: ScopeKind,
-    /// RestartPolicy strategy.
+    /// Restart strategy.
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
     #[serde(default)]
@@ -1013,6 +1136,9 @@ pub struct SupervisionOutline {
     /// Shutdown policy inherited by children without an explicit override.
     #[serde(default)]
     pub default_shutdown: Shutdown,
+    /// Mailbox shutdown policy inherited by actors without an explicit override.
+    #[serde(default)]
+    pub default_mailbox_shutdown: MailboxShutdown,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
 }
@@ -1030,6 +1156,9 @@ pub enum ChildOutline {
         restart: RestartPolicy,
         /// Resolved shutdown policy.
         shutdown: Shutdown,
+        /// Resolved actor mailbox shutdown policy.
+        #[serde(default)]
+        mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
         #[serde(default)]
         remove_when_done: bool,
@@ -1059,119 +1188,6 @@ pub enum ChildOutline {
         /// Nested declaration.
         outline: SupervisionOutline,
     },
-}
-
-/// Deserialization mirror for [`SupervisionOutline`].
-///
-/// Scope-edge policies were added to the outline format after it first
-/// shipped. An outline persisted without them carries no explicit edge
-/// policy, which at declaration time meant "inherit the enclosing scope's
-/// defaults" — so missing fields must resolve against the parent outline's
-/// `default_restart` and `default_shutdown`, not the global defaults.
-#[cfg(feature = "serde")]
-mod outline_wire {
-    use super::{ChildOutline, RestartPolicy, ScopeKind, Shutdown, Strategy, SupervisionOutline};
-    use crate::supervisor::RestartWire;
-
-    #[derive(serde::Deserialize)]
-    pub struct WireOutline {
-        kind: ScopeKind,
-        strategy: Strategy,
-        #[serde(default)]
-        default_restart: RestartPolicy,
-        #[serde(default)]
-        default_shutdown: Shutdown,
-        children: Vec<WireChild>,
-    }
-
-    #[derive(serde::Deserialize)]
-    enum WireChild {
-        Actor {
-            id: String,
-            restart: RestartWire,
-            shutdown: Shutdown,
-            #[serde(default)]
-            remove_when_done: Option<bool>,
-        },
-        Task {
-            id: String,
-            restart: RestartWire,
-            shutdown: Shutdown,
-            #[serde(default)]
-            remove_when_done: Option<bool>,
-        },
-        Scope {
-            id: String,
-            #[serde(default)]
-            restart: Option<RestartPolicy>,
-            #[serde(default)]
-            shutdown: Option<Shutdown>,
-            outline: WireOutline,
-        },
-    }
-
-    impl From<WireOutline> for SupervisionOutline {
-        fn from(wire: WireOutline) -> Self {
-            let WireOutline {
-                kind,
-                strategy,
-                default_restart,
-                default_shutdown,
-                children,
-            } = wire;
-            let children = children
-                .into_iter()
-                .map(|child| match child {
-                    WireChild::Actor {
-                        id,
-                        restart,
-                        shutdown,
-                        remove_when_done,
-                    } => {
-                        let (restart, legacy_remove_when_done) = restart.into_parts();
-                        ChildOutline::Actor {
-                            id,
-                            restart,
-                            shutdown,
-                            remove_when_done: remove_when_done.unwrap_or(legacy_remove_when_done),
-                        }
-                    }
-                    WireChild::Task {
-                        id,
-                        restart,
-                        shutdown,
-                        remove_when_done,
-                    } => {
-                        let (restart, legacy_remove_when_done) = restart.into_parts();
-                        ChildOutline::Task {
-                            id,
-                            restart,
-                            shutdown,
-                            remove_when_done: remove_when_done.unwrap_or(legacy_remove_when_done),
-                        }
-                    }
-                    WireChild::Scope {
-                        id,
-                        restart,
-                        shutdown,
-                        outline,
-                    } => ChildOutline::Scope {
-                        id,
-                        restart: restart.unwrap_or(default_restart),
-                        shutdown: shutdown.unwrap_or(default_shutdown),
-                        outline: outline.into(),
-                    },
-                })
-                .collect();
-            Self {
-                kind,
-                strategy,
-                default_restart,
-                default_shutdown,
-                children,
-            }
-        }
-    }
 }
 
 #[cfg(feature = "serde")]

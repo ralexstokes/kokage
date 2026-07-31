@@ -641,8 +641,8 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         ["venue-a-feed", "venue-b-feed"].iter().all(|id| {
             stats
                 .iter()
-                .find(|sample| sample.actor_id == *id)
-                .is_some_and(|sample| sample.messages_conflated > 0)
+                .find(|sample| sample.stats.actor_id == *id)
+                .is_some_and(|sample| sample.stats.messages_conflated > 0)
         })
     })
     .await?;
@@ -666,8 +666,8 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         assert!(
             feed_stats
                 .iter()
-                .find(|stats| stats.actor_id == id)
-                .is_some_and(|stats| stats.messages_conflated > 0),
+                .find(|stats| stats.stats.actor_id == id)
+                .is_some_and(|stats| stats.stats.messages_conflated > 0),
             "{id} must demonstrate latest-wins conflation"
         );
     }

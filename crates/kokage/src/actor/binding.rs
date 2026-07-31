@@ -94,20 +94,6 @@ pub struct ScopedActorStats {
     pub stats: ActorStats,
 }
 
-impl std::ops::Deref for ScopedActorStats {
-    type Target = ActorStats;
-
-    fn deref(&self) -> &Self::Target {
-        &self.stats
-    }
-}
-
-impl std::ops::DerefMut for ScopedActorStats {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stats
-    }
-}
-
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::{ActorStats, ScopePathSegment, ScopedActorStats};

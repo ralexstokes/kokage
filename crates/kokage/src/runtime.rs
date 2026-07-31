@@ -30,6 +30,7 @@ struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
     default_restart: RestartPolicy,
     default_shutdown: Shutdown,
+    default_mailbox_shutdown: MailboxShutdown,
 }
 
 impl ActorRuntimeState {
@@ -37,12 +38,14 @@ impl ActorRuntimeState {
         actor_builder: RunnableActorBuilder,
         default_restart: RestartPolicy,
         default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
                 actor_builder,
                 default_restart,
                 default_shutdown,
+                default_mailbox_shutdown,
             }),
         }
     }
@@ -52,17 +55,23 @@ impl ActorRuntimeState {
         actor_builder: RunnableActorBuilder,
         default_restart: RestartPolicy,
         default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
             default_restart,
             default_shutdown,
+            default_mailbox_shutdown,
         };
     }
 
-    fn actor_defaults(&self) -> (RestartPolicy, Shutdown) {
+    fn actor_defaults(&self) -> (RestartPolicy, Shutdown, MailboxShutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
-        (config.default_restart, config.default_shutdown)
+        (
+            config.default_restart,
+            config.default_shutdown,
+            config.default_mailbox_shutdown,
+        )
     }
 
     pub(crate) fn actor_builder(&self) -> RunnableActorBuilder {
@@ -301,6 +310,7 @@ impl ScopeRef {
                         RunnableActorBuilder::new(),
                         RestartPolicy::default(),
                         Shutdown::default(),
+                        MailboxShutdown::default(),
                     )),
                 )
             })
@@ -609,18 +619,9 @@ impl ScopeRef {
         id: impl Into<String>,
         tree: impl Into<crate::SubtreeSpec>,
     ) -> Result<ScopeRef, ControlError> {
-        self.add_subtree_spec(id, tree.into()).await
-    }
-
-    /// Builds and adds an explicitly configured actor-aware runtime subtree.
-    pub async fn add_subtree_spec(
-        &self,
-        id: impl Into<String>,
-        tree: crate::SubtreeSpec,
-    ) -> Result<ScopeRef, ControlError> {
         let dynamic = self.dynamic_supervisor()?;
         let id = id.into();
-        let parts = tree.into_parts();
+        let parts = tree.into().into_parts();
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
@@ -710,11 +711,12 @@ impl ScopeRef {
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
-        let (default_restart, default_shutdown) = self.actors.actor_defaults();
+        let (default_restart, default_shutdown, default_mailbox_shutdown) =
+            self.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
-            mailbox_shutdown: spec.mailbox_shutdown,
+            mailbox_shutdown: spec.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
             remove_when_done: spec.remove_when_done,
         };
         let actor = self.actors.make_actor(spec);

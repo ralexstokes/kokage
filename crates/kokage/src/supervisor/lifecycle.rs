@@ -35,6 +35,7 @@ pub struct LifecycleEvent {
 /// is restricted to the observed scope because nested scopes have independent
 /// sequence boundaries.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct LifecycleObservation {
     /// Point-in-time state aligned with the event subscription.
     pub snapshot: SupervisorSnapshot,
@@ -43,6 +44,22 @@ pub struct LifecycleObservation {
 }
 
 impl LifecycleEvent {
+    /// Returns the emitting supervisor's monotonic child-transition sequence.
+    ///
+    /// Supervisor-level events and lag markers are not aligned to a snapshot
+    /// and return `None`.
+    pub fn seq(&self) -> Option<u64> {
+        self.kind.seq()
+    }
+
+    /// Returns the emitting scope's cumulative restart count for a child
+    /// transition or
+    /// [`RestartIntensityExceeded`](LifecycleEventKind::RestartIntensityExceeded).
+    /// Other supervisor-level events and lag markers return `None`.
+    pub fn total_restarts(&self) -> Option<u64> {
+        self.kind.total_restarts()
+    }
+
     /// Returns whether this event is a direct-child transition.
     pub fn is_child_transition(&self) -> bool {
         self.kind.is_child_transition()
@@ -164,6 +181,42 @@ pub enum LifecycleEventKind {
 }
 
 impl LifecycleEventKind {
+    /// Returns the emitting supervisor's monotonic child-transition sequence.
+    ///
+    /// Supervisor-level events and lag markers are not aligned to a snapshot
+    /// and return `None`.
+    pub fn seq(&self) -> Option<u64> {
+        match self {
+            Self::ChildAdded { seq, .. }
+            | Self::ChildStarted { seq, .. }
+            | Self::ChildExited { seq, .. }
+            | Self::ChildRemoved { seq, .. }
+            | Self::ChildRestartScheduled { seq, .. } => Some(*seq),
+            Self::SupervisorStarted
+            | Self::SupervisorStopping
+            | Self::SupervisorStopped
+            | Self::RestartIntensityExceeded { .. }
+            | Self::Lagged { .. } => None,
+        }
+    }
+
+    /// Returns the emitting scope's cumulative restart count for a child
+    /// transition or `RestartIntensityExceeded`.
+    pub fn total_restarts(&self) -> Option<u64> {
+        match self {
+            Self::ChildAdded { total_restarts, .. }
+            | Self::ChildStarted { total_restarts, .. }
+            | Self::ChildExited { total_restarts, .. }
+            | Self::ChildRemoved { total_restarts, .. }
+            | Self::ChildRestartScheduled { total_restarts, .. }
+            | Self::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
+            Self::SupervisorStarted
+            | Self::SupervisorStopping
+            | Self::SupervisorStopped
+            | Self::Lagged { .. } => None,
+        }
+    }
+
     fn is_child_transition(&self) -> bool {
         match self {
             Self::ChildAdded { .. }

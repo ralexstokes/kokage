@@ -175,11 +175,7 @@ pub struct SupervisorSnapshot {
 
 /// Point-in-time snapshot of a single child.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(from = "snapshot_wire::WireChildSnapshot")
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ChildSnapshot {
     /// The child's unique identifier.
@@ -207,47 +203,6 @@ pub struct ChildSnapshot {
     /// If this child is a first-class nested supervisor, this contains its
     /// recursive snapshot.
     pub supervisor: Option<Box<SupervisorSnapshot>>,
-}
-
-#[cfg(feature = "serde")]
-mod snapshot_wire {
-    use super::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot};
-    use crate::supervisor::RestartWire;
-    use std::time::Duration;
-
-    #[derive(serde::Deserialize)]
-    pub(super) struct WireChildSnapshot {
-        id: String,
-        lineage: u64,
-        generation: u64,
-        state: ChildStateView,
-        membership: ChildMembershipView,
-        restart_count: u64,
-        #[serde(default)]
-        restart_policy: RestartWire,
-        #[serde(default)]
-        remove_when_done: Option<bool>,
-        next_restart_in: Option<Duration>,
-        supervisor: Option<Box<SupervisorSnapshot>>,
-    }
-
-    impl From<WireChildSnapshot> for ChildSnapshot {
-        fn from(wire: WireChildSnapshot) -> Self {
-            let (restart_policy, legacy_remove_when_done) = wire.restart_policy.into_parts();
-            Self {
-                id: wire.id,
-                lineage: wire.lineage,
-                generation: wire.generation,
-                state: wire.state,
-                membership: wire.membership,
-                restart_count: wire.restart_count,
-                restart_policy,
-                remove_when_done: wire.remove_when_done.unwrap_or(legacy_remove_when_done),
-                next_restart_in: wire.next_restart_in,
-                supervisor: wire.supervisor,
-            }
-        }
-    }
 }
 
 impl SupervisorSnapshot {
@@ -689,7 +644,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_when_done_round_trips_and_migrates_the_legacy_restart_field() {
+    fn remove_when_done_round_trips() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -700,24 +655,10 @@ mod tests {
             },
         );
         snapshot.remove_when_done = true;
-        let mut value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
+        let value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
         assert_eq!(value["remove_when_done"], true);
         let decoded: ChildSnapshot =
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
         assert!(decoded.remove_when_done);
-
-        value
-            .as_object_mut()
-            .expect("child snapshot serializes as an object")
-            .remove("remove_when_done");
-        value["restart_policy"]["remove_when_done"] = serde_json::Value::Bool(true);
-        let decoded: ChildSnapshot =
-            serde_json::from_value(value.clone()).expect("older child snapshot deserializes");
-        assert!(decoded.remove_when_done);
-
-        value["remove_when_done"] = serde_json::Value::Bool(false);
-        let decoded: ChildSnapshot =
-            serde_json::from_value(value).expect("new field takes precedence");
-        assert!(!decoded.remove_when_done);
     }
 }

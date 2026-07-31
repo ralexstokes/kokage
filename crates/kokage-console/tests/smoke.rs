@@ -427,6 +427,7 @@ async fn ws_skips_unchanged_stats() {
         .expect("actor stats mutex poisoned")
         .first_mut()
         .expect("actor stats fixture was empty")
+        .stats
         .mailbox_depth += 1;
 
     let frame = read_json(&mut socket).await;

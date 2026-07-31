@@ -210,7 +210,7 @@ async fn runtime_handle_enumerates_actor_stats() {
 
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].actor_id, worker_ref.id());
+    assert_eq!(stats[0].stats.actor_id, worker_ref.id());
     assert_eq!(stats[0].scope_path, Vec::new());
     assert_eq!(
         stats[0].lineage,
@@ -221,8 +221,8 @@ async fn runtime_handle_enumerates_actor_stats() {
             .expect("worker snapshot available")
             .lineage
     );
-    assert_eq!(stats[0].messages_accepted, 1);
-    assert_eq!(stats[0].messages_received, 1);
+    assert_eq!(stats[0].stats.messages_accepted, 1);
+    assert_eq!(stats[0].stats.messages_received, 1);
 
     handle
         .shutdown_and_wait()
@@ -285,7 +285,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
             .scope()
             .actor_stats()
             .into_iter()
-            .find(|stats| stats.actor_id == "nested-worker")
+            .find(|stats| stats.stats.actor_id == "nested-worker")
             .expect("nested actor stats available")
             .lineage,
         nested_lineage
@@ -337,7 +337,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .lineage;
     assert!(
         handle.scope().actor_stats().iter().any(|stats| {
-            stats.actor_id == "dynamic-worker" && stats.lineage == dynamic_lineage
+            stats.stats.actor_id == "dynamic-worker" && stats.lineage == dynamic_lineage
         }),
         "parent stats recursively include actors added through a subtree handle"
     );
@@ -351,7 +351,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
             .scope()
             .actor_stats()
             .iter()
-            .all(|stats| stats.actor_id != "dynamic-worker")
+            .all(|stats| stats.stats.actor_id != "dynamic-worker")
     );
 
     raw_members
@@ -502,7 +502,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 2);
-    assert!(stats.iter().all(|stats| stats.actor_id == "worker"));
+    assert!(stats.iter().all(|stats| stats.stats.actor_id == "worker"));
     assert!(stats.iter().all(|stats| stats.lineage == 0));
 
     let paths = stats
@@ -530,7 +530,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .scope()
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "worker")
+        .find(|stats| stats.stats.actor_id == "worker")
         .map(|stats| stats.lineage)
         .expect("tracked lineage available");
 
@@ -538,7 +538,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     let sampler = tokio::spawn(async move {
         for _ in 0..1_000 {
             for stats in sampler_handle.actor_stats() {
-                if stats.actor_id == "worker" {
+                if stats.stats.actor_id == "worker" {
                     assert_eq!(
                         stats.lineage, tracked_lineage,
                         "a replacement membership must never receive the old actor's counters"
@@ -567,7 +567,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
             .scope()
             .actor_stats()
             .iter()
-            .all(|stats| stats.actor_id != "worker"),
+            .all(|stats| stats.stats.actor_id != "worker"),
         "the replacement membership does not carry the old actor attachment"
     );
 
@@ -609,7 +609,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             .scope()
             .actor_stats()
             .iter()
-            .any(|stats| stats.actor_id == "dynamic-worker")
+            .any(|stats| stats.stats.actor_id == "dynamic-worker")
     );
 
     let old_generation = handle
@@ -624,7 +624,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let sampler = tokio::spawn(async move {
         while sampler_sampling.load(Ordering::Relaxed) {
             for stats in sampler_handle.actor_stats() {
-                if stats.actor_id != "dynamic-worker" {
+                if stats.stats.actor_id != "dynamic-worker" {
                     continue;
                 }
                 let path = stats.scope_path;
@@ -648,7 +648,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
 
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].actor_id, static_ref.id());
+    assert_eq!(stats[0].stats.actor_id, static_ref.id());
     assert!(matches!(dynamic_ref.send(()).await, Err(SendError { .. })));
     for _ in 0..100 {
         tokio::task::yield_now().await;
@@ -668,7 +668,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             .scope()
             .actor_stats()
             .iter()
-            .all(|stats| stats.actor_id != "dynamic-worker"),
+            .all(|stats| stats.stats.actor_id != "dynamic-worker"),
         "the replacement child must not inherit the old actor attachment"
     );
 
@@ -715,7 +715,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
 
     let stats = root.scope().actor_stats();
     assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].actor_id, static_ref.id());
+    assert_eq!(stats[0].stats.actor_id, static_ref.id());
     assert!(matches!(dynamic_ref.send(()).await, Err(SendError { .. })));
 
     root.shutdown_and_wait().await.expect("clean shutdown");
@@ -750,7 +750,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         root.scope()
             .actor_stats()
             .iter()
-            .any(|stats| stats.actor_id == "worker")
+            .any(|stats| stats.stats.actor_id == "worker")
     );
 
     let (lifecycle, baseline) = restart_observer(&root.scope(), "parent");
@@ -766,7 +766,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         root.scope()
             .actor_stats()
             .iter()
-            .all(|stats| stats.actor_id != "worker")
+            .all(|stats| stats.stats.actor_id != "worker")
     );
     let restarted_parent = root.scope().subtree("parent").expect("parent rebound");
     let rebound_dynamic = restarted_parent
@@ -780,7 +780,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         root.scope()
             .actor_stats()
             .iter()
-            .any(|stats| stats.actor_id == "worker")
+            .any(|stats| stats.stats.actor_id == "worker")
     );
 
     root.shutdown_and_wait().await.expect("clean shutdown");
@@ -1453,9 +1453,9 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let stats = handle.scope().actor_stats();
     let worker = stats
         .iter()
-        .find(|stats| stats.actor_id == "worker")
+        .find(|stats| stats.stats.actor_id == "worker")
         .expect("graph actor reported in runtime stats");
-    assert_eq!(worker.messages_accepted, 1);
+    assert_eq!(worker.stats.messages_accepted, 1);
 
     let dynamic = handle
         .scope()
@@ -1471,14 +1471,14 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     assert_eq!(stats.len(), 2);
     let extra_stats = stats
         .iter()
-        .find(|stats| stats.actor_id == "extra")
+        .find(|stats| stats.stats.actor_id == "extra")
         .expect("runtime-added actor reported in runtime stats");
-    assert_eq!(extra_stats.messages_accepted, 1);
+    assert_eq!(extra_stats.stats.messages_accepted, 1);
 
     dynamic.remove_child("extra").await.expect("actor removed");
     let stats = handle.scope().actor_stats();
     assert!(
-        stats.iter().all(|stats| stats.actor_id != "extra"),
+        stats.iter().all(|stats| stats.stats.actor_id != "extra"),
         "removed actor no longer reported"
     );
 

@@ -54,8 +54,9 @@ they belong to ordered scopes. Membership is managed through the
 - `scope.remove_child(id).await?` — stop (honoring the child's shutdown
   policy, so a draining child finishes its queue) and remove.
 
-The adjacent `add_actor_spec`, `add_task_spec`, and `add_subtree_spec` forms
-accept explicitly configured declarations.
+The adjacent `add_actor_spec` and `add_task_spec` forms accept explicitly
+configured declarations. `add_subtree` accepts a `SubtreeSpec` directly when
+the subtree edge needs policy overrides.
 
 All four are `async` and return [`ControlError`] on misuse: `NotDynamic` if
 the scope is ordered, `UnknownChildId`, `ChildRemovalInProgress` if you

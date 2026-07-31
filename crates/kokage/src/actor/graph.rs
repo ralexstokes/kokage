@@ -114,6 +114,10 @@ where
                 observability.clone(),
                 start.restart_policy,
             ) else {
+                tracing::debug!(
+                    actor_id = %actor_id,
+                    "actor incarnation binding was superseded before startup"
+                );
                 return Ok(());
             };
             let monitors = bound_mailbox.monitor_lease();
@@ -468,7 +472,7 @@ impl ActorExitReporter {
         }
     }
 
-    fn shutdown_requested(&mut self) {
+    fn shutdown_requested(&self) {
         let mut state = self.state();
         if !state.reported {
             state.shutdown_requested = true;
@@ -478,7 +482,7 @@ impl ActorExitReporter {
         }
     }
 
-    fn aborted(&mut self, after_grace: bool) {
+    fn aborted(&self, after_grace: bool) {
         let mut state = self.state();
         if !state.reported {
             state.shutdown_requested = true;
@@ -667,7 +671,7 @@ impl RunnableActor {
         let mut shutdown = std::pin::pin!(shutdown);
         let mut abort = std::pin::pin!(abort);
         let monitor_run = self.inner.binding_lifecycle.monitor_run();
-        let mut exit_reporter = ActorExitReporter::new(monitor_run, control.dropped_is_cancelled);
+        let exit_reporter = ActorExitReporter::new(monitor_run, control.dropped_is_cancelled);
         let actor_span = self.inner.observability.actor_span(&actor_id);
         let (ready_tx, mut ready_rx) = oneshot::channel();
         let mut actor_task = AbortOnDropHandle::new(tokio::spawn(

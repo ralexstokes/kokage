@@ -89,7 +89,7 @@ impl CompletionOperation {
                 // children, so edge-derived state has to be rebuilt from state.
                 self.baseline = self.set.realign(&self.handle.snapshot());
             } else if event.scope_path.is_empty()
-                && child_sequence(&event.kind).is_some_and(|seq| seq > self.baseline)
+                && event.kind.seq().is_some_and(|seq| seq > self.baseline)
             {
                 let needs_realign = matches!(
                     &event.kind,
@@ -176,6 +176,7 @@ impl SupervisorHandle {
             };
             match result {
                 Ok(()) => handle.shutdown(),
+                Err(CompletionError::ScopeClosed) => {}
                 Err(error) => tracing::warn!(
                     %error,
                     ?scope_kind,
@@ -345,17 +346,6 @@ impl CompletionSet {
             }
         }
         snapshot.lifecycle_seq
-    }
-}
-
-fn child_sequence(kind: &LifecycleEventKind) -> Option<u64> {
-    match kind {
-        LifecycleEventKind::ChildAdded { seq, .. }
-        | LifecycleEventKind::ChildStarted { seq, .. }
-        | LifecycleEventKind::ChildExited { seq, .. }
-        | LifecycleEventKind::ChildRemoved { seq, .. }
-        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => Some(*seq),
-        _ => None,
     }
 }
 
