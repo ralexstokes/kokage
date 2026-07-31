@@ -24,7 +24,10 @@ use crate::actor::raw::RawActor;
 /// With the opt-in `derive` feature, `#[derive(ActorFactory)]` generates an
 /// `<Actor>Factory` containing each unmarked actor field. Those fields are
 /// cloned for every incarnation. `#[factory(default)]` omits local fields from
-/// the generated factory and freshly default-constructs them instead:
+/// the generated factory and freshly default-constructs them instead. Use
+/// `#[factory(default = expression)]` for a custom synchronous initial value;
+/// the expression is reevaluated for every incarnation, and `Self` refers to
+/// the actor declaration:
 ///
 /// ```
 /// # #[cfg(feature = "derive")]
@@ -36,8 +39,11 @@ use crate::actor::raw::RawActor;
 ///     // This allocator lives in WorkerFactory, so its value survives restarts.
 ///     ids: Arc<AtomicU64>,
 ///     // This queue belongs to one actor incarnation and resets on restart.
-///     #[factory(default)]
+///     #[factory(default = Vec::with_capacity(Self::INITIAL_CAPACITY))]
 ///     pending: Vec<String>,
+/// }
+/// impl Worker {
+///     const INITIAL_CAPACITY: usize = 8;
 /// }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
@@ -57,9 +63,9 @@ use crate::actor::raw::RawActor;
 /// # fn main() {}
 /// ```
 ///
-/// Derivation is intended for the common clone-configuration/default-local
-/// split. Implement this trait directly when fresh fields need custom
-/// synchronous construction.
+/// Derivation is intended for the common clone-configuration/fresh-local
+/// split. Implement this trait directly when construction needs logic beyond
+/// cloning configuration and synchronously initializing fields.
 ///
 /// Any zero-argument constructor path, such as `Worker::new` or
 /// `Worker::default`, already implements this trait through the blanket

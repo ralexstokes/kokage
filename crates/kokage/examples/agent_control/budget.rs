@@ -4,21 +4,14 @@ use kokage::{Actor, ActorRef, Context, ExitResult};
 
 use crate::messages::{BudgetMsg, BudgetReport, GuardMsg};
 
+#[derive(kokage::ActorFactory)]
 pub struct Budget {
     guard: ActorRef<GuardMsg>,
+    #[factory(default = BudgetReport {
+        cap: u64::MAX,
+        ..BudgetReport::default()
+    })]
     report: BudgetReport,
-}
-
-impl Budget {
-    pub fn new(guard: ActorRef<GuardMsg>) -> Self {
-        Self {
-            guard,
-            report: BudgetReport {
-                cap: u64::MAX,
-                ..BudgetReport::default()
-            },
-        }
-    }
 }
 
 impl Actor for Budget {

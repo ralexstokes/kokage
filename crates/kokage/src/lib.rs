@@ -126,12 +126,13 @@
 //!
 //! # Static declarations
 //!
-//! Enable the opt-in `derive` feature and use `#[derive(ActorFactory)]` on
-//! named-field actors to generate reusable factory structs without repeating
-//! configuration fields or clone code.
+//! Enable the opt-in `derive` feature to generate static declarations:
+//! `#[derive(ActorFactory)]` produces reusable actor factories, while
+//! `#[derive(Supervision)]` lowers one nested struct declaration into an
+//! ordinary [`Tree`] plus a matching bundle of actor and scope handles.
 //! Derive macros are intentionally not part of [`prelude`]; import
-//! [`ActorFactory`] from the crate root or use
-//! `#[derive(kokage::ActorFactory)]`.
+//! [`ActorFactory`] or [`Supervision`] from the crate root, or use their fully
+//! qualified `kokage` paths.
 //!
 //! # Cyclic wiring
 //!
@@ -201,7 +202,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | no | Re-exports `#[derive(ActorFactory)]`. |
+//! | `derive` | no | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
 //! | `host` | no | Direct single-actor hosting through `ActorSpec::into_host` and `raw::ActorHost`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 //! | `serde` | no | Serialization support for outlines, actor stats, and view types. |
@@ -253,9 +254,8 @@ pub mod observe {
 /// in [`observe`] and [`raw`].
 ///
 /// With the `derive` feature enabled, derive macros are explicit root imports
-/// rather than prelude members. Add `use kokage::ActorFactory;` for an
-/// unqualified `#[derive(ActorFactory)]`, or use its fully qualified
-/// `kokage::ActorFactory` name.
+/// rather than prelude members. Import `ActorFactory` or `Supervision` for an
+/// unqualified derive, or use the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
@@ -268,7 +268,7 @@ pub mod prelude {
 }
 
 #[cfg(feature = "derive")]
-pub use kokage_derive::ActorFactory;
+pub use kokage_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
@@ -279,6 +279,8 @@ pub use runtime::{
     DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeChange, ScopeChanges, ScopeRef,
     TaskError, TaskRef,
 };
+#[cfg(feature = "derive")]
+pub use supervision::{DynamicScope, Supervision, SupervisionFactories};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,

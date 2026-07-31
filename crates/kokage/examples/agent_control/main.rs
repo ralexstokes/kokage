@@ -31,31 +31,32 @@
 //!
 //! # Supervision shape
 //!
-//! `ActorSlot`s mint the cyclic core's typed refs before factories are defined,
-//! then the resulting actor specs build the explicit tree below. Actor ids are
-//! local to their containing supervision scope.
+//! A nested `Supervision` declaration defines the tree and generates matching
+//! typed handles. It reserves every ref before the factories are wired, so the
+//! cyclic core needs no application-owned slots. Actor ids are local to their
+//! containing supervision scope.
 //!
 //! ```text
 //! root (OneForOne)
+//! ├── sessions  empty subtree mount; per-conversation subtrees at runtime
+//! │             (the router captures its pre-spawn mount handle at wiring)
+//! │   └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
+//! │       │                        every incarnation's id unique, so respawn
+//! │       │                        never races a predecessor's removal
+//! │       ├── session              static in the builder; reborn with the
+//! │       │                        subtree, rehydrates from the journal
+//! │       └── run:<task>:<role>:<attempt>
+//! │                                add_actor, restart = Never;
+//! │                                a session panic tears its runs down with
+//! │                                it (OneForAll), while a Never run panic
+//! │                                is skipped by the group respawn
 //! ├── gateway   RestForOne, sequential start: outbound → progress → inbound
 //! │             (inbound is last: its panic restarts only inbound; an
 //! │              outbound/progress failure also restarts the bridge)
-//! ├── core      OneForOne
-//! │             journal · budget · guard · tool_host · router
-//! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
-//! │              is the cycle that justifies the derive)
-//! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (the router captures its pre-spawn mount handle at wiring)
-//!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
-//!         │                        every incarnation's id unique, so respawn
-//!         │                        never races a predecessor's removal
-//!         ├── session              static in the builder; reborn with the
-//!         │                        subtree, rehydrates from the journal
-//!         └── run:<task>:<role>:<attempt>
-//!                                  add_actor, restart = Never;
-//!                                  a session panic tears its runs down with
-//!                                  it (OneForAll), while a Never run panic
-//!                                  is skipped by the group respawn
+//! └── core      OneForOne
+//!               journal · budget · guard · tool_host · router
+//!               (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
+//!                is the cycle that justifies the derive)
 //! ```
 //!
 //! # Data flow
@@ -130,16 +131,13 @@ use std::{
     time::Duration,
 };
 
-use kokage::{
-    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, ScopeRef, Strategy,
-    prelude::*,
-};
+use kokage::{DynamicScopeRef, Guard as OperationGuard, Mailbox, ScopeRef, Strategy, prelude::*};
 use tokio::time::Instant;
 
-use budget::Budget;
+use budget::{Budget, BudgetFactory};
 use chat::ChatSim;
-use gateway::{Inbound, Outbound, Progress};
-use guard::Guard;
+use gateway::{Inbound, InboundFactory, Outbound, OutboundFactory, Progress, ProgressFactory};
+use guard::{Guard, GuardFactory};
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
@@ -155,6 +153,42 @@ type AnyError = Box<dyn Error + Send + Sync>;
 
 /// Gateway actors use a shallower mailbox than the core scope's default.
 const GATEWAY_MAILBOX: usize = 32;
+
+#[derive(kokage::Supervision)]
+#[supervision(strategy = Strategy::RestForOne)]
+struct GatewayTree {
+    #[supervision(mailbox = Mailbox::queue(GATEWAY_MAILBOX))]
+    outbound: Outbound,
+    #[supervision(
+        mailbox = Mailbox::latest_by_key(
+            GATEWAY_MAILBOX,
+            |message: &ProgressMsg| message.chat(),
+        )
+    )]
+    progress: Progress,
+    #[supervision(mailbox = Mailbox::queue(GATEWAY_MAILBOX))]
+    inbound: Inbound,
+}
+
+#[derive(kokage::Supervision)]
+struct CoreTree {
+    #[supervision(message_size = messages::journal_message_size)]
+    journal: Journal,
+    budget: Budget,
+    guard: Guard,
+    tool_host: ToolHost,
+    router: router::Router,
+}
+
+#[derive(kokage::Supervision)]
+struct ControlPlane {
+    #[supervision(dynamic)]
+    sessions: kokage::DynamicScope,
+    #[supervision(scope)]
+    gateway: GatewayTree,
+    #[supervision(scope)]
+    core: CoreTree,
+}
 
 struct App {
     running_tree: kokage::RunningTree,
@@ -199,112 +233,57 @@ async fn build_app() -> Result<App, AnyError> {
     let model_client: Arc<dyn ModelClient> = Arc::new(model.clone());
     let gate = Arc::new(AtomicBool::new(true));
     let proof = Proof::default();
-    // Router state dies with a router incarnation; the sessions mount handle
-    // and the subtree-id allocator must not, or a reborn router could not
-    // reach the mount and would re-mint ids that still exist. Both are durable
-    // RouterFactory fields instead.
-    let sessions_runtime = DynamicTree::new();
-    let sessions_mount = sessions_runtime.scope();
     let session_epoch = Arc::new(AtomicU64::new(0));
-
-    // Open every slot first so cyclic factories can capture the stable refs.
-    let outbound_slot = ActorSlot::<OutboundMsg>::new("outbound");
-    let outbound = outbound_slot.actor_ref();
-    let progress_slot = ActorSlot::<ProgressMsg>::new("progress");
-    let progress = progress_slot.actor_ref();
-    let inbound_slot = ActorSlot::<InboundMsg>::new("inbound");
-    let journal_slot = ActorSlot::<JournalMsg>::new("journal");
-    let journal = journal_slot.actor_ref();
-    let budget_slot = ActorSlot::<BudgetMsg>::new("budget");
-    let budget = budget_slot.actor_ref();
-    let guard_slot = ActorSlot::<GuardMsg>::new("guard");
-    let guard = guard_slot.actor_ref();
-    let tool_host_slot = ActorSlot::<ToolHostMsg>::new("tool_host");
-    let tool_host = tool_host_slot.actor_ref();
-    let router_slot = ActorSlot::<RouterMsg>::new("router");
-    let router = router_slot.actor_ref();
-
-    let budget_actor = budget_slot.define({
-        let guard = guard.clone();
-        move || Budget::new(guard.clone())
+    let (tree, handles) = ControlPlane::tree(|handles| ControlPlaneFactories {
+        gateway: GatewayTreeFactories {
+            outbound: OutboundFactory { chat: chat.clone() },
+            progress: ProgressFactory { chat: chat.clone() },
+            inbound: InboundFactory {
+                chat: chat.clone(),
+                journal: handles.core.journal.clone(),
+                router: handles.core.router.clone(),
+            },
+        },
+        core: CoreTreeFactories {
+            journal: Journal::default,
+            budget: BudgetFactory {
+                guard: handles.core.guard.clone(),
+            },
+            guard: GuardFactory {
+                budget: handles.core.budget.clone(),
+                router: handles.core.router.clone(),
+                model: model.clone(),
+                gate: gate.clone(),
+            },
+            tool_host: ToolHost::default,
+            // Router state dies with a router incarnation; its generated
+            // sessions handle and this allocator do not. Keeping both in the
+            // durable factory lets a reborn router reach the same mount without
+            // re-minting ids that still exist.
+            router: RouterFactory {
+                mount: handles.sessions.clone(),
+                journal: handles.core.journal.clone(),
+                budget: handles.core.budget.clone(),
+                tool_host: handles.core.tool_host.clone(),
+                guard: handles.core.guard.clone(),
+                outbound: handles.gateway.outbound.clone(),
+                progress: handles.gateway.progress.clone(),
+                gate: gate.clone(),
+                model: model_client.clone(),
+                session_epoch: session_epoch.clone(),
+                proof: proof.clone(),
+            },
+        },
     });
-    let guard_actor = guard_slot.define({
-        let budget = budget.clone();
-        let router = router.clone();
-        let model = model.clone();
-        let gate = gate.clone();
-        move || Guard::new(budget.clone(), router.clone(), model.clone(), gate.clone())
-    });
-    let tool_host_actor = tool_host_slot.define(ToolHost::default);
-    let router_actor = router_slot.define(RouterFactory {
-        mount: sessions_mount.clone(),
-        journal: journal.clone(),
-        budget: budget.clone(),
-        tool_host: tool_host.clone(),
-        guard: guard.clone(),
-        outbound: outbound.clone(),
-        progress: progress.clone(),
-        gate: gate.clone(),
-        model: model_client.clone(),
-        session_epoch: session_epoch.clone(),
-        proof: proof.clone(),
-    });
-    let outbound_actor = outbound_slot
-        .define({
-            let chat = chat.clone();
-            move || Outbound::new(chat.clone())
-        })
-        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
-    let progress_actor = progress_slot
-        .define({
-            let chat = chat.clone();
-            move || Progress::new(chat.clone())
-        })
-        .mailbox(Mailbox::latest_by_key(
-            GATEWAY_MAILBOX,
-            |message: &ProgressMsg| message.chat(),
-        ));
-    let inbound_actor = inbound_slot
-        .define({
-            let chat = chat.clone();
-            let journal = journal.clone();
-            let router = router.clone();
-            move || Inbound::new(chat.clone(), journal.clone(), router.clone())
-        })
-        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
-    let journal_actor = journal_slot
-        .define(Journal::default)
-        .message_size(messages::journal_message_size);
-
-    let mut gateway_tree = Tree::new().strategy(Strategy::RestForOne);
-    gateway_tree.add_actor_spec(outbound_actor);
-    gateway_tree.add_actor_spec(progress_actor);
-    gateway_tree.add_actor_spec(inbound_actor);
-    let mut core_tree = Tree::new();
-    core_tree.add_actor_spec(journal_actor);
-    core_tree.add_actor_spec(budget_actor);
-    core_tree.add_actor_spec(guard_actor);
-    core_tree.add_actor_spec(tool_host_actor);
-    core_tree.add_actor_spec(router_actor);
-    let mut tree = Tree::new();
-    // The router captures this pre-spawn identity, so make the sessions
-    // scope ready before the core subtree starts the router.
-    tree.add_subtree("sessions", sessions_runtime);
-    tree.add_subtree("gateway", gateway_tree);
-    tree.add_subtree("core", core_tree);
     let running_tree = tree.spawn()?;
-    let gateway = running_tree
-        .scope()
-        .subtree("gateway")
-        .expect("gateway runtime subtree");
-    let core = running_tree
-        .scope()
-        .subtree("core")
-        .expect("core runtime subtree");
-    // `sessions_mount` was issued before the root existed and addresses the
-    // same identity the post-spawn `running_tree.scope().subtree("sessions")`
-    // lookup would return, so the phases below drive it directly.
-    let sessions = sessions_mount.clone();
+    let gateway = handles.gateway.scope();
+    let core = handles.core.scope();
+    let sessions = handles.sessions.clone();
+    let router = handles.core.router.clone();
+    let journal = handles.core.journal.clone();
+    let budget = handles.core.budget.clone();
+    let guard = handles.core.guard.clone();
+    let tool_host = handles.core.tool_host.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch =
         gateway
