@@ -1,0 +1,5 @@
+error: `scope` and `dynamic` are mutually exclusive
+ --> tests/ui/supervision/conflicting_kinds.rs:3:26
+  |
+3 |     #[supervision(scope, dynamic)]
+  |                          ^^^^^^^

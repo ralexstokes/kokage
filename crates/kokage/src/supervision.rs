@@ -151,6 +151,44 @@ pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
 
+/// Marker for an empty dynamic scope in a derived [`Supervision`] declaration.
+///
+/// This type is never constructed. With the `derive` feature, place it in a
+/// field marked `#[supervision(dynamic)]`; the generated declaration creates a
+/// [`DynamicTree`] and exposes its [`DynamicScopeRef`] in the generated handles
+/// bundle.
+#[cfg(feature = "derive")]
+pub enum DynamicScope {}
+
+/// Recursive declaration implemented by `#[derive(Supervision)]`.
+///
+/// Application code normally uses the generated `tree` constructor instead of
+/// calling this trait directly. It is public so a derived declaration can nest
+/// a derived scope from another module or crate.
+#[cfg(feature = "derive")]
+pub trait Supervision: Sized {
+    /// Nested actor and scope handles generated for this declaration.
+    type Handles: Clone;
+
+    /// Reserved single-use construction state generated for this declaration.
+    #[doc(hidden)]
+    type Slots;
+
+    /// Reserves every actor binding and scope identity before factories are wired.
+    #[doc(hidden)]
+    fn __open() -> (Self::Slots, Self::Handles);
+}
+
+/// Factory bundle generated for a derived [`Supervision`] declaration.
+///
+/// This is public only as cross-crate glue for generated implementations.
+#[cfg(feature = "derive")]
+#[doc(hidden)]
+pub trait SupervisionFactories<T: Supervision> {
+    /// Fills the reserved actor slots and assembles the ordinary tree.
+    fn __define(self, slots: T::Slots) -> Tree;
+}
+
 /// Opaque ownership of either kind of supervision tree.
 ///
 /// Public APIs use `impl Into<SubtreeSpec>` so callers can pass an

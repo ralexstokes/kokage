@@ -1,4 +1,4 @@
-//! Compile-fail and compile-pass coverage for actor-factory derive guarantees,
+//! Compile-fail and compile-pass coverage for derive guarantees,
 //! lifecycle-stage restrictions, and single-use construction tokens.
 
 #![cfg(feature = "derive")]
@@ -9,6 +9,11 @@ fn derive_ui() {
 
     t.compile_fail("tests/ui/actor-factory/*.rs");
     t.pass("tests/ui/actor-factory-pass/*.rs");
+
+    // Nested supervision declarations accept only named, concrete structs and
+    // keep scope-only and actor-only configuration on the right child kinds.
+    t.compile_fail("tests/ui/supervision/*.rs");
+    t.pass("tests/ui/supervision-pass/*.rs");
 
     // The lifecycle-stage contexts keep stage-specific no-op operations out of
     // the API, such as receiving through a handler context or queuing work from
