@@ -163,6 +163,8 @@ async fn index_serves_dashboard() {
         .expect("HTTP response did not contain a header/body separator");
     assert!(headers.to_ascii_lowercase().contains("text/html"));
     assert!(body.contains("kokage console"));
+    assert!(body.contains("return sample.stats.actor_id === child.id"));
+    assert!(body.contains("const actor = sample.stats;"));
 }
 
 #[tokio::test]

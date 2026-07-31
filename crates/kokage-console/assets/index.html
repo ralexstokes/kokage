@@ -601,13 +601,13 @@
       row.appendChild(el("span", "chip chip-warn", "removing"));
     }
 
-    const actor = actorStats.find(function (stats) {
-      return stats.actor_id === child.id &&
-        (stats.scope_path == null || sameScopePath(stats.scope_path, scopePath)) &&
-        (stats.lineage == null || stats.lineage === child.lineage);
+    const actor = actorStats.find(function (sample) {
+      return sample.stats.actor_id === child.id &&
+        (sample.scope_path == null || sameScopePath(sample.scope_path, scopePath)) &&
+        (sample.lineage == null || sample.lineage === child.lineage);
     });
     if (actor) {
-      row.appendChild(el("span", "chip", "mailbox " + actor.mailbox_depth + "/" + actor.mailbox_capacity));
+      row.appendChild(el("span", "chip", "mailbox " + actor.stats.mailbox_depth + "/" + actor.stats.mailbox_capacity));
     }
 
     const exit = childExit(child);
@@ -730,13 +730,14 @@
     return t;
   }
 
-  function actorCard(actor) {
+  function actorCard(sample) {
+    const actor = sample.stats;
     const card = el("div", "actor-card");
 
     const head = el("div", "actor-head");
     head.appendChild(el("span", "actor-id", actor.actor_id));
-    if (actor.lineage != null) {
-      head.appendChild(el("span", "chip chip-quiet", "lineage " + actor.lineage));
+    if (sample.lineage != null) {
+      head.appendChild(el("span", "chip chip-quiet", "lineage " + sample.lineage));
     }
     head.appendChild(el("span", "actor-mail",
       "mailbox " + actor.mailbox_depth + " / " + actor.mailbox_capacity));
