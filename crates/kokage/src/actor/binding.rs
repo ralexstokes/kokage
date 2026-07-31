@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::actor::{
-    error::TrySendError,
+    error::{SendError, SendErrorKind},
     monitor::{ActorMonitors, MonitorHub},
     observability::{MessageRejection, MessageSizeMetrics, ScopeObservability},
 };
@@ -418,7 +418,7 @@ pub(crate) enum TimedSendOutcome<M> {
 
 #[derive(Debug)]
 pub(crate) struct TrySendFailure<M> {
-    pub(crate) error: TrySendError<M>,
+    pub(crate) error: SendError<M>,
     /// Exact mailbox-level rejection for telemetry.
     ///
     /// A public `NotRunning` error can mean there is no live actor binding or
@@ -532,9 +532,10 @@ impl<M> MailboxRef<M> {
             } => {
                 if !accepting_external.load(Ordering::Acquire) {
                     return Err(TrySendFailure {
-                        error: TrySendError::NotRunning {
+                        error: SendError {
                             actor_id: self.actor_id.to_string(),
                             message,
+                            kind: SendErrorKind::NotRunning,
                         },
                         rejection: MessageRejection::MailboxClosed,
                     });
@@ -545,16 +546,18 @@ impl<M> MailboxRef<M> {
                         Ok(0)
                     }
                     Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => Err(TrySendFailure {
-                        error: TrySendError::NotRunning {
+                        error: SendError {
                             actor_id: self.actor_id.to_string(),
                             message,
+                            kind: SendErrorKind::NotRunning,
                         },
                         rejection: MessageRejection::MailboxClosed,
                     }),
                     Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendFailure {
-                        error: TrySendError::Full {
+                        error: SendError {
                             actor_id: self.actor_id.to_string(),
                             message,
+                            kind: SendErrorKind::Full,
                         },
                         rejection: MessageRejection::MailboxFull,
                     }),
@@ -563,9 +566,10 @@ impl<M> MailboxRef<M> {
             MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
                 SendOutcome::Closed(message) => Err(TrySendFailure {
-                    error: TrySendError::NotRunning {
+                    error: SendError {
                         actor_id: self.actor_id.to_string(),
                         message,
+                        kind: SendErrorKind::NotRunning,
                     },
                     rejection: MessageRejection::MailboxClosed,
                 }),
@@ -1058,7 +1062,11 @@ mod tests {
     fn assert_mailbox_closed<M>(failure: TrySendFailure<M>) {
         assert!(matches!(
             failure.error,
-            TrySendError::NotRunning { actor_id, .. } if actor_id == "worker"
+            SendError {
+                actor_id,
+                kind: SendErrorKind::NotRunning,
+                ..
+            } if actor_id == "worker"
         ));
         assert_eq!(failure.rejection, MessageRejection::MailboxClosed);
     }

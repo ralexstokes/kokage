@@ -292,7 +292,7 @@ pub use kokage_derive::ActorFactory;
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
     Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
-    SendRejection, SendTimeoutError, StopContext, TimerKey, TrySendError,
+    SendErrorKind, SendRejection, StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

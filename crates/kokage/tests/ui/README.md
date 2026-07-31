@@ -22,6 +22,8 @@ names absent.
 `prelude_export_tier.rs` keep root task types, raw actor execution types, and
 the common prelude vocabulary in their declared tiers. `removed_host_module.rs`
 pins the replacement of the former `host` module by `raw` and root exports.
+`send_error_types_removed.rs` keeps the superseded `TrySendError` and
+`SendTimeoutError` carriers absent.
 
 `declaration-unsealed/` contains compile-pass probes proving actor and slot
 mailbox configuration remains available after one or more `actor_ref()` calls.

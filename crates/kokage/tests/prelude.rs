@@ -25,8 +25,7 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
             CancellationToken, ControlError, ExitReason, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendRejection, SendTimeoutError, SupervisorError, TaskContext, TreeNode,
-            TrySendError,
+            SendError, SendErrorKind, SendRejection, SupervisorError, TaskContext, TreeNode,
         };
     }
 

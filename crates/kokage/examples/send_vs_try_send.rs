@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ExitResult, Restart, SendTimeoutError, Shutdown, TrySendError,
+    ActorSpec, ExitResult, Restart, SendError, SendErrorKind, Shutdown,
     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
@@ -58,7 +58,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     first_run.await??;
 
     match sink_ref.try_send("try during restart".to_owned()) {
-        Err(TrySendError::NotRunning { actor_id, .. }) => {
+        Err(SendError {
+            actor_id,
+            kind: SendErrorKind::NotRunning,
+            ..
+        }) => {
             println!("try_send failed fast while `{actor_id}` was between runs");
         }
         other => println!("unexpected try_send result: {other:?}"),
@@ -68,8 +72,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .send_timeout("second run".to_owned(), Duration::from_millis(50))
         .await
     {
-        Err(SendTimeoutError::Timeout {
-            actor_id, message, ..
+        Err(SendError {
+            actor_id,
+            message,
+            kind: SendErrorKind::TimedOut,
+            ..
         }) => {
             println!("bounded send to `{actor_id}` timed out; retrying `{message}`");
             message

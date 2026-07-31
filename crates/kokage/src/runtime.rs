@@ -617,9 +617,10 @@ impl ScopeRef {
     /// `on_stop`. With
     /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current),
     /// accepted work that remains queued is dropped. Once the actor closes intake,
-    /// `try_send` may briefly return
-    /// [`TrySendError::NotRunning`](crate::TrySendError::NotRunning), while an awaited
-    /// `send` waits and then returns [`SendError`](crate::SendError), retaining
+    /// `try_send` may briefly return [`SendError`](crate::SendError) with
+    /// [`SendErrorKind::NotRunning`](crate::SendErrorKind::NotRunning), while an
+    /// awaited `send` waits and then returns
+    /// [`SendErrorKind::Terminated`](crate::SendErrorKind::Terminated), retaining
     /// the rejected message. `send_timeout` can instead bound that wait and
     /// recover a message that was not accepted before the bound.
     /// Removal does not return queued messages: end-to-end delivery ownership
