@@ -21,7 +21,7 @@ use crate::actor::raw::RawActor;
 ///
 /// # Deriving a named factory
 ///
-/// With the default `derive` feature, `#[derive(ActorFactory)]` generates an
+/// With the opt-in `derive` feature, `#[derive(ActorFactory)]` generates an
 /// `<Actor>Factory` containing each unmarked actor field. Those fields are
 /// cloned for every incarnation. `#[factory(default)]` omits local fields from
 /// the generated factory and freshly default-constructs them instead:

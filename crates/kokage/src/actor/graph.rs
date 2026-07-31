@@ -6,14 +6,17 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
-use crate::supervisor::{
-    CancelOnDrop, CancellationToken, ExitStatus, MailboxShutdown, RestartPolicy, Shutdown,
-};
+use crate::supervisor::{CancelOnDrop, CancellationToken, ExitStatus, RestartPolicy};
+#[cfg(feature = "host")]
+use crate::supervisor::{MailboxShutdown, Shutdown};
+#[cfg(feature = "host")]
+use std::time::Duration;
 use thiserror::Error;
-use tokio::{sync::oneshot, time::sleep};
+use tokio::sync::oneshot;
+#[cfg(feature = "host")]
+use tokio::time::sleep;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
@@ -195,6 +198,7 @@ pub enum ActorRunError {
 /// This matches the default grace of
 /// [`Shutdown`](crate::Shutdown), so an actor behaves the same
 /// whether it is hosted by hand or by an [`Tree`](crate::Tree).
+#[cfg(feature = "host")]
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// The result of one directly hosted actor incarnation.
@@ -217,6 +221,7 @@ impl IncarnationExit {
     /// keeps answering it correctly as variants are added, unlike a `match`
     /// with a catch-all arm forced by `#[non_exhaustive]`.
     #[must_use]
+    #[cfg(feature = "host")]
     pub fn is_failure(&self) -> bool {
         matches!(self, Self::Failed(_))
     }
@@ -226,6 +231,7 @@ impl IncarnationExit {
     ///
     /// A supervision loop that restarts on a clean stop still ends on this.
     #[must_use]
+    #[cfg(feature = "host")]
     pub fn is_shutdown_requested(&self) -> bool {
         matches!(self, Self::ShutdownRequested)
     }
@@ -249,11 +255,13 @@ impl IncarnationExit {
 /// Directly hosted actors receive an unavailable [`ScopeRef`]: control
 /// operations fail and observation streams are closed.
 #[must_use = "dropping the actor host terminates its binding"]
+#[cfg(feature = "host")]
 pub struct ActorHost {
     actor: RunnableActor,
     mailbox_shutdown: MailboxShutdown,
 }
 
+#[cfg(feature = "host")]
 impl ActorHost {
     pub(crate) fn new(actor: RunnableActor, mailbox_shutdown: MailboxShutdown) -> Self {
         Self {
@@ -409,12 +417,14 @@ impl ActorHost {
     }
 }
 
+#[cfg(feature = "host")]
 impl Drop for ActorHost {
     fn drop(&mut self) {
         self.actor.terminate_binding();
     }
 }
 
+#[cfg(feature = "host")]
 impl std::fmt::Debug for ActorHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActorHost")

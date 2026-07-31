@@ -104,6 +104,8 @@ small directory actor; that's a userland protocol, and the repository's
 
 ## Factories without boilerplate: `#[derive(ActorFactory)]`
 
+Enable kokage's opt-in `derive` Cargo feature to use this macro.
+
 Every `ActorSpec` needs a factory — something that builds a fresh actor per
 incarnation. Closures work (`ActorFactory` is implemented for any
 `Fn() -> A`), but for actors with several configuration fields, the

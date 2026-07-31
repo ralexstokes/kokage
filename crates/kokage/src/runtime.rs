@@ -1,7 +1,9 @@
+#[cfg(any(feature = "host", test))]
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
+    sync::{Arc, Mutex, PoisonError, Weak},
 };
 
 use crate::{
@@ -591,6 +593,7 @@ impl ScopeRef {
         )
     }
 
+    #[cfg(any(feature = "host", test))]
     pub(crate) fn unavailable() -> Self {
         static UNAVAILABLE: OnceLock<ScopeRef> = OnceLock::new();
 

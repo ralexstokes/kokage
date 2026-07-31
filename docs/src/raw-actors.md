@@ -77,6 +77,7 @@ The contract you take on:
 
 Supervision trees are the normal host, but sometimes the actor must live
 inside somebody else's runtime — a test harness, an existing task system.
+Enable the opt-in `host` Cargo feature for this integration surface.
 [`ActorSpec::into_host`] surrenders one declared actor as an owning
 [`raw::ActorHost`] you drive yourself:
 

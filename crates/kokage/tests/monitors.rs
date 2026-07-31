@@ -1,3 +1,5 @@
+#![cfg(feature = "host")]
+
 mod support;
 
 use support::ActorHostBuilder;

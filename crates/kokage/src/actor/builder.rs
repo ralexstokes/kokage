@@ -9,9 +9,12 @@ use crate::actor::{
     binding::{BindingCore, Mailbox},
     context::ActorRef,
     factory::ActorFactory,
-    graph::{ActorHost, ErasedActorFactory, RunnableActor, RunnableActorBuilder},
+    graph::{ErasedActorFactory, RunnableActor, RunnableActorBuilder},
     raw::RawActor,
 };
+
+#[cfg(feature = "host")]
+use super::graph::ActorHost;
 
 /// Internal mailbox portion of the public [`ActorSpec`] vocabulary.
 pub(crate) struct ActorOptions<M> {
@@ -192,7 +195,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     ///
     /// This borrows the declaration and can be called repeatedly. Mailbox
     /// configuration remains mutable until the declaration is consumed by a
-    /// placement API or [`into_host`](Self::into_host).
+    /// placement API or, with the `host` feature, direct host conversion.
     pub fn actor_ref(&self) -> ActorRef<M> {
         ActorRef::from_core(self.binding(), None)
     }
@@ -264,6 +267,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// sees the same rejection as
     /// [`ActorRunError::ZeroMailboxCapacity`](crate::raw::ActorRunError::ZeroMailboxCapacity)
     /// when the run starts.
+    #[cfg(feature = "host")]
     pub fn into_host(self) -> ActorHost {
         let node = self
             .into_deferred_node()
@@ -473,6 +477,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "host")]
     fn actor_spec_applies_options_and_returns_host() {
         let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(Mailbox::latest());
         let actor_ref = spec.actor_ref();
@@ -482,6 +487,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "host")]
     fn materialization_applies_message_size_configured_after_actor_ref() {
         let spec = ActorSpec::new("worker", || StringActor);
         let actor_ref = spec.actor_ref();
@@ -493,6 +499,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "host")]
     fn into_host_stores_zero_capacity_without_supervisor_validation() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
             .mailbox(Mailbox::queue(0))
@@ -502,6 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "host")]
     async fn run_once_rejects_zero_mailbox_capacity() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
             .mailbox(Mailbox::queue(0))
@@ -557,6 +565,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "host")]
     fn actor_slot_define_returns_a_default_spec_with_the_same_binding() {
         let slot = ActorSlot::<String>::new("slot");
         let actor_ref = slot.actor_ref();

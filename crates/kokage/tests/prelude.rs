@@ -24,10 +24,15 @@ mod coverage_probe {
         };
     }
 
-    mod raw {
+    #[cfg(feature = "host")]
+    mod host {
         use kokage::raw::{
             ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
         };
+    }
+
+    mod raw {
+        use kokage::raw::{RawActor, RawContext};
     }
 
     mod observe {

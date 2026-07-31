@@ -98,7 +98,7 @@ remain the only construction front door.
 | Crate | Role |
 |-------|------|
 | [`kokage`](crates/kokage) | The front door: communicating actors with typed mailboxes, raw task children, restart-stable handles, restart policies and strategies, graceful shutdown, and single-use ordered or dynamic supervision trees. |
-| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories; re-exported by `kokage` under the default `derive` feature. |
+| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories; re-exported by `kokage` under the opt-in `derive` feature. |
 | [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 
 ## Getting started

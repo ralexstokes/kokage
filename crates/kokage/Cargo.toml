@@ -10,8 +10,9 @@ categories = ["asynchronous", "concurrency"]
 exclude = ["src/supervisor/tests/**"]
 
 [features]
-default = ["derive"]
+default = []
 derive = ["dep:kokage-derive"]
+host = []
 metrics = ["dep:metrics"]
 serde = ["dep:serde"]
 
@@ -38,7 +39,35 @@ trybuild.workspace = true
 
 [[example]]
 name = "trading_engine"
-required-features = ["metrics"]
+required-features = ["derive", "metrics"]
+
+[[example]]
+name = "agent_control"
+required-features = ["derive", "metrics"]
+
+[[example]]
+name = "actor_tracing"
+required-features = ["host"]
+
+[[example]]
+name = "blocking_lifecycle"
+required-features = ["host"]
+
+[[example]]
+name = "blocking_work"
+required-features = ["host"]
+
+[[example]]
+name = "mailbox_backpressure"
+required-features = ["host"]
+
+[[example]]
+name = "ref_rebind"
+required-features = ["host"]
+
+[[example]]
+name = "send_vs_try_send"
+required-features = ["host"]
 
 [[bench]]
 name = "supervisor_common_flows"

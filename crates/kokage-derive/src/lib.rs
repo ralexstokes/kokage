@@ -3,7 +3,7 @@
 //! Derive macros for `kokage`.
 //!
 //! Do not depend on this crate directly: `kokage` re-exports
-//! `#[derive(ActorFactory)]` under its default `derive` feature, and the
+//! `#[derive(ActorFactory)]` under its opt-in `derive` feature, and the
 //! generated code refers to `kokage` paths.
 
 use proc_macro::TokenStream;

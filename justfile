@@ -29,8 +29,8 @@ public-api:
     bash scripts/check-public-api.sh
 
 smoke:
-    cargo run --locked -p kokage --example trading_engine --features metrics
-    cargo run --locked -p kokage --example agent_control --features metrics
+    cargo run --locked -p kokage --example trading_engine --features metrics,derive
+    cargo run --locked -p kokage --example agent_control --features metrics,derive
 
 all-examples:
     bash scripts/run-all-examples.sh

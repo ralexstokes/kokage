@@ -940,11 +940,8 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Awaiting scope or child lifecycle progress can deadlock when that
     /// progress depends on this actor returning from its current work.
-    /// Actors run directly through
-    /// [`ActorHost::run_once`](crate::raw::ActorHost::run_once) or
-    /// [`ActorHost::run_incarnation`](crate::raw::ActorHost::run_incarnation),
-    /// outside a supervisor, receive a terminal handle here. Its control
-    /// operations return
+    /// Actors hosted directly outside a supervisor receive a terminal handle
+    /// here. Its control operations return
     /// [`ControlError::Unavailable`](crate::ControlError::Unavailable) and its
     /// observation streams are closed.
     pub fn scope(&self) -> ScopeRef {
@@ -1252,10 +1249,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// before queued blocking work can complete.
     ///
     /// The surrounding host's shutdown bound is the backstop for closures that
-    /// ignore cancellation: the explicit bound passed to
-    /// [`ActorHost::run_once`](crate::raw::ActorHost::run_once),
-    /// [`ActorHost::run_incarnation`](crate::raw::ActorHost::run_incarnation),
-    /// or the
+    /// ignore cancellation: either a direct host's explicit bound or the
     /// supervised child's [`Shutdown`](crate::Shutdown) grace.
     /// Once that bound aborts the actor task, the blocking thread continues
     /// detached because Tokio blocking tasks cannot be aborted after they start.
