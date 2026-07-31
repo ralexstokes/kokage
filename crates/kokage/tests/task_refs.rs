@@ -46,6 +46,48 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
 }
 
 #[tokio::test]
+async fn temporary_dynamic_ref_retains_exit_after_sibling_churn() {
+    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let scope = runtime.scope();
+    let task = scope
+        .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
+        .await
+        .expect("task is inserted");
+
+    timeout(WAIT, async {
+        while task.snapshot().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("task is removed before sibling churn");
+
+    for index in 0..40 {
+        let sibling = scope
+            .add_task_spec(
+                TaskSpec::new(format!("sibling-{index}"), |_| async { Ok(()) }).temporary(),
+            )
+            .await
+            .expect("sibling is inserted");
+        assert!(
+            sibling
+                .wait()
+                .await
+                .expect("sibling remains observable")
+                .is_completed()
+        );
+    }
+
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("completion survives unrelated lifecycle churn")
+        .expect("task remains observable");
+    assert!(exit.is_completed());
+
+    runtime.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
 async fn old_ref_does_not_follow_same_id_replacement() {
     let runtime = DynamicTree::new().spawn().expect("tree builds");
     let scope = runtime.scope();

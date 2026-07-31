@@ -247,10 +247,12 @@ pub struct TaskRef {
 
 impl TaskRef {
     fn new(scope: ScopeRef, id: impl Into<Arc<str>>, lineage: u64, events: LifecycleWatch) -> Self {
+        let id = id.into();
+        let events = events.direct_child(Arc::clone(&id), lineage);
         let (state, _) = tokio::sync::watch::channel(TaskTrackingState::default());
         Self {
             inner: Arc::new(TaskRefInner {
-                id: id.into(),
+                id,
                 lineage,
                 scope,
                 events: Mutex::new(Some(events)),
@@ -414,16 +416,10 @@ async fn track_task(inner: Arc<TaskRefInner>, mut events: LifecycleWatch) {
                         return;
                     }
                 }
-                None if matches!(event.kind, LifecycleEventKind::Lagged { .. }) => {
-                    let started = inner.state.borrow().started;
-                    inner.state.send_replace(TaskTrackingState {
-                        started,
-                        outcome: Some(Err(TaskError::Unavailable {
-                            task_id: inner.id.to_string(),
-                        })),
-                    });
-                    return;
-                }
+                // This is a task-filtered stream, so the retained suffix still
+                // contains this membership's latest transition. Keep draining
+                // it when an unusually restart-heavy task overruns the queue.
+                None if matches!(event.kind, LifecycleEventKind::Lagged { .. }) => {}
                 None => {}
             }
         }
@@ -554,12 +550,7 @@ impl ScopeRef {
     }
 
     pub(crate) fn task_ref(&self, id: impl Into<Arc<str>>, lineage: u64) -> TaskRef {
-        TaskRef::new(
-            self.clone(),
-            id,
-            lineage,
-            self.supervisor.watch_lifecycle().direct_children(),
-        )
+        TaskRef::new(self.clone(), id, lineage, self.supervisor.watch_lifecycle())
     }
 
     #[cfg(any(feature = "host", test))]
@@ -847,7 +838,10 @@ impl ScopeRef {
     pub async fn add_task_spec(&self, task: TaskSpec) -> Result<TaskRef, ControlError> {
         let dynamic = self.dynamic_supervisor()?;
         let id: Arc<str> = Arc::from(task.id());
-        let events = self.supervisor.watch_lifecycle().direct_children();
+        let events = self
+            .supervisor
+            .watch_lifecycle()
+            .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child(task).await?;
         Ok(TaskRef::new(self.clone(), id, lineage, events))
     }
