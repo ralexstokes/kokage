@@ -7,7 +7,8 @@
 //! `derive` feature, and the generated code refers to `kokage` paths.
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
+use std::collections::HashSet;
 use syn::{
     Data, DeriveInput, Expr, Field, Fields, Ident, LitStr, parse_macro_input, spanned::Spanned,
 };
@@ -486,6 +487,9 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         ));
     }
 
+    let mut reserved_param_names = HashSet::new();
+    reserve_ident_names(input.to_token_stream(), &mut reserved_param_names);
+
     let declaration = input.ident;
     let vis = input.vis;
     let scope_attrs = parse_supervision_scope_attrs(&input.attrs)?;
@@ -555,8 +559,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         if attrs.kind == SupervisionFieldKind::Dynamic {
             factory_params.push(None);
         } else {
-            factory_params.push(Some(format_ident!("F{next_param}")));
-            next_param += 1;
+            factory_params.push(Some(fresh_factory_param(
+                &mut next_param,
+                &mut reserved_param_names,
+            )));
         }
     }
     let all_params: Vec<_> = factory_params.iter().flatten().collect();
@@ -827,6 +833,30 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             }
         }
     })
+}
+
+fn reserve_ident_names(tokens: proc_macro2::TokenStream, reserved: &mut HashSet<String>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Group(group) => {
+                reserve_ident_names(group.stream(), reserved);
+            }
+            proc_macro2::TokenTree::Ident(ident) => {
+                reserved.insert(unraw_ident_name(&ident));
+            }
+            proc_macro2::TokenTree::Literal(_) | proc_macro2::TokenTree::Punct(_) => {}
+        }
+    }
+}
+
+fn fresh_factory_param(next: &mut usize, reserved: &mut HashSet<String>) -> Ident {
+    loop {
+        let candidate = format!("F{next}");
+        *next += 1;
+        if reserved.insert(candidate.clone()) {
+            return format_ident!("{candidate}");
+        }
+    }
 }
 
 fn fresh_supervision_ident(base: &str, fields: &[&Ident]) -> Ident {
