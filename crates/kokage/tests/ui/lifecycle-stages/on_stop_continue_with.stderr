@@ -1,5 +1,0 @@
-error[E0599]: no method named `continue_with` found for mutable reference `&mut StopContext<'_, Worker>` in the current scope
-  --> tests/ui/lifecycle-stages/on_stop_continue_with.rs:15:13
-   |
-15 |         ctx.continue_with(());
-   |             ^^^^^^^^^^^^^ method not found in `&mut StopContext<'_, Worker>`

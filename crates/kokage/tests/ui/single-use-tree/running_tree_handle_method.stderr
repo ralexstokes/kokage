@@ -1,5 +1,0 @@
-error[E0599]: no method named `handle` found for reference `&RunningTree` in the current scope
- --> tests/ui/single-use-tree/running_tree_handle_method.rs:4:32
-  |
-4 |     let _handle = running_tree.handle();
-  |                                ^^^^^^ method not found in `&RunningTree`

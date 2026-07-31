@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `ActorSpec<M>` in the current scope
-  --> tests/ui/single-use-tree/actor_spec_clone.rs:19:22
-   |
-19 |     let _copy = spec.clone();
-   |                      ^^^^^ method not found in `ActorSpec<()>`

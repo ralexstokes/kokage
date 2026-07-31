@@ -1,5 +1,0 @@
-error[E0432]: unresolved import `kokage::OrderedTree`
- --> tests/ui/public-api/ordered_tree_removed.rs:1:5
-  |
-1 | use kokage::OrderedTree;
-  |     ^^^^^^^^^^^^^^^^^^^ no `OrderedTree` in the root

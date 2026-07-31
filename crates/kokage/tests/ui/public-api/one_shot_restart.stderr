@@ -1,5 +1,0 @@
-error[E0599]: no method named `restart` found for struct `OneShotTaskSpec` in the current scope
- --> tests/ui/public-api/one_shot_restart.rs:4:63
-  |
-4 |     let _ = OneShotTaskSpec::new("job", |_| async { Ok(()) }).restart(RestartPolicy::always());
-  |                                                               ^^^^^^^ method not found in `OneShotTaskSpec`
