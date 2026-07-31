@@ -524,17 +524,16 @@ impl ScopeRef {
     /// Adds an arbitrary supervised task child to this scope.
     ///
     /// This is the task-level counterpart to adding an actor. Success means
-    /// the membership was inserted and startup was scheduled, and returns the
-    /// lineage assigned to that membership. Task children do not appear in
-    /// [`ScopeRef::actor_stats`], but remain visible through snapshots and
-    /// lifecycle watches.
+    /// the membership was inserted and startup was scheduled. Task children do
+    /// not appear in [`ScopeRef::actor_stats`], but remain visible through
+    /// snapshots and lifecycle watches.
     ///
     /// # Errors
     ///
     /// Returns [`ControlError::NotDynamic`] when this scope has ordered
     /// membership. Other failures are reported by the dynamic supervisor.
-    pub async fn add_task(&self, task: TaskSpec) -> Result<u64, ControlError> {
-        self.dynamic_supervisor()?.add_child(task).await
+    pub async fn add_task(&self, task: TaskSpec) -> Result<(), ControlError> {
+        self.dynamic_supervisor()?.add_child(task).await.map(|_| ())
     }
 
     /// Adds one actor declaration and returns its stable typed ref.

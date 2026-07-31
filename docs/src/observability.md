@@ -41,12 +41,9 @@ membership in the parent and a new stable supervisor identity. The new
 subtree's local lineage sequence may therefore begin at zero even if its
 predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
-control semantics in the practically unreachable overflow case. For
-dynamically added task children, `ScopeRef::add_task` returns the same
-lineage that the runtime assigned while inserting the child.
-Consumers that need to associate their own state with that exact membership
-should retain the returned value rather than performing a later id-based
-snapshot lookup.
+control semantics in the practically unreachable overflow case. Dynamically
+added task children receive lineages under the same rules, and publish them in
+snapshots and lifecycle events.
 
 Readiness and exit details live inside `ChildSnapshot::state` rather than in
 parallel booleans and optional fields. `ChildStateView` exposes only details

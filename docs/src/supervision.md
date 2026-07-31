@@ -302,16 +302,15 @@ afterward, then add and remove `TaskSpec` tasks:
 let runtime = DynamicTree::new().spawn()?;
 let dynamic = runtime.scope();
 
-let lineage = dynamic
+dynamic
     .add_task(TaskSpec::new("night-shift-press", factory))
     .await?;
 dynamic.remove_child("night-shift-press").await?;
 ```
 
-`add_task` returns the lineage allocated to that membership. The value is
-also published in snapshots and distinguishes a removed child from a later
-same-id replacement. Task children remain visible through runtime snapshots
-and lifecycle watches, but do not appear in actor message statistics.
+Success means the task was inserted and startup was scheduled. Task children
+remain visible through runtime snapshots and lifecycle watches, but do not
+appear in actor message statistics.
 
 For dynamic actor construction and actor-owned scopes, continue to [Dynamic
 actors](dynamic-actors.md).
