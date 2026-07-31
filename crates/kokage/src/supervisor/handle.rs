@@ -1748,8 +1748,8 @@ impl SupervisorHandle {
     /// intentionally restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
     /// when a recursive stream without an initial alignment boundary is needed.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
-        let events = self.watch_lifecycle().direct_children();
-        let snapshot = self.snapshot();
+        let (snapshot, events) = self.lifecycle_hub().observe(|| self.snapshot());
+        let events = events.direct_children();
         crate::supervisor::LifecycleObservation { snapshot, events }
     }
 

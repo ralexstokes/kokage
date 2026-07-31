@@ -118,10 +118,11 @@
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
-//! both actors; [`Guard::cancel`] stops future delivery, and permanent removal
-//! of either membership ends the watch. Watches, mailbox timers, offloads, and
-//! lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
-//! operation; retain it or call [`Guard::detach`] to keep the work alive.
+//! both actors, and permanent removal of either membership ends the watch.
+//! Ordinary watches are membership-owned; ordinary offloads are owned by the
+//! current actor incarnation. Their explicitly scoped variants, mailbox timers,
+//! and lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
+//! operation; retain it or call [`Guard::detach`] to keep the scoped work alive.
 //!
 //! # Static declarations
 //!

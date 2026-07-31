@@ -85,3 +85,70 @@ async fn changes_replace_lag_with_a_fresh_reset() {
 
     runtime.shutdown().await.expect("tree stops");
 }
+
+#[tokio::test]
+async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
+    let tree = DynamicTree::new();
+    let scope = tree.scope();
+    let mut changes = scope.changes();
+    let ScopeChange::Reset(_) = changes.next().await.expect("pre-spawn reset") else {
+        panic!("a change stream must begin with a reset");
+    };
+
+    let runtime = tree.spawn().expect("dynamic tree builds");
+    assert!(matches!(
+        timeout(WAIT, changes.next()).await.expect("startup event"),
+        Some(ScopeChange::Event(event))
+            if matches!(event.kind, LifecycleEventKind::SupervisorStarted)
+    ));
+
+    scope.request_shutdown();
+    let mut stopping = false;
+    let mut stopped = false;
+    timeout(WAIT, async {
+        while let Some(change) = changes.next().await {
+            let ScopeChange::Event(event) = change else {
+                panic!("a non-lagging stream must not reset again");
+            };
+            match event.kind {
+                LifecycleEventKind::SupervisorStopping => stopping = true,
+                LifecycleEventKind::SupervisorStopped => {
+                    stopped = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("shutdown transitions arrive");
+    assert!(stopping);
+    assert!(stopped);
+    runtime.wait().await.expect("tree stops");
+
+    let tree = DynamicTree::new();
+    let scope = tree.scope();
+    let mut startup = scope.lifecycle_events();
+    let runtime = tree.spawn().expect("second tree builds");
+    timeout(WAIT, async {
+        while let Some(event) = startup.next().await {
+            if matches!(event.kind, LifecycleEventKind::SupervisorStarted) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("second tree reports startup");
+    let mut changes = scope.changes();
+    let ScopeChange::Reset(reset) = changes.next().await.expect("running reset") else {
+        panic!("a change stream must begin with a reset");
+    };
+    assert_eq!(reset, scope.snapshot());
+    assert!(
+        timeout(Duration::from_millis(25), changes.next())
+            .await
+            .is_err(),
+        "startup represented by the reset must not be replayed"
+    );
+    runtime.shutdown().await.expect("second tree stops");
+}

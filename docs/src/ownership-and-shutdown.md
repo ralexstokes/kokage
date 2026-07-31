@@ -104,8 +104,11 @@ whether queued work is being drained, and hand-written raw-actor loops can check
 ## Guards: scoped ownership for background operations
 
 By now you have met [`Guard`] several times; here is the general rule it
-encodes. An ordinary actor watch or offload is owned by the actor incarnation,
-which is the common case. Their `watch_scoped` and `offload_scoped` variants,
+encodes. An ordinary actor watch is owned by the two restart-stable actor
+memberships, while an ordinary offload is owned by the current actor
+incarnation. Those are the common lifetimes: a watch follows both actors across
+restarts, while an offload is aborted instead of delivering stale work to a
+replacement incarnation. Their `watch_scoped` and `offload_scoped` variants,
 mailbox timers, lifecycle pumps, and other explicitly scoped background
 operations return a `Guard`, and **dropping the guard cancels the operation**.
 
