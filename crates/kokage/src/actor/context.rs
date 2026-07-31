@@ -28,7 +28,7 @@ use crate::actor::{
     },
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind},
     handler::Actor,
-    monitor::{ActorMonitors, MonitorEvent, MonitorHub},
+    monitor::{ActorMonitorLease, MonitorEvent, MonitorHub},
     observability::{MessageOperation, MessageRejection, ScopeObservability, trace_actor_message},
 };
 
@@ -114,8 +114,9 @@ impl<M> ActorRef<M> {
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///
-    /// A ref has no enclosing runtime context, so
-    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] are `None`.
+    /// A ref has no enclosing runtime context, so this local sample contains
+    /// no scope path or supervisor membership lineage. Use
+    /// [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats) for scoped samples.
     /// Mailbox depth and capacity are zero while the ref is unbound between
     /// incarnations or permanently terminated.
     pub fn stats(&self) -> ActorStats {
@@ -453,7 +454,9 @@ impl<M> ActorRef<M> {
             let (sender, receiver) = oneshot::channel();
             self.send(message(Reply { sender }))
                 .await
-                .map_err(SendError::discard)?;
+                .map_err(|error| CallError::Terminated {
+                    actor_id: error.actor_id,
+                })?;
             receiver.await.map_err(|_| CallError::ReplyDropped {
                 actor_id: self.actor_id.to_string(),
             })
@@ -555,22 +558,6 @@ impl<M> ActorRef<M> {
 /// `call` fail with [`CallError::ReplyDropped`].
 pub struct Reply<T> {
     sender: oneshot::Sender<T>,
-}
-
-/// The lifecycle state visible through an actor context.
-///
-/// `Draining` takes precedence once a handler is replaying accepted work,
-/// including when a local stop and runtime shutdown overlap. Runtime shutdown on
-/// its own does not change this status; inspect [`Context::shutdown_token`]
-/// when execution-wide cancellation matters.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ActorStatus {
-    /// The callback is live and has not requested a local stop.
-    Running,
-    /// This handler call is replaying accepted work before stopping.
-    Draining,
-    /// The live callback has requested a local stop.
-    Stopping,
 }
 
 impl<T> Reply<T> {
@@ -751,7 +738,7 @@ pub struct RawContext<M> {
     pub(crate) observability: ScopeObservability,
     pub(crate) timers: TimerTable<M>,
     pub(crate) lifetime: ActorLifetime,
-    pub(crate) monitors: Arc<ActorMonitors>,
+    pub(crate) monitors: ActorMonitorLease,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
     pub(crate) stop_requested: bool,
@@ -888,7 +875,7 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Offloads are incarnation-owned. They are aborted when the incarnation
     /// fails, restarts, or uses
-    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current).
+    /// [`MailboxShutdown::Discard`](crate::MailboxShutdown::Discard).
     /// A draining handler actor keeps processing queued messages and offload
     /// completions until both are exhausted; the required deadline bounds
     /// every offload's future during that drain.
@@ -962,14 +949,6 @@ impl<M: Send + 'static> RawContext<M> {
     /// observation streams are closed.
     pub fn scope(&self) -> ScopeRef {
         self.supervisor.clone()
-    }
-
-    fn live_status(&self) -> ActorStatus {
-        if self.stop_requested {
-            ActorStatus::Stopping
-        } else {
-            ActorStatus::Running
-        }
     }
 
     /// Returns a sender targeting this actor's own mailbox.
@@ -1212,7 +1191,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// returns `None`, even when messages are still queued. Queued messages
     /// are dropped when the actor exits unless the actor drains them with
     /// [`try_recv`](Self::try_recv), or uses [`Actor`](crate::Actor)
-    /// with [`Shutdown::drain_for`](crate::Shutdown::drain_for). Queued
+    /// with [`Shutdown::graceful_for`](crate::Shutdown::graceful_for). Queued
     /// [`call`](ActorRef::call)s whose reply messages are dropped observe
     /// [`CallError::ReplyDropped`](crate::CallError::ReplyDropped).
     ///
@@ -1246,7 +1225,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// not prove the mailbox is fully drained while senders hold permits. For
     /// typical actors, prefer
     /// [`Actor`](crate::Actor) with
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) so the framework owns the
+    /// [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) so the framework owns the
     /// drain loop.
     ///
     /// A panic in an [`offload`](Self::offload) future or continuation resumes
@@ -1321,9 +1300,10 @@ impl<M> Drop for RawContext<M> {
 /// the provided receive loop owns it; reading it directly would bypass drain
 /// accounting and the continuation queue.
 ///
-/// [`status`](Context::status) reports `Running` during startup and ordinary
-/// message handling, `Stopping` after a local stop request, and `Draining`
-/// only while the framework replays accepted work during shutdown.
+/// [`is_draining`](Context::is_draining) returns `false` during startup and
+/// ordinary message handling, including after a local stop request, and
+/// returns `true` only while the framework replays accepted work during
+/// shutdown.
 ///
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut Context<'_, Self>` and the message type is projected from
@@ -1398,33 +1378,30 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.run_blocking(f)
     }
 
-    /// Returns the lifecycle state of this live callback.
+    /// Returns whether this handler is replaying accepted work while stopping.
     ///
     /// The provided receive loop calls [`Actor::handle`](crate::Actor::handle)
-    /// from two phases. Ordinary calls report [`ActorStatus::Running`] until
-    /// this callback requests a local stop. Once the receive loop exits,
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) replays already accepted
-    /// mailbox messages and offload completions as [`ActorStatus::Draining`].
-    /// Nothing follows the drain except
-    /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
-    /// will not run: continuations are dropped, new timers and intervals never
-    /// fire, and a fresh [`offload`](Self::offload) races the shutdown budget.
-    /// A `Context` passed to `on_start` never reports `Draining`.
+    /// from two phases. Ordinary calls return `false`, including immediately
+    /// after this callback calls [`stop`](Self::stop). Once the receive loop
+    /// exits, [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) replays
+    /// already accepted mailbox messages and offload completions with this
+    /// method returning `true`. Nothing follows the drain except
+    /// [`on_stop`](crate::Actor::on_stop), so work deferred back to this actor
+    /// will not run: continuations are dropped, self-directed timers and
+    /// intervals never deliver, and a fresh [`offload`](Self::offload) races
+    /// the shutdown budget. Cross-actor timers can still deliver to a live
+    /// target. A `Context` passed to `on_start` never reports that it is
+    /// draining.
     ///
-    /// This status is deliberately distinct from runtime shutdown. A local
-    /// [`stop`](Self::stop) can lead to `Draining` while
-    /// [`shutdown_token`](Self::shutdown_token) remains live; conversely,
-    /// runtime shutdown requested during an in-flight ordinary callback cancels
-    /// that token while this method still reports `Running`. Ask `status` when
-    /// the question is whether work queued by this callback can run, and
-    /// inspect the token when the question is about the runtime. `Draining`
-    /// takes precedence when local stop and runtime shutdown overlap.
-    pub fn status(&self) -> ActorStatus {
-        if self.draining {
-            ActorStatus::Draining
-        } else {
-            self.cx.live_status()
-        }
+    /// This phase is deliberately distinct from runtime shutdown. A local stop
+    /// can lead to a drain while [`shutdown_token`](Self::shutdown_token)
+    /// remains live; conversely, runtime shutdown requested during an in-flight
+    /// ordinary callback cancels that token while this method still returns
+    /// `false`. Ask `is_draining` when the question is whether work queued by
+    /// this callback can run, and inspect the token when the question is about
+    /// the runtime.
+    pub fn is_draining(&self) -> bool {
+        self.draining
     }
 
     /// Requests a clean stop of this actor incarnation.
@@ -1438,9 +1415,10 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// A startup request skips the ordinary receive loop but still reports
     /// readiness before clean shutdown, preserving the lifecycle boundary for
-    /// ordered supervision. A handler whose [`status`](Self::status) is
-    /// [`ActorStatus::Draining`] is already on the stop path, so another
-    /// request there has no additional effect. Repeated calls are harmless.
+    /// ordered supervision. A handler for which
+    /// [`is_draining`](Self::is_draining) returns `true` is already on the stop
+    /// path, so another request there has no additional effect. Repeated calls
+    /// are harmless.
     pub fn stop(&mut self) {
         self.cx.request_stop();
     }
@@ -1460,11 +1438,11 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// accepted mailbox messages. They are abandoned once the actor begins
     /// stopping, which is why [`StopContext`] does not expose this method.
     ///
-    /// Two stopping paths still reach this method: a handler called during
-    /// [`ActorStatus::Draining`] and an `on_start` callback that also calls
-    /// [`stop`](Self::stop). Continuations queued there are dropped with the
-    /// incarnation. The provided receive loop emits a `WARN` naming the actor
-    /// and the number dropped before `on_stop` runs.
+    /// Two stopping paths still reach this method: a handler for which
+    /// [`is_draining`](Self::is_draining) returns `true` and an `on_start`
+    /// callback that also calls [`stop`](Self::stop). Continuations queued
+    /// there are dropped with the incarnation. The provided receive loop emits
+    /// a `WARN` naming the actor and the number dropped before `on_stop` runs.
     pub fn continue_with(&mut self, message: A::Msg) {
         self.cx.push_continuation(message);
     }
@@ -1499,6 +1477,15 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Clears the timeout at `key`, if one is armed.
     pub fn clear_timeout(&mut self, key: TimerKey) {
         self.cx.timers.clear(key);
+    }
+
+    /// Sends `message` to this actor after `delay`, bound to this incarnation.
+    ///
+    /// Unlike [`set_timeout`](Self::set_timeout), this uses ordinary mailbox
+    /// delivery and is owned by the returned [`Guard`]. See
+    /// [`RawContext::send_after`] for the full contract.
+    pub fn send_after(&self, message: A::Msg, delay: Duration) -> Guard {
+        self.cx.send_after(message, delay)
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
@@ -1638,7 +1625,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        MailboxMode, Restart,
+        MailboxMode, RestartPolicy,
         actor::binding::{BindingGuard, mailbox},
     };
 
@@ -1648,12 +1635,15 @@ mod tests {
         let core = Arc::new(BindingCore::new(Arc::clone(&actor_id)));
         let actor = ActorRef::from_core(&core, None);
         let (sender, mut receiver) = mailbox(&MailboxMode::conflate(), 1);
+        let monitor_run = core.monitor_run();
         let _binding = BindingGuard::bind(
             Arc::clone(&core),
             MailboxRef::new(actor_id, sender),
+            &monitor_run,
             ScopeObservability::new(),
-            Restart::never(),
-        );
+            RestartPolicy::never(),
+        )
+        .expect("unterminated binding accepts its first run");
         receiver.close_external();
 
         let output = capture_tracing_output(|| {

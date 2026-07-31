@@ -3,8 +3,8 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, BoxError, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
-    TaskSpec,
+    ActorSpec, BoxError, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef, Shutdown,
+    SupervisorError, TaskSpec,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -60,7 +60,7 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
-            .add_task(TaskSpec::new("added-from-on-start", move |ctx| {
+            .add_task_spec(TaskSpec::new("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
                     added_started.notify_one();
@@ -86,7 +86,7 @@ async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
         .send(Some(handle.scope()))
         .expect("startup actor retains handle receiver");
     support::dynamic_root(&handle)
-        .add_actor(ActorSpec::new("starter", {
+        .add_actor_spec(ActorSpec::new("starter", {
             let added_started = Arc::clone(&added_started);
             move || AddsChildOnStart {
                 handle_rx: handle_rx.clone(),
@@ -106,16 +106,16 @@ async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
 async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let release = Arc::new(Notify::new());
-    let mut graph = OrderedTree::new();
+    let mut graph = Tree::new();
     let first_order = order.clone();
     let first_release = release.clone();
-    let first = graph.add_actor(ActorSpec::new("Probe", move || Probe {
+    let first = graph.add_actor_spec(ActorSpec::new("Probe", move || Probe {
         name: "first",
         order: first_order.clone(),
         release: Some(first_release.clone()),
     }));
     let second_order = order.clone();
-    graph.add_actor(ActorSpec::new("Probe-2", move || Probe {
+    graph.add_actor_spec(ActorSpec::new("Probe-2", move || Probe {
         name: "second",
         order: second_order.clone(),
         release: None,
@@ -170,9 +170,12 @@ impl Actor for FailsOnStart {
 
 #[tokio::test]
 async fn failed_actor_start_disarms_readiness_without_panicking() {
-    let mut graph = OrderedTree::new();
-    graph.add_actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let mut graph = Tree::new();
+    graph.add_actor_spec(ActorSpec::new("FailsOnStart", || FailsOnStart));
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
             .await
@@ -229,11 +232,11 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = OrderedTree::new();
+    let mut graph = Tree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add_actor(ActorSpec::new("DrainContinuation", move || {
+    let actor = graph.add_actor_spec(ActorSpec::new("DrainContinuation", move || {
         DrainContinuation {
             handled: actor_handled.clone(),
             started: actor_started.clone(),
@@ -256,11 +259,11 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = OrderedTree::new();
+    let mut graph = Tree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add_actor(ActorSpec::new("DrainContinuation", move || {
+    let actor = graph.add_actor_spec(ActorSpec::new("DrainContinuation", move || {
         DrainContinuation {
             handled: actor_handled.clone(),
             started: actor_started.clone(),
@@ -279,9 +282,9 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     assert_eq!(&*handled.lock().await, &["hold-and-continue", "mailbox"]);
 }
 
-/// One `handle` call as the probe saw it: the message, callback status, and
+/// One `handle` call as the probe saw it: the message, drain phase, and
 /// graph shutdown state.
-type HandleCalls = Arc<Mutex<Vec<(&'static str, ActorStatus, bool)>>>;
+type HandleCalls = Arc<Mutex<Vec<(&'static str, bool, bool)>>>;
 
 /// Records, for every handled message, which phase the provided loop called
 /// `handle` from and whether the graph was shutting down at the time.
@@ -298,7 +301,7 @@ impl Actor for DrainPhaseProbe {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.lock().await.push((
             message,
-            ctx.status(),
+            ctx.is_draining(),
             ctx.shutdown_token().is_cancelled(),
         ));
         match message {
@@ -328,12 +331,12 @@ fn drain_phase_probe_graph(
     observed: &HandleCalls,
     started: &Arc<Notify>,
     release: &Arc<Notify>,
-) -> (OrderedTree, ActorRef<&'static str>) {
-    let mut graph = OrderedTree::new();
+) -> (Tree, ActorRef<&'static str>) {
+    let mut graph = Tree::new();
     let observed = observed.clone();
     let started = started.clone();
     let release = release.clone();
-    let actor = graph.add_actor(ActorSpec::new("DrainPhaseProbe", move || DrainPhaseProbe {
+    let actor = graph.add_actor_spec(ActorSpec::new("DrainPhaseProbe", move || DrainPhaseProbe {
         observed: observed.clone(),
         started: started.clone(),
         release: release.clone(),
@@ -342,7 +345,7 @@ fn drain_phase_probe_graph(
 }
 
 #[tokio::test]
-async fn status_separates_the_drain_phase_from_ordinary_handling() {
+async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -359,20 +362,20 @@ async fn status_separates_the_drain_phase_from_ordinary_handling() {
 
     assert_eq!(
         &*observed.lock().await,
-        &[
-            ("hold", ActorStatus::Running, false),
-            ("queued", ActorStatus::Draining, true),
-        ]
+        &[("hold", false, false), ("queued", true, true)]
     );
 }
 
 #[tokio::test]
-async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
+async fn is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     handle.scope().wait_started().await.unwrap();
 
     actor.send("stop").await.unwrap();
@@ -391,17 +394,14 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
     // is going away: the shutdown token is still live for the drained message.
     assert_eq!(
         &*observed.lock().await,
-        &[
-            ("stop", ActorStatus::Running, false),
-            ("queued", ActorStatus::Draining, false),
-        ]
+        &[("stop", false, false), ("queued", true, false)]
     );
     handle.shutdown_and_wait().await.unwrap();
 }
 
 #[derive(Clone)]
 struct OverlappingStopProbe {
-    observed: mpsc::UnboundedSender<ActorStatus>,
+    observed: mpsc::UnboundedSender<bool>,
 }
 
 impl Actor for OverlappingStopProbe {
@@ -410,16 +410,16 @@ impl Actor for OverlappingStopProbe {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             "hold" => {
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.shutdown_token().cancelled().await;
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.stop();
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
             }
             "queued" => {
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.stop();
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
             }
             other => panic!("unexpected message: {other}"),
         }
@@ -428,10 +428,10 @@ impl Actor for OverlappingStopProbe {
 }
 
 #[tokio::test]
-async fn status_carves_local_stop_during_graph_shutdown() {
+async fn is_draining_changes_only_after_the_stopping_callback_returns() {
     let (observed, mut statuses) = mpsc::unbounded_channel();
-    let mut graph = OrderedTree::new();
-    let actor = graph.add_actor(ActorSpec::new("OverlappingStopProbe", move || {
+    let mut graph = Tree::new();
+    let actor = graph.add_actor_spec(ActorSpec::new("OverlappingStopProbe", move || {
         OverlappingStopProbe {
             observed: observed.clone(),
         }
@@ -440,14 +440,14 @@ async fn status_carves_local_stop_during_graph_shutdown() {
     handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Running));
+    assert_eq!(statuses.recv().await, Some(false));
     actor.send("queued").await.unwrap();
     handle.shutdown();
 
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Running));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Stopping));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Draining));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Draining));
+    assert_eq!(statuses.recv().await, Some(false));
+    assert_eq!(statuses.recv().await, Some(false));
+    assert_eq!(statuses.recv().await, Some(true));
+    assert_eq!(statuses.recv().await, Some(true));
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -462,12 +462,12 @@ impl Actor for StopsOnStart {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        assert_eq!(ctx.status(), ActorStatus::Running);
+        assert!(!ctx.is_draining());
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
         ctx.stop();
-        assert_eq!(ctx.status(), ActorStatus::Stopping);
+        assert!(!ctx.is_draining());
         Ok(())
     }
 
@@ -487,8 +487,8 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
-    let mut graph = OrderedTree::new();
-    let actor = graph.add_actor(
+    let mut graph = Tree::new();
+    let actor = graph.add_actor_spec(
         ActorSpec::new("StopsOnStart", {
             let started = started.clone();
             let release = release.clone();
@@ -499,9 +499,13 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
                 events: events.clone(),
             }
         })
-        .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5)))
+        .mailbox_shutdown(MailboxShutdown::Discard),
     );
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -527,8 +531,8 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
-    let mut graph = OrderedTree::new();
-    let actor = graph.add_actor(
+    let mut graph = Tree::new();
+    let actor = graph.add_actor_spec(
         ActorSpec::new("StopsOnStart", {
             let started = started.clone();
             let release = release.clone();
@@ -539,9 +543,12 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
                 events: events.clone(),
             }
         })
-        .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
     );
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -575,9 +582,12 @@ impl RawActor for PromptRaw {
 
 #[tokio::test]
 async fn prompt_raw_actor_delivers_readiness_before_completion() {
-    let mut graph = OrderedTree::new();
-    graph.add_actor(ActorSpec::new("PromptRaw", || PromptRaw));
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let mut graph = Tree::new();
+    graph.add_actor_spec(ActorSpec::new("PromptRaw", || PromptRaw));
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
@@ -619,7 +629,7 @@ impl Actor for DefaultPolicy {
 fn the_default_shutdown_drains() {
     assert_eq!(
         Shutdown::default(),
-        Shutdown::drain_for(std::time::Duration::from_secs(5))
+        Shutdown::graceful_for(std::time::Duration::from_secs(5))
     );
 }
 
@@ -632,11 +642,11 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = OrderedTree::new();
+    let mut graph = Tree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add_actor(ActorSpec::new("DefaultPolicy", move || DefaultPolicy {
+    let actor = graph.add_actor_spec(ActorSpec::new("DefaultPolicy", move || DefaultPolicy {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),

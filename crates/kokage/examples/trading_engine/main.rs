@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, ExitReason, Guard, MailboxMode, Restart, ScopeRef,
+    ActorSlot, CancellationToken, Guard, MailboxMode, RestartPolicy, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -138,6 +138,19 @@ use control::Control;
 use health::Health;
 use ledger::Ledger;
 use messages::*;
+
+fn lifecycle_total_restarts(event: &kokage::observe::LifecycleEvent) -> Option<u64> {
+    use kokage::observe::LifecycleEventKind;
+    match &event.kind {
+        LifecycleEventKind::ChildAdded { total_restarts, .. }
+        | LifecycleEventKind::ChildStarted { total_restarts, .. }
+        | LifecycleEventKind::ChildExited { total_restarts, .. }
+        | LifecycleEventKind::ChildRemoved { total_restarts, .. }
+        | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. }
+        | LifecycleEventKind::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
+        _ => None,
+    }
+}
 use reconciler::Reconciler;
 use router::OrderRouter;
 use telemetry::LatencyRecorder;
@@ -311,18 +324,18 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .mailbox_capacity(VENUE_MAILBOX);
 
     let mut venues =
-        OrderedTree::new().default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)));
-    venues.add_actor(venue_a_feed_actor);
-    venues.add_actor(venue_a_gateway_actor);
-    venues.add_actor(venue_b_feed_actor);
-    venues.add_actor(venue_b_gateway_actor);
-    let mut tree = OrderedTree::new().mailbox_capacity(32);
+        Tree::new().default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));
+    venues.add_actor_spec(venue_a_feed_actor);
+    venues.add_actor_spec(venue_a_gateway_actor);
+    venues.add_actor_spec(venue_b_feed_actor);
+    venues.add_actor_spec(venue_b_gateway_actor);
+    let mut tree = Tree::new().mailbox_capacity(32);
     tree.add_subtree("venues", venues);
-    tree.add_actor(reconciler_actor);
-    tree.add_actor(ledger_actor);
-    tree.add_actor(router_actor);
-    tree.add_actor(control_actor);
-    tree.add_actor(health_actor);
+    tree.add_actor_spec(reconciler_actor);
+    tree.add_actor_spec(ledger_actor);
+    tree.add_actor_spec(router_actor);
+    tree.add_actor_spec(control_actor);
+    tree.add_actor_spec(health_actor);
 
     let runtime = tree.spawn()?;
 
@@ -340,7 +353,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .expect("venues runtime subtree");
     let mut venue_restarts = venues_runtime.snapshot().total_restarts;
     let lifecycle_watch = venues_runtime.watch_lifecycle_to(&health, move |event| {
-        if let Some(total) = event.total_restarts() {
+        if let Some(total) = lifecycle_total_restarts(&event) {
             venue_restarts = total;
         }
         HealthMsg::RestartsObserved {
@@ -484,7 +497,9 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     );
     assert!(!final_status.transitions[VENUE_B].contains(&VenueHealth::Down));
     assert!(
-        final_status.exit_reasons[VENUE_A].contains(&ExitReason::Failure),
+        final_status.exit_reasons[VENUE_A]
+            .iter()
+            .any(kokage::ExitStatus::is_failure),
         "venue-a monitor must report the scripted panic as Failure"
     );
     assert!(!bounded_call(&app.health, |reply| HealthMsg::Tripped { reply }).await?);
@@ -626,8 +641,8 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         ["venue-a-feed", "venue-b-feed"].iter().all(|id| {
             stats
                 .iter()
-                .find(|sample| sample.actor_id == *id)
-                .is_some_and(|sample| sample.messages_conflated > 0)
+                .find(|sample| sample.stats.actor_id == *id)
+                .is_some_and(|sample| sample.stats.messages_conflated > 0)
         })
     })
     .await?;
@@ -651,8 +666,8 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         assert!(
             feed_stats
                 .iter()
-                .find(|stats| stats.actor_id == id)
-                .is_some_and(|stats| stats.messages_conflated > 0),
+                .find(|stats| stats.stats.actor_id == id)
+                .is_some_and(|stats| stats.stats.messages_conflated > 0),
             "{id} must demonstrate latest-wins conflation"
         );
     }

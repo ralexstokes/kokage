@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use kokage::observe::{ActorStats, LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
+use kokage::observe::{LifecycleEvent, ScopedActorStats, SupervisorSnapshot};
 use tokio::time::{self, Duration};
 
 use crate::server::AppState;
@@ -61,7 +61,7 @@ fn event_message(event: LifecycleEvent) -> Message {
     )
 }
 
-fn stats_message(stats: &[ActorStats]) -> Message {
+fn stats_message(stats: &[ScopedActorStats]) -> Message {
     Message::Text(
         serde_json::json!({ "type": "actor_stats", "data": stats })
             .to_string()
@@ -69,8 +69,7 @@ fn stats_message(stats: &[ActorStats]) -> Message {
     )
 }
 
-async fn send_snapshot(socket: &mut WebSocket, snapshots: &mut SupervisorSnapshotReceiver) -> bool {
-    let snapshot = snapshots.take_latest();
+async fn send_snapshot(socket: &mut WebSocket, snapshot: SupervisorSnapshot) -> bool {
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 
@@ -81,7 +80,7 @@ async fn send_event(socket: &mut WebSocket, event: LifecycleEvent) -> bool {
 async fn send_stats(
     socket: &mut WebSocket,
     state: &AppState,
-    last_sent: &mut Vec<ActorStats>,
+    last_sent: &mut Vec<ScopedActorStats>,
 ) -> bool {
     let stats = (state.stats)();
     if stats == *last_sent {
@@ -100,7 +99,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut lifecycle = (state.lifecycle)();
 
     // Send current snapshot immediately on connect.
-    if !send_snapshot(&mut socket, &mut snapshots).await {
+    if !send_snapshot(&mut socket, snapshots.latest()).await {
         return;
     }
     let mut last_sent_stats = (state.stats)();
@@ -114,10 +113,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             result = snapshots.changed() => {
-                if result.is_err() {
+                let Ok(snapshot) = result else {
                     break;
-                }
-                if !send_snapshot(&mut socket, &mut snapshots).await {
+                };
+                if !send_snapshot(&mut socket, snapshot).await {
                     break;
                 }
             }

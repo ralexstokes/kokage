@@ -10,25 +10,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
-    CancellationToken, ChildExitView, CompletionOnDrop, Guard, LifecycleEvent, LifecycleEventKind,
+    CancellationToken, CompletionOnDrop, ExitStatus, Guard, LifecycleEvent, LifecycleEventKind,
     ScopeKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
 
-/// How a completion wait ended.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[must_use = "a completion wait reports whether the work finished or the supervisor stopped"]
-#[non_exhaustive]
-pub enum CompletionOutcome {
-    /// Every awaited child was simultaneously in a completed state.
-    Completed,
-    /// The watched supervisor identity became terminal before the awaited
-    /// children completed, so the condition can never be satisfied.
-    Closed,
-}
-
-/// Error returned when a completion watch cannot use its requested mode or ids.
+/// Error returned when a direct-child completion condition cannot be satisfied.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CompletionError {
@@ -41,207 +29,169 @@ pub enum CompletionError {
         /// Child id supplied to the wait.
         child_id: String,
     },
+    /// The scope became terminal before every awaited child completed.
+    #[error("scope closed before the children completed")]
+    ScopeClosed,
 }
 
-/// A configurable watch for direct children of one scope to complete.
-///
-/// Create a watch with [`ScopeRef::completions`](crate::ScopeRef::completions). It is
-/// strict by default: every id must name current or projected pre-spawn
-/// membership. [`allow_future_members`](Self::allow_future_members) opts a
-/// dynamic scope into waiting for later insertion, and
-/// [`then_shutdown`](Self::then_shutdown) arms shutdown without awaiting the
-/// result directly.
-#[must_use = "a completion watch must be awaited or armed"]
-pub struct CompletionWatch {
+struct CompletionOperation {
     handle: SupervisorHandle,
-    kind: ScopeKind,
     set: CompletionSet,
-    allow_future_members: bool,
-    error: Option<CompletionError>,
+    watch: crate::supervisor::LifecycleWatch,
+    baseline: u64,
 }
 
-impl CompletionWatch {
-    pub(crate) fn new<I, S>(handle: SupervisorHandle, kind: ScopeKind, ids: I) -> Self
+impl CompletionOperation {
+    fn new<I, S>(
+        handle: SupervisorHandle,
+        ids: I,
+        allow_future_members: bool,
+    ) -> Result<Self, CompletionError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        Self {
+        if allow_future_members && handle.kind() != ScopeKind::Dynamic {
+            return Err(CompletionError::NotDynamic);
+        }
+
+        // Register before taking the snapshot so no transition can fall
+        // between the state baseline and the stream.
+        let watch = handle.watch_lifecycle().direct_children();
+        let snapshot = handle.snapshot();
+        let mut set = CompletionSet::new(ids);
+        let baseline = set.initialize(&snapshot, allow_future_members)?;
+        Ok(Self {
             handle,
-            kind,
-            set: CompletionSet::new(ids),
-            allow_future_members: false,
-            error: None,
-        }
+            set,
+            watch,
+            baseline,
+        })
     }
 
-    /// Treats absent ids as membership that may be inserted later.
-    ///
-    /// This mode is valid only for a dynamic scope. On an ordered scope,
-    /// awaiting the watch returns [`CompletionError::NotDynamic`]. An armed
-    /// shutdown watch logs the error and completes without requesting shutdown.
-    pub fn allow_future_members(mut self) -> Self {
-        if self.kind == ScopeKind::Dynamic {
-            self.allow_future_members = true;
-        } else {
-            self.error = Some(CompletionError::NotDynamic);
+    async fn wait(mut self) -> Result<(), CompletionError> {
+        loop {
+            if self.set.is_complete() {
+                // `Exited` is emitted before its immediately following
+                // restart-scheduled transition. Recheck state before completing so
+                // `RestartPolicy::always()` cannot expose that transient stop as
+                // finished work.
+                self.baseline = self.set.realign(&self.handle.snapshot());
+                if self.set.is_complete() {
+                    return Ok(());
+                }
+            }
+            let Some(event) = self.watch.next().await else {
+                return Err(CompletionError::ScopeClosed);
+            };
+            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+                // A dropped prefix may have contained transitions for awaited
+                // children, so edge-derived state has to be rebuilt from state.
+                self.baseline = self.set.realign(&self.handle.snapshot());
+            } else if event.scope_path.is_empty()
+                && event.kind.seq().is_some_and(|seq| seq > self.baseline)
+            {
+                let needs_realign = matches!(
+                    &event.kind,
+                    LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }
+                );
+                self.set.apply(&event);
+                if needs_realign {
+                    // The snapshot is published before this exit event and knows
+                    // the restart policy and whether a replacement is pending.
+                    // Realigning here avoids treating an Always-policy clean exit
+                    // as complete even transiently.
+                    self.baseline = self.set.realign(&self.handle.snapshot());
+                }
+            }
         }
-        self
+    }
+}
+
+impl SupervisorHandle {
+    pub(crate) async fn wait_for_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        CompletionOperation::new(self.clone(), ids, false)?
+            .wait()
+            .await
     }
 
-    async fn outcome(self) -> Result<CompletionOutcome, CompletionError> {
-        if let Some(error) = self.error {
-            return Err(error);
-        }
-        reduce_completion(&self.handle, self.set, self.allow_future_members).await
+    pub(crate) async fn wait_for_future_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        CompletionOperation::new(self.clone(), ids, true)?
+            .wait()
+            .await
     }
 
-    /// Shuts this scope down once every named child has completed.
-    ///
-    /// This is the fire-and-forget form of
-    /// [`wait`](CompletionWatch::wait), and the usual way to express
-    /// a subtree whose lifetime is bounded by finite work. Set it up before
-    /// spawning, from a pre-spawn handle, so a child that finishes immediately
-    /// is still observed.
-    ///
-    /// The returned guard cancels the watch when dropped and leaves the
-    /// supervisor running; retain it for as long as revoking the shutdown
-    /// should stay possible, or consume it with [`Guard::detach`] for true
-    /// fire-and-forget. The spawned task holds no lifecycle
-    /// ownership, so it never keeps a root supervisor alive on its own.
-    /// Errors produced while evaluating the completion condition are logged
-    /// with the requested child ids and then discarded; they do not request
-    /// shutdown.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn then_shutdown(self) -> Guard {
-        let child_ids = self.set.awaited.clone();
-        let scope_kind = self.kind;
-        let handle = self.handle.clone();
+    pub(crate) fn shutdown_when_children_complete<I, S>(
+        &self,
+        ids: I,
+    ) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.shutdown_when_children_complete_inner(ids, false)
+    }
+
+    pub(crate) fn shutdown_when_future_children_complete<I, S>(
+        &self,
+        ids: I,
+    ) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.shutdown_when_children_complete_inner(ids, true)
+    }
+
+    fn shutdown_when_children_complete_inner<I, S>(
+        &self,
+        ids: I,
+        allow_future_members: bool,
+    ) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let operation = CompletionOperation::new(self.clone(), ids, allow_future_members)?;
+        let child_ids = operation.set.awaited.clone();
+        let scope_kind = self.kind();
+        let handle = self.clone();
         let cancellation = CancellationToken::new();
         let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let task_cancellation = cancellation.clone();
         let task = tokio::spawn(async move {
             let _finished_on_drop = finished_on_drop;
-            let outcome = tokio::select! {
+            let result = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
-                outcome = self.outcome() => outcome,
+                result = operation.wait() => result,
             };
-            match outcome {
-                Ok(CompletionOutcome::Completed) => handle.shutdown(),
-                Ok(CompletionOutcome::Closed) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        ?scope_kind,
-                        ?child_ids,
-                        "completion-triggered shutdown watch failed"
-                    );
-                }
+            match result {
+                Ok(()) => handle.shutdown(),
+                Err(CompletionError::ScopeClosed) => {}
+                Err(error) => tracing::warn!(
+                    %error,
+                    ?scope_kind,
+                    ?child_ids,
+                    "completion-triggered shutdown watch failed"
+                ),
             }
         });
 
         std::mem::drop(task);
-        Guard::from_tokens(cancellation, finished)
-    }
-
-    /// Waits until every named child is simultaneously completed.
-    ///
-    /// A child counts as completed once its current generation has exited with
-    /// [`ChildExitView::Completed`] and no restart is pending for it. Any
-    /// later start un-completes it, so a child that is restarted — including by
-    /// a sibling-driven group restart — must complete again. Failed exits never
-    /// count, matching the rule that failures follow the restart policy rather
-    /// than signalling finished work. A child configured with
-    /// [`Restart::always()`](crate::Restart::always()) never counts as
-    /// completed while it remains a member, even between its clean exit and
-    /// replacement. A child whose membership is removed drops out of the set:
-    /// its work is not coming back.
-    ///
-    /// Awaiting an empty set returns [`CompletionOutcome::Completed`]
-    /// immediately. In the default strict mode, an id absent from the current
-    /// (including projected pre-spawn) membership returns
-    /// [`CompletionError::UnknownChild`].
-    ///
-    /// The wait is gap-free from the moment it is called: it installs a
-    /// lifecycle watch before taking the single snapshot used for both strict
-    /// validation and state alignment. Children that completed earlier are
-    /// still counted, and the reducer realigns from a fresh snapshot if the
-    /// watch reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
-    /// handle is well defined — statically configured children are projected
-    /// before the scope starts.
-    ///
-    /// Awaiting a set that contains the current actor from one of that actor's
-    /// callbacks cannot return a result to that actor: completion requires the
-    /// actor to exit. Observe that set from outside it instead. A bounded
-    /// [`Context::offload`](crate::Context::offload) is appropriate only when
-    /// every awaited child can complete while the receiving actor remains live.
-    pub async fn wait(self) -> Result<CompletionOutcome, CompletionError> {
-        self.outcome().await
+        Ok(Guard::from_tokens(cancellation, finished))
     }
 }
 
-impl SupervisorHandle {
-    pub(crate) fn completions<I, S>(&self, ids: I) -> CompletionWatch
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        CompletionWatch::new(self.clone(), self.kind(), ids)
-    }
-}
-
-async fn reduce_completion(
-    handle: &SupervisorHandle,
-    mut set: CompletionSet,
-    allow_future_members: bool,
-) -> Result<CompletionOutcome, CompletionError> {
-    // The watch is created before the snapshot is read so no transition can
-    // fall between them; events the snapshot already reflects are then
-    // discarded by sequence.
-    let mut watch = handle.watch_lifecycle().direct_children();
-    let snapshot = handle.snapshot();
-    let mut baseline = set.initialize(&snapshot, allow_future_members)?;
-
-    loop {
-        if set.is_complete() {
-            // `Exited` is emitted before its immediately following
-            // restart-scheduled transition. Recheck state before completing so
-            // `Restart::always()` cannot expose that transient stop as
-            // finished work.
-            baseline = set.realign(&handle.snapshot());
-            if set.is_complete() {
-                return Ok(CompletionOutcome::Completed);
-            }
-        }
-        let Some(event) = watch.next().await else {
-            return Ok(CompletionOutcome::Closed);
-        };
-        if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
-            // A dropped prefix may have contained transitions for awaited
-            // children, so edge-derived state has to be rebuilt from state.
-            baseline = set.realign(&handle.snapshot());
-        } else if event.scope_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline) {
-            let needs_realign = matches!(
-                &event.kind,
-                LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildExited { .. }
-            );
-            set.apply(&event);
-            if needs_realign {
-                // The snapshot is published before this exit event and knows
-                // the restart policy and whether a replacement is pending.
-                // Realigning here avoids treating an Always-policy clean exit
-                // as complete even transiently.
-                baseline = set.realign(&handle.snapshot());
-            }
-        }
-    }
-}
-
-/// The reduction behind [`CompletionWatch::wait`].
+/// The reduction behind the direct completion operations.
 struct CompletionSet {
     /// The children being awaited, in the order the caller named them.
     awaited: Vec<String>,
@@ -261,7 +211,7 @@ struct CompletionSet {
     /// membership's completion state.
     latest_lineages: HashMap<String, u64>,
     /// Restart policy of the newest snapshot-aligned membership for each id.
-    restart_policies: HashMap<String, crate::supervisor::Restart>,
+    restart_policies: HashMap<String, crate::supervisor::RestartPolicy>,
 }
 
 impl CompletionSet {
@@ -304,19 +254,24 @@ impl CompletionSet {
     }
 
     fn apply(&mut self, event: &LifecycleEvent) {
-        let Some(child) = event.child.as_ref() else {
-            return;
-        };
-        let transition = match &event.kind {
-            LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildStarted { .. } => {
-                CompletionTransition::Running
+        let (child_id, lineage, transition) = match &event.kind {
+            LifecycleEventKind::ChildAdded {
+                child_id, lineage, ..
             }
-            LifecycleEventKind::ChildExited { exit, .. } => CompletionTransition::Exited(exit),
-            LifecycleEventKind::ChildRemoved => CompletionTransition::Removed,
+            | LifecycleEventKind::ChildStarted {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Running),
+            LifecycleEventKind::ChildExited {
+                child_id,
+                lineage,
+                exit,
+                ..
+            } => (child_id, *lineage, CompletionTransition::Exited(exit)),
+            LifecycleEventKind::ChildRemoved {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Removed),
             _ => return,
         };
-        let child_id = &child.child_id;
-        let lineage = child.lineage;
         if !self.awaits(child_id) {
             return;
         }
@@ -396,7 +351,7 @@ impl CompletionSet {
 
 enum CompletionTransition<'a> {
     Running,
-    Exited(&'a ChildExitView),
+    Exited(&'a ExitStatus),
     Removed,
 }
 
@@ -420,10 +375,7 @@ fn is_completed(child: &ChildSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisor::{
-        ChildExitView, ChildLifecycleIdentity, Strategy, event::ExitKind,
-        snapshot::SupervisorStateView,
-    };
+    use crate::supervisor::{ExitStatus, Strategy, event::ExitKind, snapshot::SupervisorStateView};
 
     enum TestLifecycleKind {
         Added,
@@ -449,30 +401,43 @@ mod tests {
         kind: TestLifecycleKind,
     ) -> LifecycleEvent {
         let kind = match kind {
-            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded,
-            TestLifecycleKind::Started { generation } => {
-                LifecycleEventKind::ChildStarted { generation }
-            }
-            TestLifecycleKind::Exited {
-                generation,
-                reason,
-                cancelled,
-            } => LifecycleEventKind::ChildExited {
-                generation,
-                exit: ChildExitView::new(reason, cancelled),
-            },
-            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved,
-        };
-        LifecycleEvent::local_child(
-            ChildLifecycleIdentity {
+            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded {
                 seq,
                 child_id: child_id.to_owned(),
                 lineage,
                 total_restarts: 0,
                 child_restart_count: 0,
             },
-            kind,
-        )
+            TestLifecycleKind::Started { generation } => LifecycleEventKind::ChildStarted {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+            },
+            TestLifecycleKind::Exited {
+                generation,
+                reason,
+                cancelled,
+            } => LifecycleEventKind::ChildExited {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+                exit: ExitStatus::new(reason, cancelled),
+            },
+            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
+        };
+        LifecycleEvent::local(kind)
     }
 
     fn completed(seq: u64, child_id: &str) -> LifecycleEvent {
@@ -601,7 +566,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, false)),
             },
         );
         let seq = set.realign(&snapshot(vec![source]));
@@ -617,7 +582,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, false)),
             },
         );
         source.next_restart_in = Some(std::time::Duration::from_millis(10));
@@ -633,7 +598,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, true)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, true)),
             },
         );
         set.realign(&snapshot(vec![source]));
@@ -647,7 +612,7 @@ mod tests {
             "source",
             0,
             ChildStateView::StartupAborted {
-                exit: ChildExitView::new(ExitKind::Completed, false),
+                exit: ExitStatus::new(ExitKind::Completed, false),
             },
         );
 

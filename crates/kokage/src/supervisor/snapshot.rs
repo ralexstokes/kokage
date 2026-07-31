@@ -40,16 +40,8 @@ impl SupervisorSnapshotReceiver {
         self.inner.borrow().clone()
     }
 
-    /// Returns a clone of the latest snapshot and marks it observed by this receiver.
-    pub fn take_latest(&mut self) -> SupervisorSnapshot {
+    fn latest_observed(&mut self) -> SupervisorSnapshot {
         self.inner.borrow_and_update().clone()
-    }
-
-    /// Returns whether this receiver has an unobserved snapshot version.
-    pub fn has_changed(&self) -> Result<bool, SnapshotRecvError> {
-        self.inner
-            .has_changed()
-            .map_err(|_| SnapshotRecvError::Closed)
     }
 
     /// Waits for a new snapshot, marks it observed, and returns a clone.
@@ -58,7 +50,7 @@ impl SupervisorSnapshotReceiver {
             .changed()
             .await
             .map_err(|_| SnapshotRecvError::Closed)?;
-        Ok(self.take_latest())
+        Ok(self.latest_observed())
     }
 
     /// Waits until the latest snapshot satisfies `predicate`.
@@ -70,7 +62,7 @@ impl SupervisorSnapshotReceiver {
         mut predicate: impl FnMut(&SupervisorSnapshot) -> bool,
     ) -> Result<SupervisorSnapshot, SnapshotRecvError> {
         loop {
-            let snapshot = self.take_latest();
+            let snapshot = self.latest_observed();
             if predicate(&snapshot) {
                 return Ok(snapshot);
             }
@@ -101,7 +93,7 @@ impl SupervisorSnapshotReceiver {
     ) -> Result<ChildSnapshot, SnapshotRecvError> {
         let mut seen = false;
         loop {
-            let snapshot = self.take_latest();
+            let snapshot = self.latest_observed();
             match snapshot.child(child_id) {
                 Some(child) => {
                     seen = true;
@@ -120,7 +112,9 @@ impl SupervisorSnapshotReceiver {
     }
 }
 
-use crate::supervisor::{event::ExitKind, restart::Restart, scope::ScopeKind, strategy::Strategy};
+use crate::supervisor::{
+    event::ExitKind, restart::RestartPolicy, scope::ScopeKind, strategy::Strategy,
+};
 
 /// Point-in-time snapshot of a supervisor's state, including the state of every
 /// child.
@@ -143,7 +137,7 @@ pub struct SupervisorSnapshot {
     /// Cumulative number of restarts this supervisor has scheduled for its
     /// direct children — exactly the occurrences the restart-intensity window
     /// records. That includes clean exits restarted under
-    /// [`Restart::always()`](crate::Restart::always()); under group
+    /// [`RestartPolicy::always()`](crate::RestartPolicy::always()); under group
     /// strategies such as [`Strategy::OneForAll`], sibling respawns caused by
     /// another child's exit do not increment it — only the exiting child's
     /// scheduled restart counts.
@@ -167,11 +161,12 @@ pub struct SupervisorSnapshot {
     /// Sequence of the last lifecycle event emitted when this snapshot was
     /// published.
     ///
-    /// For a gap-free state-plus-stream view, create a lifecycle watch first,
-    /// then read a snapshot, then discard watched events whose `seq` is less
-    /// than or equal to this value. A pre-spawn snapshot projects statically
-    /// configured children before their first `Added` transition; reducers
-    /// should apply `Added` as an idempotent membership upsert.
+    /// For a gap-free direct-child state-plus-stream view, use
+    /// [`ScopeRef::observe_lifecycle`](crate::ScopeRef::observe_lifecycle), then
+    /// discard watched events whose `seq` is less than or equal to this value.
+    /// A pre-spawn snapshot projects statically configured children before
+    /// their first `Added` transition; reducers should apply `Added` as an
+    /// idempotent membership upsert.
     #[cfg_attr(feature = "serde", serde(default))]
     pub lifecycle_seq: u64,
     /// Ordered list of child snapshots, matching the supervisor's child order.
@@ -180,11 +175,7 @@ pub struct SupervisorSnapshot {
 
 /// Point-in-time snapshot of a single child.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(from = "snapshot_wire::WireChildSnapshot")
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ChildSnapshot {
     /// The child's unique identifier.
@@ -202,7 +193,7 @@ pub struct ChildSnapshot {
     pub restart_count: u64,
     /// Policy that determines whether the current exit is eligible to restart.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub restart_policy: Restart,
+    pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
     #[cfg_attr(feature = "serde", serde(default))]
     pub remove_when_done: bool,
@@ -212,47 +203,6 @@ pub struct ChildSnapshot {
     /// If this child is a first-class nested supervisor, this contains its
     /// recursive snapshot.
     pub supervisor: Option<Box<SupervisorSnapshot>>,
-}
-
-#[cfg(feature = "serde")]
-mod snapshot_wire {
-    use super::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot};
-    use crate::supervisor::RestartWire;
-    use std::time::Duration;
-
-    #[derive(serde::Deserialize)]
-    pub(super) struct WireChildSnapshot {
-        id: String,
-        lineage: u64,
-        generation: u64,
-        state: ChildStateView,
-        membership: ChildMembershipView,
-        restart_count: u64,
-        #[serde(default)]
-        restart_policy: RestartWire,
-        #[serde(default)]
-        remove_when_done: Option<bool>,
-        next_restart_in: Option<Duration>,
-        supervisor: Option<Box<SupervisorSnapshot>>,
-    }
-
-    impl From<WireChildSnapshot> for ChildSnapshot {
-        fn from(wire: WireChildSnapshot) -> Self {
-            let (restart_policy, legacy_remove_when_done) = wire.restart_policy.into_parts();
-            Self {
-                id: wire.id,
-                lineage: wire.lineage,
-                generation: wire.generation,
-                state: wire.state,
-                membership: wire.membership,
-                restart_count: wire.restart_count,
-                restart_policy,
-                remove_when_done: wire.remove_when_done.unwrap_or(legacy_remove_when_done),
-                next_restart_in: wire.next_restart_in,
-                supervisor: wire.supervisor,
-            }
-        }
-    }
 }
 
 impl SupervisorSnapshot {
@@ -316,7 +266,7 @@ impl ChildSnapshot {
             state,
             membership: ChildMembershipView::Active,
             restart_count: 0,
-            restart_policy: Restart::default(),
+            restart_policy: RestartPolicy::default(),
             remove_when_done: false,
             next_restart_in: None,
             supervisor: None,
@@ -337,38 +287,38 @@ pub enum SupervisorStateView {
     Stopped,
 }
 
-/// Public details of a child generation's exit.
+/// Public observational details of an actor or supervised child exit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub enum ChildExitView {
+pub enum ExitStatus {
     /// The child returned `Ok(())`.
     Completed {
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
     /// The child returned an error.
     Failed {
         /// The error's `Display` output.
         message: String,
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
     /// The child task panicked.
     Panicked {
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
-    /// The child task was aborted by the supervisor.
+    /// The child task was aborted by its controller.
     Aborted {
         /// Whether cooperative shutdown exhausted its grace period first.
         after_grace: bool,
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
 }
 
-impl ChildExitView {
+impl ExitStatus {
     pub(crate) fn new(status: ExitKind, cancelled: bool) -> Self {
         match status {
             ExitKind::Completed => Self::Completed { cancelled },
@@ -379,6 +329,11 @@ impl ChildExitView {
                 cancelled,
             },
         }
+    }
+
+    /// Returns whether the exit represents a failure.
+    pub fn is_failure(&self) -> bool {
+        !matches!(self, Self::Completed { .. })
     }
 
     /// Returns whether the child completed successfully.
@@ -399,7 +354,7 @@ impl ChildExitView {
         matches!(self, Self::Panicked { .. })
     }
 
-    /// Returns whether the supervisor aborted the child after its grace
+    /// Returns whether the controller aborted the child after its grace
     /// period expired.
     pub fn timed_out(&self) -> bool {
         matches!(
@@ -411,7 +366,7 @@ impl ChildExitView {
         )
     }
 
-    /// Returns whether the supervisor stopped this generation.
+    /// Returns whether shutdown was requested for this generation.
     pub fn cancelled(&self) -> bool {
         match self {
             Self::Completed { cancelled }
@@ -433,12 +388,12 @@ pub enum ChildStateView {
     /// The child has been created but its task has not yet started running.
     Starting {
         /// Exit of the preceding generation, when this is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child task is running.
     Running {
         /// Exit of the preceding generation, when this is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child is in the process of being stopped (token cancelled, waiting
     /// for exit).
@@ -446,19 +401,19 @@ pub enum ChildStateView {
         /// Whether this generation reported readiness before stopping began.
         started: bool,
         /// Exit of the preceding generation, when this generation is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child has exited.
     Stopped {
         /// Whether this generation reported readiness before it stopped.
         started: bool,
         /// Exit of this generation, or `None` if it was never spawned.
-        exit: Option<ChildExitView>,
+        exit: Option<ExitStatus>,
     },
     /// The child stopped permanently before reporting readiness.
     StartupAborted {
         /// Exit of this generation.
-        exit: ChildExitView,
+        exit: ExitStatus,
     },
 }
 
@@ -475,7 +430,7 @@ impl ChildStateView {
     }
 
     /// Returns the newest observed exit, if any.
-    pub fn last_exit(&self) -> Option<&ChildExitView> {
+    pub fn last_exit(&self) -> Option<&ExitStatus> {
         match self {
             Self::Starting { previous_exit }
             | Self::Running { previous_exit }
@@ -630,13 +585,9 @@ mod tests {
         sender.send(snapshot(2)).expect("receivers remain open");
 
         assert_eq!(first.latest().total_restarts, 2);
-        assert_eq!(first.has_changed(), Ok(true));
         assert_eq!(first.changed().await.unwrap().total_restarts, 2);
-        assert_eq!(first.has_changed(), Ok(false));
 
-        assert_eq!(second.has_changed(), Ok(true));
-        assert_eq!(second.take_latest().total_restarts, 2);
-        assert_eq!(second.has_changed(), Ok(false));
+        assert_eq!(second.changed().await.unwrap().total_restarts, 2);
     }
 
     #[tokio::test]
@@ -651,11 +602,9 @@ mod tests {
             .await
             .expect("matching snapshot is available");
         assert_eq!(matched.total_restarts, 3);
-        assert_eq!(receiver.has_changed(), Ok(false));
 
         drop(sender);
         assert_eq!(receiver.changed().await, Err(SnapshotRecvError::Closed));
-        assert_eq!(receiver.has_changed(), Err(SnapshotRecvError::Closed));
     }
 
     #[test]
@@ -695,7 +644,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_when_done_round_trips_and_migrates_the_legacy_restart_field() {
+    fn remove_when_done_round_trips() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -706,24 +655,10 @@ mod tests {
             },
         );
         snapshot.remove_when_done = true;
-        let mut value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
+        let value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
         assert_eq!(value["remove_when_done"], true);
         let decoded: ChildSnapshot =
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
         assert!(decoded.remove_when_done);
-
-        value
-            .as_object_mut()
-            .expect("child snapshot serializes as an object")
-            .remove("remove_when_done");
-        value["restart_policy"]["remove_when_done"] = serde_json::Value::Bool(true);
-        let decoded: ChildSnapshot =
-            serde_json::from_value(value.clone()).expect("older child snapshot deserializes");
-        assert!(decoded.remove_when_done);
-
-        value["remove_when_done"] = serde_json::Value::Bool(false);
-        let decoded: ChildSnapshot =
-            serde_json::from_value(value).expect("new field takes precedence");
-        assert!(!decoded.remove_when_done);
     }
 }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{ExitReason, MonitorEvent, TimerKey, prelude::*};
+use kokage::{ExitStatus, MonitorEvent, TimerKey, prelude::*};
 use tokio::time::Instant;
 
 use crate::{
@@ -32,7 +32,7 @@ pub struct Reconciler {
     feeds: HashMap<VenueId, ActorRef<FeedMsg>>,
     sessions: Vec<(VenueId, ExchangeSim)>,
     venues: HashMap<VenueId, VenueState>,
-    exit_reasons: HashMap<VenueId, Vec<ExitReason>>,
+    exit_reasons: HashMap<VenueId, Vec<ExitStatus>>,
 }
 
 impl Reconciler {
@@ -128,8 +128,8 @@ impl Actor for Reconciler {
                         tracing::debug!(venue, generation, "venue feed started");
                         self.transition(venue, VenueHealth::Stale);
                     }
-                    MonitorEvent::Exited { reason, .. } => {
-                        self.exit_reasons.entry(venue).or_default().push(reason);
+                    MonitorEvent::Exited { status, .. } => {
+                        self.exit_reasons.entry(venue).or_default().push(status);
                         self.transition(venue, VenueHealth::Down);
                     }
                     MonitorEvent::Removed { .. } => {

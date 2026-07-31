@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorRef, ActorSlot, Context, ExitResult, OrderedTree};
+use kokage::{Actor, ActorRef, ActorSlot, Context, ExitResult, Tree};
 use tokio::sync::mpsc;
 
 enum FrontendMsg {
@@ -86,10 +86,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sink_actor = sink_slot.define(move || Sink {
         out: out_tx.clone(),
     });
-    let mut tree = OrderedTree::new();
-    tree.add_actor(frontend_actor);
-    tree.add_actor(parser_actor);
-    tree.add_actor(sink_actor);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(frontend_actor);
+    tree.add_actor_spec(parser_actor);
+    tree.add_actor_spec(sink_actor);
     let runtime = tree.spawn()?;
 
     frontend.send(FrontendMsg::Feed("hello".to_owned())).await?;

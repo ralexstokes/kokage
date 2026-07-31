@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorSlot, Context, ControlError, DynamicTree, ExitResult, Guard, OrderedTree,
-    ScopeRef, Shutdown, Strategy, SupervisorError,
+    Actor, ActorRef, ActorSlot, Context, ControlError, DynamicTree, ExitResult, Guard, ScopeRef,
+    Shutdown, Strategy, SupervisorError, Tree,
     observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
 };
 
@@ -86,9 +86,20 @@ enum MountEventDisposition {
 fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
     event_disposition(
         alignment_seq,
-        event.seq().unwrap_or(0),
+        lifecycle_seq(event).unwrap_or(0),
         matches!(&event.kind, LifecycleEventKind::Lagged { .. }),
     )
+}
+
+fn lifecycle_seq(event: &LifecycleEvent) -> Option<u64> {
+    match &event.kind {
+        LifecycleEventKind::ChildAdded { seq, .. }
+        | LifecycleEventKind::ChildStarted { seq, .. }
+        | LifecycleEventKind::ChildExited { seq, .. }
+        | LifecycleEventKind::ChildRemoved { seq, .. }
+        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => Some(*seq),
+        _ => None,
+    }
 }
 
 fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountEventDisposition {
@@ -165,7 +176,7 @@ impl Router {
             })
             // Draining is load-bearing for eviction: a message forwarded before
             // `Evict` must be bounced to the router for the replacement session.
-            .shutdown(Shutdown::drain_for(PHASE_TIMEOUT));
+            .shutdown(Shutdown::graceful_for(PHASE_TIMEOUT));
         let mount = self.mount();
         let offload_id = subtree_id.clone();
         ctx.offload(
@@ -176,10 +187,10 @@ impl Router {
                 // rehydrates from the journal, while `Never` run children are
                 // skipped by the group respawn and cannot themselves recycle
                 // the session.
-                let mut session_runtime = OrderedTree::new().strategy(Strategy::OneForAll);
-                session_runtime.add_actor(session_actor);
+                let mut session_runtime = Tree::new().strategy(Strategy::OneForAll);
+                session_runtime.add_actor_spec(session_actor);
                 session_runtime.add_subtree("children", DynamicTree::new());
-                let mut session_tree = OrderedTree::new();
+                let mut session_tree = Tree::new();
                 session_tree.add_subtree("session-runtime", session_runtime);
                 let subtree = mount.add_subtree(offload_id, session_tree).await;
                 subtree.is_ok()
@@ -313,14 +324,12 @@ impl Actor for Router {
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        self.alignment_seq = event
-                            .seq()
+                        self.alignment_seq = lifecycle_seq(&event)
                             .expect("only child transitions have an alignment sequence");
-                        if matches!(event.kind, LifecycleEventKind::ChildAdded)
-                            && let Some(child) = event.child
-                            && !self.routes_subtree(&child.child_id)
+                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
+                            && !self.routes_subtree(&child_id)
                         {
-                            self.pipeline_sweep(child.child_id, ctx);
+                            self.pipeline_sweep(child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}

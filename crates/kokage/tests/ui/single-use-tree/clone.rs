@@ -1,6 +1,6 @@
-use kokage::OrderedTree;
+use kokage::Tree;
 
 fn main() {
-    let tree = OrderedTree::new();
+    let tree = Tree::new();
     let _copy = tree.clone();
 }

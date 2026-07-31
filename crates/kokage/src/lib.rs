@@ -4,8 +4,8 @@
 //! async scheduler (Tokio today), with an owning [`RunningTree`] and integrated
 //! non-owning [`ScopeRef`] values.
 //!
-//! Declare each actor with [`ActorSpec`], place the specs directly in an
-//! [`OrderedTree`], and spawn the tree:
+//! Add each actor's id and factory directly to a [`Tree`], then spawn it.
+//! Use [`ActorSpec`] when a declaration needs explicit policy overrides:
 //!
 //! ```no_run
 //! use kokage::prelude::*;
@@ -27,8 +27,8 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut tree = OrderedTree::new();
-//! let echo_ref = tree.add_actor(ActorSpec::new("echo", || Echo));
+//! let mut tree = Tree::new();
+//! let echo_ref = tree.add_actor("echo", || Echo);
 //! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
@@ -53,7 +53,7 @@
 //! |------|------|
 //! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
-//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
+//! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
 //! | [`RunningTree`] | Owns a spawned supervision tree and requests graceful shutdown when dropped. |
 //! | [`ScopeRef`] | Cheaply cloneable, non-owning reference and control capability for a supervision scope; [`ScopeRef::kind`] reports ordered or dynamic membership. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
@@ -67,7 +67,7 @@
 //!
 //! # Composition modes
 //!
-//! - **Ordered actor trees** via [`OrderedTree::new`]: per-actor supervision,
+//! - **Ordered actor trees** via [`Tree::new`]: per-actor supervision,
 //!   recursive actor-aware subtrees, arbitrary task children, and explicit
 //!   leader-owned scopes.
 //! - **Dynamic actor membership** via [`DynamicTree::new`]: an initially empty
@@ -92,7 +92,7 @@
 //!
 //! [`raw::RawContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
-//! [`Shutdown::drain_for`] and finishes queued messages before stopping; a
+//! [`Shutdown::graceful_for`] and finishes queued messages before stopping; a
 //! hand-written [`raw::RawActor`] loop can inspect remaining work with
 //! [`raw::RawContext::try_recv`].
 //!
@@ -148,15 +148,15 @@
 //!
 //! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
 //! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
-//! let mut tree = OrderedTree::new();
-//! tree.add_actor(left_actor);
-//! tree.add_actor(right_actor);
+//! let mut tree = Tree::new();
+//! tree.add_actor_spec(left_actor);
+//! tree.add_actor_spec(right_actor);
 //! # let _ = (left, right, tree);
 //! ```
 //!
 //! # Hand-driving actors
 //!
-//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal
+//! Supervision through [`Tree`] or [`DynamicTree`] is the normal
 //! host, but [`ActorSpec::into_host`] exposes one actor for direct hosts:
 //!
 //! ```
@@ -173,7 +173,7 @@
 //!         actor
 //!             .run_once(
 //!                 stop.cancelled(),
-//!                 Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+//!                 Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
 //!             )
 //!             .await
 //!     }
@@ -255,14 +255,15 @@ pub mod raw {
 /// Control remains on [`ScopeRef`]; this module groups the values and
 /// streams returned by that handle without injecting them into the crate root.
 pub mod observe {
+    #[cfg(feature = "serde")]
+    pub use crate::supervision::{ChildOutline, SupervisionOutline};
     pub use crate::{
-        actor::ActorStats,
-        supervision::{ChildOutline, SupervisionOutline},
+        actor::{ActorStats, ScopedActorStats},
         supervisor::{
-            ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildSnapshot,
-            ChildStateView, CompletionError, CompletionOutcome, CompletionWatch, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SnapshotRecvError,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError, ExitStatus,
+            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
+            ScopePathSegment, SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver,
+            SupervisorStateView,
         },
     };
 }
@@ -281,8 +282,8 @@ pub mod observe {
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-        MonitorEvent, OrderedTree, Reply, Restart, Shutdown, StopContext, Strategy, TaskSpec,
-        TimerKey,
+        MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+        TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -291,13 +292,14 @@ pub mod prelude {
 pub use kokage_derive::ActorFactory;
 
 pub use actor::{
-    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
-    Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
-    SendErrorKind, SendRejection, StopContext, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
+    ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
+    StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
-pub use supervision::{DynamicTree, OrderedTree, SubtreeSpec};
+pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
-    Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, Restart, Shutdown,
-    Strategy, SupervisorError, TaskContext, TaskSpec,
+    Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
+    MailboxShutdown, RestartMode, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext,
+    TaskSpec,
 };

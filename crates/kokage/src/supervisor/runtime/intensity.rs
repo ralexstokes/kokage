@@ -5,7 +5,7 @@ use std::{
 
 use tokio::time::Instant;
 
-use crate::supervisor::restart::{Backoff, Restart};
+use crate::supervisor::restart::{Backoff, RestartPolicy};
 
 /// Sliding-window restart rate limiter.
 ///
@@ -18,7 +18,7 @@ use crate::supervisor::restart::{Backoff, Restart};
 /// that resets after an incarnation runs longer than the intensity window; it is
 /// independent of timestamp eviction from the intensity window.
 pub(crate) struct RestartTracker {
-    intensity: Restart,
+    intensity: RestartPolicy,
     times: VecDeque<Instant>,
     rng: JitterRng,
     total_restarts: u64,
@@ -27,7 +27,7 @@ pub(crate) struct RestartTracker {
 }
 
 impl RestartTracker {
-    pub(crate) fn new(intensity: Restart) -> Self {
+    pub(crate) fn new(intensity: RestartPolicy) -> Self {
         Self {
             intensity,
             times: VecDeque::new(),
@@ -173,7 +173,7 @@ mod tests {
     use crate::supervisor::Backoff;
 
     fn tracker(policy: Backoff) -> RestartTracker {
-        let intensity = Restart::on_failure()
+        let intensity = RestartPolicy::on_failure()
             .limit(10, Duration::from_secs(10))
             .backoff(policy);
         RestartTracker {

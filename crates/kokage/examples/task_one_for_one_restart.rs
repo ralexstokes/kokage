@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{BoxError, OrderedTree, TaskSpec};
+use kokage::{BoxError, TaskSpec, Tree};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -39,9 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
 
-    let mut tree = OrderedTree::new();
-    tree.add_task(flaky);
-    tree.add_task(metrics);
+    let mut tree = Tree::new();
+    tree.add_task_spec(flaky);
+    tree.add_task_spec(metrics);
     let running_owner = tree.spawn()?;
     let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();

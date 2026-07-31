@@ -9,7 +9,7 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ExitResult, Guard,
-    OrderedTree, Strategy, TimerKey,
+    Strategy, TimerKey, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -17,12 +17,12 @@ use tokio::{
     time::{Instant, advance, timeout},
 };
 
-fn build_runtime<F>(factory: F) -> (OrderedTree, ActorRef<<F::Actor as RawActor>::Msg>)
+fn build_runtime<F>(factory: F) -> (Tree, ActorRef<<F::Actor as RawActor>::Msg>)
 where
     F: ActorFactory,
 {
-    let mut builder = OrderedTree::new();
-    let actor_ref = builder.add_actor(ActorSpec::new("timer", factory));
+    let mut builder = Tree::new();
+    let actor_ref = builder.add_actor_spec(ActorSpec::new("timer", factory));
     let runtime = builder.strategy(Strategy::OneForOne);
     (runtime, actor_ref)
 }
@@ -69,6 +69,46 @@ async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     );
     let stats = actor_ref.stats();
     assert_eq!(stats.messages_accepted, 0);
+    assert_eq!(stats.messages_received, 1);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+struct MailboxOneShot {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for MailboxOneShot {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.send_after("tick", Duration::from_millis(20)).detach();
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn context_send_after_delivers_once_through_the_self_mailbox() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, actor_ref) = build_runtime(move || MailboxOneShot {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("tick"));
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "one-shot mailbox timer must not fire twice"
+    );
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 1);
     assert_eq!(stats.messages_received, 1);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
@@ -574,7 +614,7 @@ impl Actor for Sink {
 fn build_cross_runtime<F>(
     scheduler: impl FnOnce(ActorRef<&'static str>) -> F,
 ) -> (
-    OrderedTree,
+    Tree,
     ActorRef<<F::Actor as RawActor>::Msg>,
     mpsc::UnboundedReceiver<&'static str>,
 )
@@ -582,11 +622,11 @@ where
     F: ActorFactory,
 {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
-    let mut builder = OrderedTree::new();
-    let sink_ref = builder.add_actor(ActorSpec::new("sink", move || Sink {
+    let mut builder = Tree::new();
+    let sink_ref = builder.add_actor_spec(ActorSpec::new("sink", move || Sink {
         observed: observed_tx.clone(),
     }));
-    let scheduler_ref = builder.add_actor(ActorSpec::new("scheduler", scheduler(sink_ref)));
+    let scheduler_ref = builder.add_actor_spec(ActorSpec::new("scheduler", scheduler(sink_ref)));
     let runtime = builder.strategy(Strategy::OneForOne);
     (runtime, scheduler_ref, observed_rx)
 }
@@ -899,8 +939,8 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
     let target_slot = ActorSlot::new("terminated-target");
     let target = target_slot.actor_ref();
     drop(target_slot);
-    let mut builder = OrderedTree::new();
-    builder.add_actor(ActorSpec::new("scheduler", {
+    let mut builder = Tree::new();
+    builder.add_actor_spec(ActorSpec::new("scheduler", {
         let target = target.clone();
         move || ReportedCrossInterval {
             target: target.clone(),

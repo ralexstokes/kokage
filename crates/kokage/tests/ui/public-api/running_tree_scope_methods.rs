@@ -1,7 +1,4 @@
-use kokage::{
-    Actor as ActorTrait, ActorSpec, Context, ExitResult, OrderedTree, RunningTree,
-    TaskSpec,
-};
+use kokage::{Actor as ActorTrait, ActorSpec, Context, ExitResult, RunningTree, TaskSpec, Tree};
 
 struct Actor;
 
@@ -13,21 +10,14 @@ impl ActorTrait for Actor {
     }
 }
 
-async fn scope_operations_require_scope_ref(running: &RunningTree) {
-    let _ = running.kind();
-    let _ = running.snapshot();
-    let _ = running.wait_started().await;
-    let _ = running.completions(["child"]);
-    let _ = running.watch_lifecycle();
-    let _ = running.actor_stats();
-    let _ = running.subtree("child");
+async fn membership_operations_require_scope_ref(running: &RunningTree) {
     let _ = running
-        .add_actor(ActorSpec::new("actor", || Actor))
+        .add_actor_spec(ActorSpec::new("actor", || Actor))
         .await;
     let _ = running
-        .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
+        .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
         .await;
-    let _ = running.add_subtree("tree", OrderedTree::new()).await;
+    let _ = running.add_subtree("tree", Tree::new()).await;
     let _ = running.remove_child("child").await;
 }
 

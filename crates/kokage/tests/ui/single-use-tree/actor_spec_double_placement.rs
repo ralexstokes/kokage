@@ -1,4 +1,4 @@
-use kokage::{Actor, ExitResult, ActorSpec, Context, OrderedTree};
+use kokage::{Actor, ExitResult, ActorSpec, Context, Tree};
 
 struct Idle;
 
@@ -12,7 +12,7 @@ impl Actor for Idle {
 
 fn main() {
     let spec = ActorSpec::new("idle", || Idle);
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
+    tree.add_actor_spec(spec);
 }

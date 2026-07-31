@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, Restart, ScopeKind,
+    Backoff, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, RestartMode, ScopeKind,
     Supervisor, SupervisorSnapshot, SupervisorStateView, TaskSpec,
 };
 use tokio::{
@@ -149,7 +149,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
             Ok(())
         }
     })
-    .restart(common::restart_with_backoff(
+    .restart_policy(common::restart_with_backoff(
         5,
         Duration::from_secs(1),
         Backoff::fixed(Duration::from_millis(200)),
@@ -429,7 +429,7 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
 #[tokio::test]
 async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
     let supervisor = Supervisor::ordered()
-        .child(TaskSpec::new("temporary", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("temporary", |_ctx| async move { Ok(()) }).restart(RestartMode::Never))
         .build()
         .expect("valid supervisor");
 

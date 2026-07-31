@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use crate::supervisor::{Backoff, BuildError, Restart, Supervisor, TaskSpec};
+use crate::supervisor::{Backoff, BuildError, RestartPolicy, Supervisor, TaskSpec};
 
-fn restart_with_backoff(backoff: Backoff) -> Restart {
-    Restart::on_failure()
+fn restart_with_backoff(backoff: Backoff) -> RestartPolicy {
+    RestartPolicy::on_failure()
         .limit(1, Duration::from_secs(1))
         .backoff(backoff)
 }
@@ -29,7 +29,7 @@ fn duplicate_child_ids_are_rejected() {
 #[test]
 fn invalid_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(1, Duration::ZERO))
+        .default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO))
         .child(TaskSpec::new("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero-width restart windows should be rejected");
@@ -98,7 +98,7 @@ fn invalid_child_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
         .child(
             TaskSpec::new("worker", |_| async { Ok(()) })
-                .restart(Restart::on_failure().limit(1, Duration::ZERO)),
+                .restart_policy(RestartPolicy::on_failure().limit(1, Duration::ZERO)),
         )
         .build()
         .expect_err("zero-width child restart windows should be rejected");

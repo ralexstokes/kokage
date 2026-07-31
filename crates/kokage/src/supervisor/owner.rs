@@ -22,7 +22,7 @@ use crate::{
         },
         lifecycle::{LifecycleHub, LifecycleTreeSink},
         observability::{format_path, strategy_label, supervisor_name_for_path},
-        restart::Restart,
+        restart::RestartPolicy,
         runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
         scope::ScopeKind,
         shutdown::Shutdown,
@@ -100,7 +100,7 @@ impl std::fmt::Debug for RunningSupervisor {
 pub(crate) struct SupervisorConfig {
     pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) default_restart: Restart,
+    pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: Shutdown,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,

@@ -69,14 +69,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
         let stop = stop.clone();
         async move {
             let first_exit = actor
-                .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .run_incarnation(
+                    pending::<()>(),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await;
             let _ = first_exit_tx.send(first_exit);
             let _ = restart_rx.await;
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }

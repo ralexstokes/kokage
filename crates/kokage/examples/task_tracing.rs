@@ -3,13 +3,13 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{Backoff, OrderedTree, Restart, TaskSpec};
+use kokage::{Backoff, RestartPolicy, TaskSpec, Tree};
 use tokio::time::{Duration, sleep};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested_restart = Restart::on_failure()
+    let nested_restart = RestartPolicy::on_failure()
         .limit(5, Duration::from_secs(5))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     tracing_subscriber::fmt()
@@ -20,8 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let attempts = Arc::new(AtomicUsize::new(0));
     let nested_attempts = Arc::clone(&attempts);
-    let mut nested = OrderedTree::new();
-    nested.add_task(
+    let mut nested = Tree::new();
+    nested.add_task_spec(
         TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&nested_attempts);
             async move {
@@ -33,14 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             }
         })
-        .restart(nested_restart),
+        .restart_policy(nested_restart),
     );
 
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("anchor", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("anchor", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
+    });
     tree.add_subtree("nested", nested);
     let running = tree.spawn()?;
 

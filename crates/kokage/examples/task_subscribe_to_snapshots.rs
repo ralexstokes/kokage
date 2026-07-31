@@ -1,5 +1,5 @@
 use kokage::{
-    OrderedTree, Restart, SubtreeSpec, TaskSpec,
+    RestartMode, SubtreeSpec, Tree,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
         SupervisorStateView,
@@ -9,31 +9,30 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut nested = OrderedTree::new();
-    nested.add_task(TaskSpec::new("leaf", |ctx| async move {
+    let mut nested = Tree::new();
+    nested.add_task("leaf", |ctx| async move {
         println!("leaf started");
         ctx.shutdown_token().cancelled().await;
         println!("leaf stopping");
         Ok(())
-    }));
+    });
 
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("worker", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("worker", |ctx| async move {
         println!("worker started");
         ctx.shutdown_token().cancelled().await;
         println!("worker stopping");
         Ok(())
-    }));
-    tree.add_subtree(
+    });
+    tree.add_subtree_spec(
         "nested",
-        SubtreeSpec::from(nested).restart(Restart::never()),
+        SubtreeSpec::from(nested).restart(RestartMode::Never),
     );
     let running = tree.spawn()?;
-    let handle = running.scope();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut snapshots = running.subscribe_snapshots();
 
     println!("initial snapshot:");
-    print_snapshot(&handle.snapshot(), 0);
+    print_snapshot(&running.snapshot(), 0);
 
     let observer = tokio::spawn(async move {
         loop {
@@ -50,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    handle.shutdown_and_wait().await?;
+    running.shutdown_and_wait().await?;
     observer.await??;
 
     Ok(())

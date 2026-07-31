@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{ChildSpec, Restart, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{ChildSpec, RestartMode, RestartPolicy, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::common;
@@ -164,7 +164,7 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
     let failed = TaskSpec::new("failed", |_| async {
         Err(std::io::Error::other("init failed").into())
     })
-    .restart(Restart::never())
+    .restart(RestartMode::Never)
     .wait_for_ready();
     let later = TaskSpec::new("later", {
         let later_started = Arc::clone(&later_started);
@@ -266,7 +266,7 @@ async fn wait_started_accepts_an_immediate_child_that_already_completed() {
                     }
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         )
         .build()
         .unwrap()
@@ -364,7 +364,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     for index in 0..4 {
         let attempts = Arc::clone(&noisy_attempts);
         let nested = Supervisor::ordered()
-            .default_restart(Restart::on_failure().limit(100_000, Duration::from_secs(60)))
+            .default_restart(RestartPolicy::on_failure().limit(100_000, Duration::from_secs(60)))
             .child(TaskSpec::new("flapping", move |_ctx| {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 async move { Err(std::io::Error::other("emit another nested update").into()) }
@@ -558,7 +558,7 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
             }
         }
     })
-    .restart(Restart::never())
+    .restart(RestartMode::Never)
     .wait_for_ready();
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -598,7 +598,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
     let failed = TaskSpec::new("failed", |_| async {
         Err(std::io::Error::other("nested init failed").into())
     })
-    .restart(Restart::never())
+    .restart(RestartMode::Never)
     .wait_for_ready();
     let nested = Supervisor::ordered()
         .child(sibling)
@@ -606,7 +606,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
         .build()
         .unwrap();
     let handle_owner = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
         .build()
         .unwrap()
         .spawn();
@@ -641,7 +641,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
             }
         }
     })
-    .restart(Restart::never())
+    .restart(RestartMode::Never)
     .wait_for_ready();
     let failing = TaskSpec::new("failing", {
         let attempts = Arc::clone(&attempts);

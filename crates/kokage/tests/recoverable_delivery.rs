@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, OrderedTree, Reply,
-    Restart, SendError, SendErrorKind, SendRejection,
+    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, Reply,
+    RestartPolicy, SendError, SendErrorKind, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -64,7 +64,7 @@ impl RawActor for FailWithoutReceiving {
 }
 
 async fn close_full_mailbox_during_bounded_send(
-    restart: Restart,
+    restart: RestartPolicy,
     bound: Duration,
     message: &str,
 ) -> Result<(), SendError<String>> {
@@ -78,10 +78,10 @@ async fn close_full_mailbox_during_bounded_send(
         }
     })
     .mailbox_capacity(1)
-    .restart(restart);
+    .restart_policy(restart);
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("first incarnation starts");
     actor
@@ -166,8 +166,8 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
     });
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished(), "bounded send waits for a binding");
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     waiting
         .await
@@ -209,8 +209,8 @@ async fn full_mailbox_rejections_return_the_message() {
     })
     .mailbox_capacity(1);
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
@@ -283,8 +283,8 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
     })
     .mailbox(MailboxMode::conflate());
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
@@ -331,8 +331,8 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
         }
     }));
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
@@ -380,7 +380,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
 #[tokio::test]
 async fn bounded_send_rides_a_closed_mailbox_into_the_next_incarnation() {
     close_full_mailbox_during_bounded_send(
-        Restart::on_failure(),
+        RestartPolicy::on_failure(),
         Duration::from_secs(1),
         "after restart",
     )
@@ -391,7 +391,7 @@ async fn bounded_send_rides_a_closed_mailbox_into_the_next_incarnation() {
 #[tokio::test]
 async fn bounded_send_returns_termination_after_its_mailbox_closes() {
     let error = close_full_mailbox_during_bounded_send(
-        Restart::never(),
+        RestartPolicy::never(),
         Duration::from_secs(1),
         "not accepted",
     )
@@ -411,7 +411,7 @@ async fn bounded_send_returns_termination_after_its_mailbox_closes() {
 #[tokio::test]
 async fn bounded_send_times_out_waiting_for_rebind_after_its_mailbox_closes() {
     let error = close_full_mailbox_during_bounded_send(
-        Restart::on_failure().backoff(Backoff::fixed(Duration::from_secs(1))),
+        RestartPolicy::on_failure().backoff(Backoff::fixed(Duration::from_secs(1))),
         Duration::from_millis(20),
         "deadline wins",
     )
@@ -432,8 +432,8 @@ async fn bounded_send_times_out_waiting_for_rebind_after_its_mailbox_closes() {
 async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generic() {
     let spec = ActorSpec::new("worker", || Drain);
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     runtime
         .shutdown_and_wait()
@@ -484,11 +484,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects call delivery");
     assert!(matches!(
         call_error,
-        CallError::Send(SendRejection {
-            actor_id,
-            kind: SendErrorKind::Terminated,
-            ..
-        }) if actor_id == "worker"
+        CallError::Terminated { actor_id, .. } if actor_id == "worker"
     ));
 }
 
@@ -497,7 +493,7 @@ struct NotSync {
 }
 
 // Compile probe: `NotSync` is `Send` but not `Sync`, so the payload-bearing
-// error cannot enter `BoxError`. Discarding the message makes the common actor
+// error cannot enter `BoxError`. Erasing the message makes the common actor
 // handler error path available without imposing a `Sync` bound on the message.
 #[allow(dead_code)]
 async fn non_sync_message_can_discard_before_question_mark(
@@ -508,7 +504,7 @@ async fn non_sync_message_can_discard_before_question_mark(
             _value: Cell::new(1),
         })
         .await
-        .map_err(SendError::discard)?;
+        .map_err(SendError::into_boxed)?;
     actor
         .send_timeout(
             NotSync {
@@ -517,6 +513,6 @@ async fn non_sync_message_can_discard_before_question_mark(
             Duration::from_secs(1),
         )
         .await
-        .map_err(SendError::discard)?;
+        .map_err(SendError::into_boxed)?;
     Ok(())
 }

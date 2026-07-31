@@ -11,9 +11,7 @@ note: method defined here
   |
   |     pub async fn run_once<F>(
   |                  ^^^^^^^^
-help: try wrapping the expression in a variant of `kokage::Shutdown`
+help: try wrapping the expression in `kokage::Shutdown::Graceful`
   |
-6 |     let _run = actor.run_once(pending::<()>(), kokage::Shutdown::Drain { grace: Duration::from_secs(1) });
-  |                                                ++++++++++++++++++++++++++++++++                        +
-6 |     let _run = actor.run_once(pending::<()>(), kokage::Shutdown::Discard { grace: Duration::from_secs(1) });
-  |                                                ++++++++++++++++++++++++++++++++++                        +
+6 |     let _run = actor.run_once(pending::<()>(), kokage::Shutdown::Graceful { grace: Duration::from_secs(1) });
+  |                                                +++++++++++++++++++++++++++++++++++                        +

@@ -14,7 +14,7 @@ use crate::supervisor::error::BuildError;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Backoff {
-    /// Restart immediately.
+    /// Restarts immediately.
     #[default]
     None,
     /// Wait the same duration before every restart.
@@ -98,75 +98,19 @@ impl Backoff {
 /// exit), `OnFailure` (only errors, panics, and aborts), or `Never` (at most
 /// one run).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct Restart {
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RestartPolicy {
     mode: RestartMode,
     max_restarts: usize,
     within: Duration,
     backoff: Backoff,
 }
 
-/// Deserialization carrier that remembers the pre-spec-retention wire field.
-///
-/// `Restart` itself deliberately discards that field. Snapshot and outline
-/// containers use the remembered value to migrate persisted data to their new
-/// sibling `remove_when_done` field.
-#[cfg(feature = "serde")]
-#[derive(serde::Deserialize)]
-pub(crate) struct RestartWire {
-    mode: RestartMode,
-    max_restarts: usize,
-    within: Duration,
-    backoff: Backoff,
-    #[serde(default)]
-    remove_when_done: bool,
-}
-
-#[cfg(feature = "serde")]
-impl RestartWire {
-    pub(crate) fn into_parts(self) -> (Restart, bool) {
-        (
-            Restart {
-                mode: self.mode,
-                max_restarts: self.max_restarts,
-                within: self.within,
-                backoff: self.backoff,
-            },
-            self.remove_when_done,
-        )
-    }
-}
-
-#[cfg(feature = "serde")]
-impl Default for RestartWire {
-    fn default() -> Self {
-        let restart = Restart::default();
-        Self {
-            mode: restart.mode,
-            max_restarts: restart.max_restarts,
-            within: restart.within,
-            backoff: restart.backoff,
-            remove_when_done: false,
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Restart {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let (restart, _) =
-            <RestartWire as serde::Deserialize>::deserialize(deserializer)?.into_parts();
-        Ok(restart)
-    }
-}
-
+/// Which child exits trigger a restart.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// Which child exits trigger a restart.
-pub(crate) enum RestartMode {
+#[non_exhaustive]
+pub enum RestartMode {
     /// Restart after every exit, including clean completion.
     Always,
     /// Restart after an error, panic, or abort, but not clean completion.
@@ -176,13 +120,19 @@ pub(crate) enum RestartMode {
     Never,
 }
 
-impl Default for Restart {
+impl Default for RestartPolicy {
     fn default() -> Self {
         Self::on_failure()
     }
 }
 
-impl Restart {
+impl From<RestartMode> for RestartPolicy {
+    fn from(mode: RestartMode) -> Self {
+        Self::with_mode(mode)
+    }
+}
+
+impl RestartPolicy {
     const fn with_mode(mode: RestartMode) -> Self {
         Self {
             mode,

@@ -7,7 +7,7 @@ the drawing.
 
 ## Nesting scopes
 
-An [`OrderedTree`] can contain actors, tasks, and *other trees*. The shop:
+A [`Tree`] can contain actors, tasks, and *other trees*. The shop:
 
 ```rust
 use kokage::prelude::*;
@@ -44,17 +44,17 @@ impl Actor for FrontDesk {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The press room: two presses that share their fate.
-    let mut press_room = OrderedTree::new().strategy(Strategy::OneForAll);
-    let press_a = press_room.add_actor(ActorSpec::new("press-a", || Press { name: "press-a" }));
-    let press_b = press_room.add_actor(ActorSpec::new("press-b", || Press { name: "press-b" }));
+    let mut press_room = Tree::new().strategy(Strategy::OneForAll);
+    let press_a = press_room.add_actor("press-a", || Press { name: "press-a" });
+    let press_b = press_room.add_actor("press-b", || Press { name: "press-b" });
 
     // The shop: the press room first, then the front desk that feeds it.
-    let mut shop = OrderedTree::new();
+    let mut shop = Tree::new();
     shop.add_subtree("press-room", press_room);
-    let desk = shop.add_actor(ActorSpec::new("front-desk", move || FrontDesk {
+    let desk = shop.add_actor("front-desk", move || FrontDesk {
         presses: vec![press_a.clone(), press_b.clone()],
         next: 0,
-    }));
+    });
 
     let runtime = shop.spawn()?;
 
@@ -108,18 +108,18 @@ defaults for its own children; each child may override; a nested subtree's
 
 ```rust
 # use std::time::Duration;
-# use kokage::{SubtreeSpec, prelude::*};
-# let press_room = OrderedTree::new();
+# use kokage::{RestartPolicy, SubtreeSpec, prelude::*};
+# let press_room = Tree::new();
 // Defaults for children declared in this scope.
-let mut shop = OrderedTree::new()
-    .default_restart(Restart::on_failure().limit(5, Duration::from_secs(30)))
-    .default_shutdown(Shutdown::drain_for(Duration::from_secs(5)));
+let mut shop = Tree::new()
+    .default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(30)))
+    .default_shutdown(Shutdown::graceful_for(Duration::from_secs(5)));
 
 // The press room as a child of the shop: its own restart budget as a unit.
-shop.add_subtree(
+shop.add_subtree_spec(
     "press-room",
     SubtreeSpec::from(press_room)
-        .restart(Restart::on_failure().limit(2, Duration::from_secs(60))),
+        .restart_policy(RestartPolicy::on_failure().limit(2, Duration::from_secs(60))),
 );
 # let _ = shop;
 ```
@@ -136,9 +136,10 @@ and its worst day costs the shop a compartment restart instead of the tree.
 
 ## Seeing the shape
 
-Trees can describe themselves before spawning. [`outline`] returns the
-declared structure — and `{:?}` on a tree prints it — which is handy in
-tests that pin down an application's topology:
+With the `serde` feature, trees can describe themselves before spawning.
+[`outline`] returns the declared structure; independently, `{:?}` on a tree
+prints it. The outline is useful when serialized declarations need to be
+compared:
 
 ```rust
 # use kokage::prelude::*;
@@ -147,17 +148,17 @@ tests that pin down an application's topology:
 #     type Msg = String;
 #     async fn handle(&mut self, _j: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
-let mut shop = OrderedTree::new();
-shop.add_subtree("press-room", OrderedTree::new());
-shop.add_actor(ActorSpec::new("front-desk", || Press));
+let mut shop = Tree::new();
+shop.add_subtree("press-room", Tree::new());
+shop.add_actor("front-desk", || Press);
 assert_eq!(shop.outline().child_ids(), ["press-room", "front-desk"]);
 ```
 
 Actors are not the only thing a tree can supervise. Next: plain async tasks
 as first-class children.
 
-[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`Tree`]: https://stokes.io/kokage/api/kokage/struct.Tree.html
 [`BuildError`]: https://stokes.io/kokage/api/kokage/enum.BuildError.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
 [`SubtreeSpec`]: https://stokes.io/kokage/api/kokage/struct.SubtreeSpec.html
-[`outline`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html#method.outline
+[`outline`]: https://stokes.io/kokage/api/kokage/struct.Tree.html#method.outline

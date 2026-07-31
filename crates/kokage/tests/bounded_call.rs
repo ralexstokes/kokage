@@ -26,7 +26,7 @@ fn start(actor: ActorHost) -> (CancellationToken, tokio::task::JoinHandle<()>) {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
                 .expect("actor run succeeds");

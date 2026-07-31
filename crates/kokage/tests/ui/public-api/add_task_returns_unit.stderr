@@ -3,7 +3,7 @@ error[E0308]: `?` operator has incompatible types
   |
 4 |       let _lineage: u64 = scope
   |  _________________________^
-5 | |         .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
+5 | |         .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
 6 | |         .await?;
   | |_______________^ expected `u64`, found `()`
   |

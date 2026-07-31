@@ -1,19 +1,22 @@
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
 };
 
 use crate::{
-    ActorRef, ActorSpec,
+    ActorFactory, ActorRef, ActorSpec, ExitResult,
     actor::{
-        ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
+        ActorNode, ActorOptionsValidationError, RawActor, RunnableActor, RunnableActorBuilder,
+        ScopedActorStats,
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
-        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-        ScopeKind, ScopePathSegment, Shutdown, SupervisorError, SupervisorHandle,
-        SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec,
+        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop, ControlError,
+        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleObservation, LifecycleWatch,
+        MailboxShutdown, RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown,
+        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        TaskSpec,
     },
 };
 
@@ -25,21 +28,24 @@ pub(crate) struct ActorRuntimeState {
 #[derive(Debug)]
 struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
-    default_restart: Restart,
+    default_restart: RestartPolicy,
     default_shutdown: Shutdown,
+    default_mailbox_shutdown: MailboxShutdown,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
         actor_builder: RunnableActorBuilder,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
                 actor_builder,
                 default_restart,
                 default_shutdown,
+                default_mailbox_shutdown,
             }),
         }
     }
@@ -47,19 +53,25 @@ impl ActorRuntimeState {
     pub(crate) fn configure(
         &self,
         actor_builder: RunnableActorBuilder,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
+        default_mailbox_shutdown: MailboxShutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
             default_restart,
             default_shutdown,
+            default_mailbox_shutdown,
         };
     }
 
-    fn actor_defaults(&self) -> (Restart, Shutdown) {
+    fn actor_defaults(&self) -> (RestartPolicy, Shutdown, MailboxShutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
-        (config.default_restart, config.default_shutdown)
+        (
+            config.default_restart,
+            config.default_shutdown,
+            config.default_mailbox_shutdown,
+        )
     }
 
     pub(crate) fn actor_builder(&self) -> RunnableActorBuilder {
@@ -115,8 +127,9 @@ impl RuntimeAttachment {
 }
 
 struct DynamicChildOptions {
-    restart: Restart,
+    restart: RestartPolicy,
     shutdown: Shutdown,
+    mailbox_shutdown: MailboxShutdown,
     remove_when_done: bool,
 }
 
@@ -171,12 +184,11 @@ where
 
 /// Owns a spawned supervision tree.
 ///
-/// `RunningTree` exposes only owner-lifecycle operations. Use
-/// [`scope`](Self::scope) to obtain the cheaply cloneable, non-owning
-/// [`ScopeRef`] used for root or nested control and observation. Dropping a
-/// `ScopeRef` is inert and it does not keep this owner alive; dropping this
-/// owner requests graceful shutdown. Bind `let root = running.scope();` when
-/// performing repeated root operations.
+/// Routine root observation and lifecycle operations delegate directly to the
+/// root scope. Use [`scope`](Self::scope) when a cheaply cloneable, non-owning
+/// [`ScopeRef`] must be passed elsewhere or used for membership mutation.
+/// Dropping a `ScopeRef` is inert and does not keep this owner alive; dropping
+/// this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
 pub struct RunningTree {
     supervisor: RunningSupervisor,
@@ -194,6 +206,50 @@ impl RunningTree {
         self.scope.clone()
     }
 
+    /// Returns whether the root scope has ordered or dynamic membership.
+    pub fn kind(&self) -> ScopeKind {
+        self.scope.kind()
+    }
+
+    /// Returns the actor-aware handle for a direct runtime subtree.
+    pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
+        self.scope.subtree(id)
+    }
+
+    /// Returns a clone of the latest root supervisor snapshot.
+    pub fn snapshot(&self) -> SupervisorSnapshot {
+        self.scope.snapshot()
+    }
+
+    /// Returns a receiver that updates when the root snapshot changes.
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+        self.scope.subscribe_snapshots()
+    }
+
+    /// Returns an aligned root snapshot and direct-child lifecycle stream.
+    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+        self.scope.observe_lifecycle()
+    }
+
+    /// Returns the ordered lifecycle stream for the complete root tree.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+        self.scope.watch_lifecycle()
+    }
+
+    /// Pumps direct-child lifecycle events from the root into `target`.
+    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    {
+        self.scope.watch_lifecycle_to(target, map)
+    }
+
+    /// Returns point-in-time actor stats for the root and all nested subtrees.
+    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
+        self.scope.actor_stats()
+    }
+
     /// Requests graceful shutdown without waiting for completion.
     pub fn shutdown(&self) {
         self.supervisor.shutdown();
@@ -207,6 +263,11 @@ impl RunningTree {
     /// Waits for the running tree to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
+    }
+
+    /// Waits until every current actor child of the root has completed `on_start`.
+    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
+        self.scope.wait_started().await
     }
 }
 
@@ -247,8 +308,9 @@ impl ScopeRef {
                     supervisor,
                     Arc::new(ActorRuntimeState::new(
                         RunnableActorBuilder::new(),
-                        Restart::default(),
+                        RestartPolicy::default(),
                         Shutdown::default(),
+                        MailboxShutdown::default(),
                     )),
                 )
             })
@@ -317,27 +379,87 @@ impl ScopeRef {
         self.supervisor.wait_started().await
     }
 
-    /// Creates a completion watch for direct children of this scope.
+    /// Waits until every named direct child has completed successfully.
     ///
-    /// The watch validates ids when [`CompletionWatch::wait`] begins. Call
-    /// [`CompletionWatch::allow_future_members`] when ids may be inserted into
-    /// a dynamic scope later, or [`CompletionWatch::then_shutdown`] to arm
-    /// scope shutdown at the completion boundary.
-    pub fn completions<I, S>(&self, ids: I) -> CompletionWatch
+    /// Completion means the current generation exited with
+    /// [`ExitStatus::Completed`](crate::observe::ExitStatus::Completed) and no
+    /// restart is pending. Removed children drop out of the set. Unknown ids
+    /// return [`CompletionError::UnknownChild`], while a terminal scope that
+    /// cannot satisfy the condition returns [`CompletionError::ScopeClosed`].
+    /// The wait installs its lifecycle stream before reading state, so children
+    /// that finish immediately or before the call are handled correctly.
+    pub async fn wait_for_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.supervisor.completions(ids)
+        self.supervisor.wait_for_children(ids).await
+    }
+
+    /// Waits for named direct children that may be inserted into a dynamic scope later.
+    ///
+    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. Once a
+    /// named membership has appeared, its removal drops it out of the set.
+    pub async fn wait_for_future_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.wait_for_future_children(ids).await
+    }
+
+    /// Requests shutdown once every named direct child has completed successfully.
+    ///
+    /// Ids are validated before this method returns. The returned guard
+    /// cancels the operation when dropped; consume it with [`Guard::detach`]
+    /// for fire-and-forget behavior. The background task does not keep the
+    /// supervision tree alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_when_children_complete<I, S>(&self, ids: I) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_when_children_complete(ids)
+    }
+
+    /// Requests shutdown after future named members of a dynamic scope complete.
+    ///
+    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. The
+    /// returned guard cancels the operation when dropped; consume it with
+    /// [`Guard::detach`] for fire-and-forget behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_when_future_children_complete<I, S>(
+        &self,
+        ids: I,
+    ) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_when_future_children_complete(ids)
+    }
+
+    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    ///
+    /// Initialize state from [`LifecycleObservation::snapshot`], then consume
+    /// events whose direct-child sequence exceeds the snapshot's
+    /// [`SupervisorSnapshot::lifecycle_seq`].
+    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+        self.supervisor.observe_lifecycle()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
-    /// Create the watch before reading [`snapshot`](Self::snapshot), then
-    /// discard child transitions whose `seq()` is at most the snapshot's
-    /// `lifecycle_seq` to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
-    /// already project configured children, so reducers should apply their
-    /// later `ChildAdded` events as idempotent membership upserts. Call
+    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for a gap-free
+    /// direct-child state-plus-stream setup. This lower-level method is useful
+    /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
@@ -382,12 +504,12 @@ impl ScopeRef {
     /// raw child removal, same-id replacement, or a subtree restart that drops
     /// incarnation-local dynamic children by construction.
     ///
-    /// Unlike [`ActorRef::stats`], each returned sample populates
-    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] from the
-    /// current runtime membership. Message-size totals remain `None` unless
+    /// Unlike [`ActorRef::stats`], each returned [`ScopedActorStats`] pairs
+    /// actor-local stats with the current scope path and lineage. Message-size
+    /// totals remain `None` unless
     /// observation was enabled with
     /// [`ActorSpec::message_size`](crate::ActorSpec::message_size).
-    pub fn actor_stats(&self) -> Vec<ActorStats> {
+    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
 
@@ -405,11 +527,11 @@ impl ScopeRef {
 
             match &attachment.kind {
                 RuntimeAttachmentKind::Actor(actor) => {
-                    let mut actor_stats = actor.stats();
-                    actor_stats.scope_path =
-                        Some(scope_path.iter().map(scope_path_segment).collect());
-                    actor_stats.lineage = Some(child.lineage);
-                    stats.push(actor_stats);
+                    stats.push(ScopedActorStats {
+                        scope_path: scope_path.iter().map(scope_path_segment).collect(),
+                        lineage: child.lineage,
+                        stats: actor.stats(),
+                    });
                 }
                 RuntimeAttachmentKind::Subtree(subtree) => {
                     runtime_owners.insert(attached.path().to_vec(), Arc::clone(subtree));
@@ -503,7 +625,7 @@ impl ScopeRef {
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
-            child = child.restart(restart);
+            child = child.restart_policy(restart);
         }
         if let Some(shutdown) = parts.shutdown {
             child = child.shutdown(shutdown);
@@ -523,7 +645,16 @@ impl ScopeRef {
         .ok_or(ControlError::Unavailable)
     }
 
-    /// Adds an arbitrary supervised task child to this scope.
+    /// Adds a supervised task child with default configuration to this scope.
+    pub async fn add_task<F, Fut>(&self, id: impl Into<String>, task: F) -> Result<(), ControlError>
+    where
+        F: Fn(crate::TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        self.add_task_spec(TaskSpec::new(id, task)).await
+    }
+
+    /// Adds an explicitly configured supervised task child to this scope.
     ///
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled. Task children do
@@ -534,11 +665,25 @@ impl ScopeRef {
     ///
     /// Returns [`ControlError::NotDynamic`] when this scope has ordered
     /// membership. Other failures are reported by the dynamic supervisor.
-    pub async fn add_task(&self, task: TaskSpec) -> Result<(), ControlError> {
+    pub async fn add_task_spec(&self, task: TaskSpec) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.add_child(task).await.map(|_| ())
     }
 
-    /// Adds one actor declaration and returns its stable typed ref.
+    /// Adds an actor with default configuration and returns its stable typed ref.
+    pub async fn add_actor<M, F>(
+        &self,
+        id: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<M>, ControlError>
+    where
+        M: Send + 'static,
+        F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
+    {
+        self.add_actor_spec(ActorSpec::new(id, factory)).await
+    }
+
+    /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The actor id is its direct supervisor child id, so it can be removed
     /// later through [`ScopeRef::remove_child`]. See [`crate::ActorFactory`] for
@@ -555,7 +700,7 @@ impl ScopeRef {
     /// membership. Invalid actor configuration and insertion failures are
     /// returned as [`ControlError::Rejected`]; a stopped scope returns
     /// [`ControlError::Unavailable`].
-    pub async fn add_actor<M: Send + 'static>(
+    pub async fn add_actor_spec<M: Send + 'static>(
         &self,
         spec: ActorSpec<M>,
     ) -> Result<ActorRef<M>, ControlError> {
@@ -566,10 +711,12 @@ impl ScopeRef {
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
-        let (default_restart, default_shutdown) = self.actors.actor_defaults();
+        let (default_restart, default_shutdown, default_mailbox_shutdown) =
+            self.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
+            mailbox_shutdown: spec.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
             remove_when_done: spec.remove_when_done,
         };
         let actor = self.actors.make_actor(spec);
@@ -595,7 +742,12 @@ impl ScopeRef {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            ActorChildOptions::new(options.restart, options.shutdown, options.remove_when_done),
+            ActorChildOptions::new(
+                options.restart,
+                options.shutdown,
+                options.mailbox_shutdown,
+                options.remove_when_done,
+            ),
         );
         dynamic.add_child_spec(child).await?;
 
@@ -614,11 +766,11 @@ impl ScopeRef {
     /// after detachment (or after the configured shutdown backstop aborts it).
     ///
     /// A send racing with removal may still be accepted. With
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for), work accepted before
-    /// drain closes intake belongs to the queued prefix handled before
+    /// [`MailboxShutdown::Drain`](crate::MailboxShutdown::Drain), work accepted
+    /// before drain closes intake belongs to the queued prefix handled before
     /// `on_stop`. With
-    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current),
-    /// accepted work that remains queued is dropped. Once the actor closes intake,
+    /// [`MailboxShutdown::Discard`](crate::MailboxShutdown::Discard), accepted
+    /// work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly fail with
     /// [`SendErrorKind::NotRunning`](crate::SendErrorKind::NotRunning), while an
     /// awaited `send` waits and then fails with
@@ -671,16 +823,23 @@ impl Drop for TerminateBindingOnDrop {
 
 /// How one actor is supervised as a child of its enclosing scope.
 pub(crate) struct ActorChildOptions {
-    pub(crate) restart: Restart,
+    pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: Shutdown,
+    pub(crate) mailbox_shutdown: MailboxShutdown,
     pub(crate) remove_when_done: bool,
 }
 
 impl ActorChildOptions {
-    pub(crate) fn new(restart: Restart, shutdown: Shutdown, remove_when_done: bool) -> Self {
+    pub(crate) fn new(
+        restart: RestartPolicy,
+        shutdown: Shutdown,
+        mailbox_shutdown: MailboxShutdown,
+        remove_when_done: bool,
+    ) -> Self {
         Self {
             restart,
             shutdown,
+            mailbox_shutdown,
             remove_when_done,
         }
     }
@@ -694,6 +853,7 @@ pub(crate) fn actor_child_spec(
     let ActorChildOptions {
         restart,
         shutdown,
+        mailbox_shutdown,
         remove_when_done,
     } = options;
     let actor_id = actor.label().to_owned();
@@ -705,12 +865,18 @@ pub(crate) fn actor_child_spec(
         let actor = child_guard.actor.clone();
         let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
         async move {
+            let shutdown_token = ctx.shutdown_token().clone();
+            let abort_token = ctx.abort_token().clone();
+            let abort_after_grace = !shutdown.is_abort();
             actor
                 .run_until_ready(
-                    ctx.shutdown_token().cancelled(),
-                    ctx.abort_token().cancelled(),
+                    shutdown_token.cancelled(),
+                    async move {
+                        abort_token.cancelled().await;
+                        abort_after_grace
+                    },
                     restart,
-                    matches!(shutdown, Shutdown::Drain { .. }),
+                    mailbox_shutdown.drains(),
                     supervisor,
                     || ctx.mark_ready(),
                 )
@@ -721,7 +887,7 @@ pub(crate) fn actor_child_spec(
     .into_spec()
     .attachment(attachment)
     .wait_for_ready()
-    .restart(restart)
+    .restart_policy(restart)
     .shutdown(shutdown);
     if remove_when_done {
         child.remove_when_done()
@@ -741,14 +907,14 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, OrderedTree, Restart,
-        RunningTree, ScopeRef,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartMode, RunningTree,
+        ScopeRef, Tree,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(OrderedTree) -> Result<RunningTree, BuildError> = OrderedTree::spawn;
-        let ordered_scope: fn(&OrderedTree) -> ScopeRef = OrderedTree::scope;
+        let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
+        let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
         let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree, BuildError> = DynamicTree::spawn;
         let dynamic_scope: fn(&DynamicTree) -> ScopeRef = DynamicTree::scope;
 
@@ -775,10 +941,10 @@ mod tests {
 
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
-        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(Restart::never());
+        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartMode::Never);
         let static_ref = static_spec.actor_ref();
-        let mut static_tree = OrderedTree::new();
-        static_tree.add_actor(static_spec);
+        let mut static_tree = Tree::new();
+        static_tree.add_actor_spec(static_spec);
         let static_runtime = static_tree.spawn().expect("static runtime builds");
         static_runtime
             .scope()
@@ -803,7 +969,9 @@ mod tests {
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
-            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(Restart::never()))
+            .add_actor_spec(
+                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never),
+            )
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
@@ -835,9 +1003,9 @@ mod tests {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic = runtime.scope();
         let actor_ref = dynamic
-            .add_actor(
+            .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(Restart::never())
+                    .restart(RestartMode::Never)
                     .remove_when_done(),
             )
             .await
@@ -865,7 +1033,7 @@ mod tests {
         let root = DynamicTree::new().spawn().expect("runtime builds");
         let dynamic = root.scope();
         dynamic
-            .add_subtree("workers", OrderedTree::new())
+            .add_subtree("workers", Tree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -880,7 +1048,7 @@ mod tests {
             .await
             .expect("first subtree removed");
         dynamic
-            .add_subtree("workers", OrderedTree::new())
+            .add_subtree("workers", Tree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

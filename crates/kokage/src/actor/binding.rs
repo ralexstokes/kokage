@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::supervisor::{Restart, ScopePathSegment};
+use crate::supervisor::{RestartPolicy, ScopePathSegment};
 use tokio::{
     sync::{Notify, mpsc, watch},
     time::{Instant, sleep_until},
@@ -15,46 +15,24 @@ use tokio::{
 
 use crate::actor::{
     error::{SendError, SendErrorKind},
-    monitor::{ActorMonitors, MonitorHub},
+    monitor::{ActorMonitorLease, ActorMonitors, MonitorHub, MonitorRun},
     observability::{MessageRejection, MessageSizeMetrics, ScopeObservability},
 };
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
 ///
-/// Sample these stats either through [`ActorRef::stats`](crate::ActorRef::stats)
-/// or [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
+/// Sample these stats through [`ActorRef::stats`](crate::ActorRef::stats).
 /// Message counters accumulate for the lifetime of the actor binding and
 /// therefore survive restarts. Outstanding-work gauges and mailbox fields
 /// describe the currently bound incarnation and are zero while no mailbox is
 /// bound. Enabling the `serde` feature implements `Serialize` and
-/// `Deserialize` for this type and [`ScopePathSegment`].
+/// `Deserialize` for this type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ActorStats {
     /// Actor id used to correlate these stats with supervisor snapshots.
     pub actor_id: String,
-    /// Identity path of the nested scopes containing this actor when sampled
-    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
-    ///
-    /// A direct child of the sampled runtime has an empty path. Each nested
-    /// segment includes the scope child's lineage and generation
-    /// so identical actor ids and local lineages in sibling or restarted
-    /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
-    /// have no supervisor context and report `None`. The element type is the
-    /// public [`ScopePathSegment`].
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub scope_path: Option<Vec<ScopePathSegment>>,
-    /// Identity of the actor's current supervisor membership, when sampled
-    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
-    ///
-    /// Pair this with [`actor_id`](Self::actor_id) and
-    /// [`scope_path`](Self::scope_path) to distinguish a removed
-    /// actor from a later actor added under the same id, including actors with
-    /// identical local identities in different subtrees. Samples taken from
-    /// `ActorRef::stats` have no supervisor membership and report `None`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
     /// This includes actor-local continuations, timer events, and offload
@@ -98,29 +76,49 @@ pub struct ActorStats {
     pub mailbox_capacity: usize,
 }
 
+/// Actor statistics paired with their current supervision membership.
+///
+/// Returned by [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats). A
+/// direct child of the sampled scope has an empty `scope_path`; nested path
+/// segments carry the subtree lineage and generation needed to distinguish
+/// identical local actor ids in different or restarted subtrees.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ScopedActorStats {
+    /// Identity path of the nested scopes containing the actor.
+    pub scope_path: Vec<ScopePathSegment>,
+    /// Identity of the actor's current supervisor membership.
+    pub lineage: u64,
+    /// Actor-local counters, gauges, and mailbox data.
+    pub stats: ActorStats,
+}
+
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::{ActorStats, ScopePathSegment};
+    use super::{ActorStats, ScopePathSegment, ScopedActorStats};
     use serde_json::json;
 
     #[test]
-    fn actor_stats_round_trip_with_scope_identity() {
-        let stats = ActorStats {
-            actor_id: "worker".into(),
-            scope_path: Some(vec![ScopePathSegment {
+    fn scoped_actor_stats_round_trip() {
+        let stats = ScopedActorStats {
+            scope_path: vec![ScopePathSegment {
                 id: "workers".into(),
                 lineage: 7,
                 generation: 2,
-            }]),
-            lineage: Some(11),
-            messages_received: 13,
-            messages_accepted: 17,
-            messages_conflated: 3,
-            message_bytes_accepted: Some(1_024),
-            sends_rejected: 1,
-            outstanding_offloads: 2,
-            mailbox_depth: 5,
-            mailbox_capacity: 32,
+            }],
+            lineage: 11,
+            stats: ActorStats {
+                actor_id: "worker".into(),
+                messages_received: 13,
+                messages_accepted: 17,
+                messages_conflated: 3,
+                message_bytes_accepted: Some(1_024),
+                sends_rejected: 1,
+                outstanding_offloads: 2,
+                mailbox_depth: 5,
+                mailbox_capacity: 32,
+            },
         };
 
         let value = serde_json::to_value(&stats).expect("actor stats serialize");
@@ -128,7 +126,8 @@ mod serde_tests {
             value["scope_path"],
             json!([{"id": "workers", "lineage": 7, "generation": 2}])
         );
-        let decoded: ActorStats = serde_json::from_value(value).expect("actor stats deserialize");
+        let decoded: ScopedActorStats =
+            serde_json::from_value(value).expect("actor stats deserialize");
         assert_eq!(decoded, stats);
     }
 
@@ -136,8 +135,6 @@ mod serde_tests {
     fn actor_stats_omit_absent_optional_fields() {
         let stats = ActorStats {
             actor_id: "worker".into(),
-            scope_path: None,
-            lineage: None,
             messages_received: 0,
             messages_accepted: 0,
             messages_conflated: 0,
@@ -149,8 +146,6 @@ mod serde_tests {
         };
 
         let value = serde_json::to_value(stats).expect("actor stats serialize");
-        assert!(value.get("scope_path").is_none());
-        assert!(value.get("lineage").is_none());
         assert!(value.get("message_bytes_accepted").is_none());
     }
 }
@@ -220,8 +215,6 @@ impl ActorStatsCounters {
     ) -> ActorStats {
         ActorStats {
             actor_id: actor_id.to_owned(),
-            scope_path: None,
-            lineage: None,
             messages_received: self.messages_received.load(Ordering::Relaxed),
             messages_accepted: self.messages_accepted.load(Ordering::Relaxed),
             messages_conflated: self.messages_conflated.load(Ordering::Relaxed),
@@ -869,6 +862,7 @@ impl<M> Clone for BindingState<M> {
 pub(crate) trait BindingLifecycle: Send + Sync {
     fn unbind(&self);
     fn terminate(&self);
+    fn monitor_run(&self) -> MonitorRun;
     fn stats(&self) -> ActorStats;
 }
 
@@ -884,6 +878,7 @@ pub(crate) struct BindingCore<M> {
     message_size: Arc<OnceLock<MessageSizeObserver<M>>>,
     monitors: Arc<MonitorHub>,
     outbound_monitors: Arc<ActorMonitors>,
+    latest_bind_run: Mutex<Option<u64>>,
 }
 
 pub(crate) struct MessageSizeObserver<M> {
@@ -914,6 +909,7 @@ impl<M> BindingCore<M> {
             message_size: Arc::new(OnceLock::new()),
             monitors,
             outbound_monitors,
+            latest_bind_run: Mutex::new(None),
         }
     }
 
@@ -955,6 +951,7 @@ impl<M> BindingCore<M> {
         Arc::clone(&self.monitors)
     }
 
+    #[cfg(test)]
     pub(crate) fn outbound_monitors(&self) -> Arc<ActorMonitors> {
         Arc::clone(&self.outbound_monitors)
     }
@@ -968,9 +965,58 @@ impl<M> BindingCore<M> {
         self.stats.snapshot(&self.actor_id, depth, capacity)
     }
 
-    fn bind(&self, mailbox: MailboxRef<M>) {
-        self.monitors.started();
-        self.current.send_replace(BindingState::Bound(mailbox));
+    fn bind(&self, mailbox: MailboxRef<M>, monitor_run: &MonitorRun) -> Option<ActorMonitorLease> {
+        let mut latest_run = self
+            .latest_bind_run
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if latest_run.is_some_and(|latest| monitor_run.id() < latest) {
+            return None;
+        }
+        let bound = self.current.send_if_modified(|state| {
+            if matches!(state, BindingState::Terminated) && !monitor_run.reopens_terminal() {
+                false
+            } else {
+                *state = BindingState::Bound(mailbox.clone());
+                true
+            }
+        });
+        if !bound {
+            return None;
+        }
+        *latest_run = Some(monitor_run.id());
+        if let Some(reopened) = monitor_run.started() {
+            let lease = if reopened {
+                self.outbound_monitors.reopen()
+            } else {
+                self.outbound_monitors.lease()
+            };
+            return Some(lease);
+        }
+        // Terminal monitor state can win after the mailbox transition but
+        // before this run registers. Preserve that terminal decision.
+        self.current.send_if_modified(|state| {
+            if matches!(state, BindingState::Bound(current) if current.same_channel(&mailbox)) {
+                *state = BindingState::Terminated;
+                true
+            } else {
+                false
+            }
+        });
+        None
+    }
+
+    pub(crate) fn monitor_run(&self) -> MonitorRun {
+        // A terminal observation grants this run authority to reopen the
+        // corresponding monitor epoch. Keep that observation and the epoch
+        // capture atomic with binding and terminalization, or a paused caller
+        // could mint authority from a replacement that has already reopened.
+        let _bind_order = self
+            .latest_bind_run
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reopens_terminal = matches!(*self.current.borrow(), BindingState::Terminated);
+        self.monitors.new_run(reopens_terminal)
     }
 
     /// Only a bound mailbox can be unbound: once a binding is terminated, a
@@ -999,6 +1045,11 @@ impl<M> BindingCore<M> {
     }
 
     fn terminate_mailbox(&self, mailbox: &MailboxRef<M>) -> bool {
+        let _bind_order = self
+            .latest_bind_run
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let monitor_epoch = self.monitors.current_epoch();
         let terminated = self.current.send_if_modified(|state| {
             if matches!(state, BindingState::Bound(current) if current.same_channel(mailbox)) {
                 *state = BindingState::Terminated;
@@ -1008,15 +1059,20 @@ impl<M> BindingCore<M> {
             }
         });
         if terminated {
-            self.monitors.removed();
+            self.monitors.removed(monitor_epoch);
             self.outbound_monitors.terminate();
         }
         terminated
     }
 
     pub(crate) fn terminate(&self) {
+        let _bind_order = self
+            .latest_bind_run
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let monitor_epoch = self.monitors.current_epoch();
         self.current.send_replace(BindingState::Terminated);
-        self.monitors.removed();
+        self.monitors.removed(monitor_epoch);
         self.outbound_monitors.terminate();
     }
 }
@@ -1030,6 +1086,10 @@ impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
         BindingCore::terminate(self);
     }
 
+    fn monitor_run(&self) -> MonitorRun {
+        BindingCore::monitor_run(self)
+    }
+
     fn stats(&self) -> ActorStats {
         BindingCore::stats(self)
     }
@@ -1037,7 +1097,8 @@ impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
 
 impl<M> Drop for BindingCore<M> {
     fn drop(&mut self) {
-        self.monitors.removed();
+        let monitor_epoch = self.monitors.current_epoch();
+        self.monitors.removed(monitor_epoch);
         self.outbound_monitors.terminate();
     }
 }
@@ -1048,24 +1109,31 @@ pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
     mailbox: MailboxRef<M>,
     observability: ScopeObservability,
-    restart_policy: Restart,
+    restart_policy: RestartPolicy,
+    monitor_lease: ActorMonitorLease,
 }
 
 impl<M> BindingGuard<M> {
     pub(crate) fn bind(
         core: Arc<BindingCore<M>>,
         mailbox: MailboxRef<M>,
+        monitor_run: &MonitorRun,
         observability: ScopeObservability,
-        restart_policy: Restart,
-    ) -> Self {
-        core.bind(mailbox.clone());
+        restart_policy: RestartPolicy,
+    ) -> Option<Self> {
+        let monitor_lease = core.bind(mailbox.clone(), monitor_run)?;
         observability.emit_mailbox_bound(core.actor_id());
-        Self {
+        Some(Self {
             core,
             mailbox,
             observability,
             restart_policy,
-        }
+            monitor_lease,
+        })
+    }
+
+    pub(crate) fn monitor_lease(&self) -> ActorMonitorLease {
+        self.monitor_lease.clone()
     }
 }
 
@@ -1149,6 +1217,11 @@ mod tests {
         );
     }
 
+    fn bind_for_test(core: &BindingCore<()>, mailbox: MailboxRef<()>) {
+        let monitor_run = core.monitor_run();
+        assert!(core.bind(mailbox, &monitor_run).is_some());
+    }
+
     /// A cancelled incarnation can drop its `BindingGuard` after a replacement
     /// has already bound. Teardown must then find its own mailbox gone and
     /// leave the replacement alone.
@@ -1159,8 +1232,8 @@ mod tests {
         let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
         let (replacement, _replacement_rx) = incarnation_mailbox(&actor_id);
 
-        core.bind(cancelled.clone());
-        core.bind(replacement.clone());
+        bind_for_test(&core, cancelled.clone());
+        bind_for_test(&core, replacement.clone());
 
         assert!(!core.unbind_mailbox(&cancelled));
         assert_bound_to(&core, &replacement);
@@ -1169,7 +1242,7 @@ mod tests {
         assert!(matches!(&*core.current.borrow(), BindingState::Unbound));
     }
 
-    /// The same race under [`Restart::never`], where a late teardown would
+    /// The same race under [`RestartPolicy::never`], where a late teardown would
     /// otherwise make a live replacement binding permanently terminal.
     #[test]
     fn terminate_ignores_a_mailbox_that_is_no_longer_bound() {
@@ -1178,8 +1251,8 @@ mod tests {
         let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
         let (replacement, _replacement_rx) = incarnation_mailbox(&actor_id);
 
-        core.bind(cancelled.clone());
-        core.bind(replacement.clone());
+        bind_for_test(&core, cancelled.clone());
+        bind_for_test(&core, replacement.clone());
 
         assert!(!core.terminate_mailbox(&cancelled));
         assert_bound_to(&core, &replacement);
@@ -1196,10 +1269,62 @@ mod tests {
         let core = BindingCore::new(Arc::clone(&actor_id));
         let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
 
-        core.bind(cancelled.clone());
+        bind_for_test(&core, cancelled.clone());
         core.terminate();
 
         assert!(!core.unbind_mailbox(&cancelled));
         assert!(matches!(&*core.current.borrow(), BindingState::Terminated));
+    }
+
+    #[test]
+    fn terminal_binding_rejects_a_late_run() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (late, _late_rx) = incarnation_mailbox(&actor_id);
+        let monitor_run = core.monitor_run();
+        core.terminate();
+
+        assert!(core.bind(late, &monitor_run).is_none());
+        assert!(matches!(&*core.current.borrow(), BindingState::Terminated));
+    }
+
+    #[test]
+    fn new_run_after_terminal_teardown_can_reopen_the_binding() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (replacement, _replacement_rx) = incarnation_mailbox(&actor_id);
+        let subject = Arc::new(MonitorHub::new("peer"));
+        let outbound = core.outbound_monitors();
+        let old_lease = outbound.lease();
+        let (_, old_stop, _, installed) = old_lease.register(&subject);
+        assert!(installed);
+        core.terminate();
+        assert!(old_stop.is_cancelled());
+
+        let monitor_run = core.monitor_run();
+        let replacement_lease = core
+            .bind(replacement.clone(), &monitor_run)
+            .expect("a new run reopens the terminated binding");
+        assert_bound_to(&core, &replacement);
+        let (_, _, stale_finished, installed) = old_lease.register(&subject);
+        assert!(!installed);
+        assert!(stale_finished.token().is_cancelled());
+        let (_, replacement_stop, _, installed) = replacement_lease.register(&subject);
+        assert!(installed);
+        assert!(!replacement_stop.is_cancelled());
+    }
+
+    #[test]
+    fn late_older_run_cannot_replace_a_newer_binding() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (older, _older_rx) = incarnation_mailbox(&actor_id);
+        let (newer, _newer_rx) = incarnation_mailbox(&actor_id);
+        let older_run = core.monitor_run();
+        let newer_run = core.monitor_run();
+
+        assert!(core.bind(newer.clone(), &newer_run).is_some());
+        assert!(core.bind(older, &older_run).is_none());
+        assert_bound_to(&core, &newer);
     }
 }

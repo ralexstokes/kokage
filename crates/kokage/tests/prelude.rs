@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
-    ActorStatus,
+    RestartMode, RestartPolicy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -12,16 +12,17 @@ mod coverage_probe {
     mod expected {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-            MonitorEvent, OrderedTree, Reply, Restart, Shutdown, StopContext, Strategy,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey,
+            MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, ExitReason, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendErrorKind, SendRejection, SubtreeSpec, SupervisorError, TaskContext,
+            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RestartPolicy,
+            RunningTree, ScopeRef, SendError, SendErrorKind, SubtreeSpec, SupervisorError,
+            TaskContext,
         };
     }
 
@@ -33,24 +34,22 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildOutline,
-            ChildSnapshot, ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SupervisionOutline,
-            SupervisorSnapshot, SupervisorStateView,
+            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
+            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
+            ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
+        #[cfg(feature = "serde")]
+        use kokage::observe::{ChildOutline, SupervisionOutline};
     }
 }
 
 #[test]
-fn prelude_constructs_actor_and_task_declarations() {
-    let spec = ActorSpec::new("direct", || BlockingWorker {
+fn prelude_adds_default_config_actor_and_task_declarations() {
+    let mut tree = Tree::new();
+    tree.add_actor("direct", || BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });
-    let task = TaskSpec::new("task", |_| async { Ok(()) });
-
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
-    tree.add_task(task);
+    tree.add_task("task", |_| async { Ok(()) });
 }
 
 #[test]
@@ -61,17 +60,31 @@ fn root_actor_slot_constructs_a_cyclic_declaration() {
         observed: mpsc::unbounded_channel().0,
     });
 
-    let mut tree = OrderedTree::new();
-    tree.add_actor(cyclic);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(cyclic);
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
-    event
-        .child
-        .as_ref()
-        .is_some_and(|child| child.child_id == child_id)
+    match &event.kind {
+        LifecycleEventKind::ChildAdded {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildStarted {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildExited {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildRemoved {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildRestartScheduled {
+            child_id: observed, ..
+        } => observed == child_id,
+        _ => false,
+    }
 }
 
 async fn named_task(ctx: kokage::TaskContext) -> kokage::ExitResult {
@@ -88,11 +101,11 @@ fn root_task_surface_supports_a_named_factory_from_the_single_crate() {
 fn actor_stats_and_lifecycle_events_share_scope_path_segments() {
     #[allow(dead_code)]
     fn assign_shared_path(
-        stats: &mut kokage::observe::ActorStats,
+        stats: &mut kokage::observe::ScopedActorStats,
         event: &mut kokage::observe::LifecycleEvent,
         path: Vec<kokage::observe::ScopePathSegment>,
     ) {
-        stats.scope_path = Some(path.clone());
+        stats.scope_path = path.clone();
         event.scope_path = path;
     }
 }
@@ -107,11 +120,18 @@ fn policy_values_expose_their_declared_behavior() {
         }
     }
 
-    fn drain_name(policy: kokage::Shutdown) -> &'static str {
+    fn shutdown_name(policy: kokage::Shutdown) -> &'static str {
         match policy {
-            kokage::Shutdown::Drain { .. } => "drain",
-            kokage::Shutdown::Discard { .. } => "discard",
+            kokage::Shutdown::Graceful { .. } => "graceful",
             kokage::Shutdown::Abort => "abort",
+            _ => "unknown",
+        }
+    }
+
+    fn mailbox_shutdown_name(policy: MailboxShutdown) -> &'static str {
+        match policy {
+            MailboxShutdown::Drain => "drain",
+            MailboxShutdown::Discard => "discard",
             _ => "unknown",
         }
     }
@@ -126,14 +146,6 @@ fn policy_values_expose_their_declared_behavior() {
         }
     }
 
-    fn actor_status_name(status: ActorStatus) -> &'static str {
-        match status {
-            ActorStatus::Running => "running",
-            ActorStatus::Draining => "draining",
-            ActorStatus::Stopping => "stopping",
-        }
-    }
-
     fn scope_name(kind: kokage::observe::ScopeKind) -> &'static str {
         match kind {
             kokage::observe::ScopeKind::Ordered => "ordered",
@@ -142,9 +154,11 @@ fn policy_values_expose_their_declared_behavior() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(Restart::default(), Restart::on_failure());
-    assert_eq!(drain_name(kokage::Shutdown::default()), "drain");
-    assert_eq!(drain_name(kokage::Shutdown::abort()), "abort");
+    assert_eq!(RestartMode::default(), RestartMode::OnFailure);
+    assert_eq!(RestartPolicy::default(), RestartPolicy::on_failure());
+    assert_eq!(shutdown_name(kokage::Shutdown::default()), "graceful");
+    assert_eq!(shutdown_name(kokage::Shutdown::abort()), "abort");
+    assert_eq!(mailbox_shutdown_name(MailboxShutdown::default()), "drain");
     assert_eq!(backoff_name(kokage::Backoff::none()), "none");
     assert_eq!(
         backoff_name(kokage::Backoff::exponential_with_jitter(
@@ -154,7 +168,6 @@ fn policy_values_expose_their_declared_behavior() {
         )),
         "jittered-exponential"
     );
-    assert_eq!(actor_status_name(ActorStatus::Running), "running");
     assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
 }
 
@@ -181,16 +194,16 @@ impl Actor for BlockingWorker {
 #[tokio::test]
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = OrderedTree::new();
-    let worker = graph.add_actor(ActorSpec::new("worker", move || BlockingWorker {
+    let mut graph = Tree::new();
+    let worker = graph.add_actor("worker", move || BlockingWorker {
         observed: observed_tx.clone(),
-    }));
+    });
 
     let handle = graph
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.scope().watch_lifecycle();
+    let mut events = handle.watch_lifecycle();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -203,7 +216,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0 }
+                LifecycleEventKind::ChildStarted { generation: 0, .. }
             ) && child_id_is(&event, "worker")
             {
                 break event;
@@ -214,11 +227,11 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .expect("timed out waiting for started event");
     assert!(matches!(
         started.kind,
-        LifecycleEventKind::ChildStarted { generation: 0 }
+        LifecycleEventKind::ChildStarted { generation: 0, .. }
     ));
     assert!(child_id_is(&started, "worker"));
 
-    let snapshot = handle.scope().snapshot();
+    let snapshot = handle.snapshot();
     assert!(
         snapshot
             .child("worker")
@@ -257,8 +270,8 @@ fn task_policy_sets_remain_nameable_from_the_single_crate() {
 #[tokio::test]
 async fn prelude_observes_raw_task_events_and_snapshots() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("worker", move |ctx| {
+    let mut tree = Tree::new();
+    tree.add_task_spec(TaskSpec::new("worker", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -284,7 +297,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0 }
+                LifecycleEventKind::ChildStarted { generation: 0, .. }
             ) && child_id_is(&event, "worker")
             {
                 break;
@@ -311,8 +324,8 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
 #[tokio::test]
 async fn prelude_snapshots_walk_nested_task_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
-    let mut nested = OrderedTree::new();
-    nested.add_task(TaskSpec::new("leaf", move |ctx| {
+    let mut nested = Tree::new();
+    nested.add_task_spec(TaskSpec::new("leaf", move |ctx| {
         let leaf_started_tx = leaf_started_tx.clone();
         async move {
             leaf_started_tx.send(()).expect("test receiver dropped");
@@ -320,8 +333,8 @@ async fn prelude_snapshots_walk_nested_task_children() {
             Ok(())
         }
     }));
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("anchor", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task_spec(TaskSpec::new("anchor", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -346,14 +359,14 @@ async fn prelude_snapshots_walk_nested_task_children() {
 fn task_policy_types_cover_common_configuration() {
     assert_eq!(kokage::Shutdown::abort(), kokage::Shutdown::abort());
     assert_eq!(
-        Restart::on_failure().limit(3, Duration::from_secs(10)),
-        Restart::on_failure().limit(3, Duration::from_secs(10))
+        RestartPolicy::on_failure().limit(3, Duration::from_secs(10)),
+        RestartPolicy::on_failure().limit(3, Duration::from_secs(10))
     );
     assert_eq!(
-        Restart::on_failure()
+        RestartPolicy::on_failure()
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50))),
-        Restart::on_failure()
+        RestartPolicy::on_failure()
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );

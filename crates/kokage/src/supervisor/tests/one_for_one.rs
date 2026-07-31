@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{Backoff, Restart, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{Backoff, RestartMode, RestartPolicy, Strategy, Supervisor, TaskSpec};
 use tokio::{
     sync::{Notify, mpsc},
     time::{Duration, sleep, timeout},
@@ -38,7 +38,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
             }
         }
     })
-    .restart(common::restart_with_backoff(
+    .restart_policy(common::restart_with_backoff(
         4,
         Duration::from_secs(2),
         Backoff::fixed(Duration::from_secs(30)),
@@ -62,7 +62,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
             }
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
     let handle_owner = Supervisor::ordered()
         .child(slow)
         .child(fast)
@@ -123,7 +123,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let sibling_ticks_for_child = sibling_ticks.clone();
     let sibling = TaskSpec::new("sibling", move |ctx| {
@@ -192,7 +192,7 @@ async fn permanent_child_restarts_after_completion() {
             Ok(())
         }
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let supervisor = Supervisor::ordered()
         .child(child)
@@ -225,7 +225,7 @@ async fn temporary_child_does_not_restart() {
                     Err(common::test_error("no restart"))
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         )
         .build()
         .expect("valid supervisor");
@@ -266,7 +266,7 @@ async fn temporary_child_does_not_restart() {
 
 #[tokio::test]
 async fn child_restart_intensity_is_isolated_per_child() {
-    let child_restart_intensity = Restart::on_failure().limit(1, Duration::from_secs(1));
+    let child_restart_intensity = RestartPolicy::on_failure().limit(1, Duration::from_secs(1));
 
     let (child_a_tx, mut child_a_rx) = mpsc::unbounded_channel();
     let (child_b_tx, mut child_b_rx) = mpsc::unbounded_channel();
@@ -288,7 +288,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
             Ok(())
         }
     })
-    .restart(child_restart_intensity);
+    .restart_policy(child_restart_intensity);
 
     let child_b = TaskSpec::new("child-b", move |ctx| {
         let child_b_attempts = child_b_attempts.clone();
@@ -305,11 +305,11 @@ async fn child_restart_intensity_is_isolated_per_child() {
             Ok(())
         }
     })
-    .restart(child_restart_intensity);
+    .restart_policy(child_restart_intensity);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(child_a)
         .child(child_b)
         .build()

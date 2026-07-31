@@ -6,8 +6,8 @@ use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::D
 
 use futures_util::FutureExt;
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitReason, ExitResult, Guard,
-    MonitorEvent, Shutdown,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, ExitStatus, Guard,
+    MonitorEvent, RestartPolicy, Shutdown, SupervisorError, Tree,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
 use tokio::{
@@ -36,6 +36,43 @@ impl RawActor for Peer {
             Some(PeerMessage::Stop) | None => Ok(()),
             Some(PeerMessage::Panic) => panic!("deliberate peer panic"),
         }
+    }
+}
+
+#[derive(Clone)]
+struct UncooperativePeer {
+    started: mpsc::UnboundedSender<()>,
+}
+
+impl RawActor for UncooperativePeer {
+    type Msg = PeerMessage;
+
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
+        self.started.send(()).expect("start receiver alive");
+        pending::<()>().await;
+        Ok(())
+    }
+}
+
+struct DropPanickingPeer {
+    started: mpsc::UnboundedSender<()>,
+}
+
+impl RawActor for DropPanickingPeer {
+    type Msg = PeerMessage;
+
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        self.started.send(()).expect("start receiver alive");
+        match ctx.recv().await {
+            Some(PeerMessage::Stop) | None => Ok(()),
+            Some(PeerMessage::Panic) => panic!("deliberate peer panic"),
+        }
+    }
+}
+
+impl Drop for DropPanickingPeer {
+    fn drop(&mut self) {
+        panic!("deliberate peer destructor panic");
     }
 }
 
@@ -169,9 +206,10 @@ fn start_incarnation(
     mut host: ActorHost,
 ) -> tokio::task::JoinHandle<(ActorHost, IncarnationResult)> {
     tokio::spawn(async move {
-        let exit = AssertUnwindSafe(
-            host.run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
-        )
+        let exit = AssertUnwindSafe(host.run_incarnation(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        ))
         .catch_unwind()
         .await;
         (host, exit)
@@ -256,7 +294,7 @@ fn started_event(actor_id: &str, generation: u64) -> MonitorEvent {
 struct TestExit {
     actor_id: String,
     generation: u64,
-    reason: ExitReason,
+    status: ExitStatus,
 }
 
 fn expect_exited(event: MonitorEvent) -> TestExit {
@@ -264,11 +302,11 @@ fn expect_exited(event: MonitorEvent) -> TestExit {
         MonitorEvent::Exited {
             actor_id,
             generation,
-            reason,
+            status,
         } => TestExit {
             actor_id,
             generation,
-            reason,
+            status,
         },
         other => panic!("expected Exited, got {other:?}"),
     }
@@ -293,8 +331,11 @@ async fn watch_reports_panicked_peer_as_failure() {
     let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_stop = CancellationToken::new();
     let observer = fixture.observer.take().expect("observer host available");
@@ -303,7 +344,7 @@ async fn watch_reports_panicked_peer_as_failure() {
         observer
             .run_once(
                 stop.cancelled(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -322,14 +363,74 @@ async fn watch_reports_panicked_peer_as_failure() {
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.actor_id, "peer");
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert!(notification.status.is_failure());
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0),
-        "Restart::never() terminates the binding after the failed run"
+        "RestartPolicy::never() terminates the binding after the failed run"
     );
 
     assert!(peer_task.await.expect_err("peer task panicked").is_panic());
+    observer_stop.cancel();
+    observer_task
+        .await
+        .expect("observer task joined")
+        .expect("observer stopped cleanly");
+}
+
+#[tokio::test]
+async fn actor_destructor_panic_is_reported_as_panicked() {
+    let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
+    let (peer, peer_ref) = runnable_actor("peer", move || DropPanickingPeer {
+        started: peer_started_tx.clone(),
+    });
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
+    let (observer, _) = runnable_actor("observer", {
+        let peer_ref = peer_ref.clone();
+        move || Observer {
+            peer: peer_ref.clone(),
+            observed: observed_tx.clone(),
+            mapped: None,
+            started: observer_started_tx.clone(),
+            watch_mode: WatchMode::Detach,
+        }
+    });
+    let peer_task = tokio::spawn(async move {
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
+    });
+    let observer_stop = CancellationToken::new();
+    let stop = observer_stop.clone();
+    let observer_task = tokio::spawn(async move {
+        observer
+            .run_once(
+                stop.cancelled(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
+    });
+    started(&mut peer_started).await;
+    started(&mut observer_started).await;
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+
+    peer_ref
+        .send(PeerMessage::Stop)
+        .await
+        .expect("stop command sent");
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Panicked { cancelled: false }
+    );
+    assert_eq!(
+        expect_removed(next_event(&mut observed).await, "peer"),
+        Some(0)
+    );
+    assert!(peer_task.await.expect_err("peer task panicked").is_panic());
+
     observer_stop.cancel();
     observer_task
         .await
@@ -342,8 +443,11 @@ async fn watch_reports_clean_stop_as_normal() {
     let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_stop = CancellationToken::new();
     let stop = observer_stop.clone();
@@ -352,7 +456,7 @@ async fn watch_reports_clean_stop_as_normal() {
         observer
             .run_once(
                 stop.cancelled(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -369,8 +473,8 @@ async fn watch_reports_clean_stop_as_normal() {
         .await
         .expect("stop command sent");
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -389,17 +493,144 @@ async fn watch_reports_clean_stop_as_normal() {
 }
 
 #[tokio::test]
+async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
+    let (peer_started_tx, _peer_started) = mpsc::unbounded_channel();
+    let peer_spec = ActorSpec::new("peer", move || Peer {
+        started: peer_started_tx.clone(),
+    })
+    .restart_policy(RestartPolicy::never());
+    let peer_ref = peer_spec.actor_ref();
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("observer", move || Observer {
+        peer: peer_ref.clone(),
+        observed: observed_tx.clone(),
+        mapped: None,
+        started: observer_started_tx.clone(),
+        watch_mode: WatchMode::Detach,
+    }));
+    tree.add_actor_spec(peer_spec);
+    let running = tree.spawn().expect("tree builds");
+    running.wait_started().await.expect("actors start");
+
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+    running
+        .shutdown_and_wait()
+        .await
+        .expect("cooperative shutdown succeeds");
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: true }
+    );
+}
+
+#[tokio::test]
+async fn supervised_natural_completion_is_not_marked_cancelled() {
+    let (peer_started_tx, _peer_started) = mpsc::unbounded_channel();
+    let peer_spec = ActorSpec::new("peer", move || Peer {
+        started: peer_started_tx.clone(),
+    })
+    .restart_policy(RestartPolicy::never());
+    let peer_ref = peer_spec.actor_ref();
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("observer", {
+        let peer_ref = peer_ref.clone();
+        move || Observer {
+            peer: peer_ref.clone(),
+            observed: observed_tx.clone(),
+            mapped: None,
+            started: observer_started_tx.clone(),
+            watch_mode: WatchMode::Detach,
+        }
+    }));
+    tree.add_actor_spec(peer_spec);
+    let running = tree.spawn().expect("tree builds");
+    running.wait_started().await.expect("actors start");
+
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+    peer_ref
+        .send(PeerMessage::Stop)
+        .await
+        .expect("peer accepts stop");
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: false }
+    );
+    assert_eq!(
+        expect_removed(next_event(&mut observed).await, "peer"),
+        Some(0)
+    );
+
+    running
+        .shutdown_and_wait()
+        .await
+        .expect("remaining tree stops cleanly");
+}
+
+async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
+    let policy = Shutdown::graceful_for(Duration::from_millis(10));
+    let (peer_started_tx, _peer_started) = mpsc::unbounded_channel();
+    let peer_spec = ActorSpec::new("peer", move || UncooperativePeer {
+        started: peer_started_tx.clone(),
+    })
+    .restart_policy(RestartPolicy::never())
+    .shutdown(policy);
+    let peer_ref = peer_spec.actor_ref();
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("observer", move || Observer {
+        peer: peer_ref.clone(),
+        observed: observed_tx.clone(),
+        mapped: None,
+        started: observer_started_tx.clone(),
+        watch_mode: WatchMode::Detach,
+    }));
+    tree.add_actor_spec(peer_spec);
+    let running = tree.spawn().expect("tree builds");
+    running.wait_started().await.expect("actors start");
+
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+    assert!(matches!(
+        running.shutdown_and_wait().await,
+        Err(SupervisorError::ShutdownTimedOut(_))
+    ));
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        expected
+    );
+}
+
+#[tokio::test]
+async fn supervised_grace_expiry_reports_an_after_grace_abort_to_monitors() {
+    assert_supervised_grace_expiry_status(ExitStatus::Aborted {
+        after_grace: true,
+        cancelled: true,
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn cancelled_watch_suppresses_delivery() {
     let mut fixture = fixture(WatchMode::Cancel);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -421,13 +652,19 @@ async fn dropped_watch_suppresses_delivery() {
     let mut fixture = fixture(WatchMode::Drop);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -449,8 +686,11 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
     let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut fixture.peer_started).await;
 
@@ -484,13 +724,16 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
     let second_observer = observer;
     let second_task = tokio::spawn(async move {
         second_observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -506,8 +749,11 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
     let mut fixture = fixture(WatchMode::Retain);
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut fixture.peer_started).await;
 
@@ -529,7 +775,10 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
     let second_observer = observer;
     let second_task = tokio::spawn(async move {
         second_observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
@@ -620,8 +869,11 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let first_task = start_incarnation(observer);
     started(&mut peer_started).await;
@@ -639,7 +891,10 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
     assert!(first_exit.is_err(), "observer incarnation panicked");
     let second_task = tokio::spawn(async move {
         second_observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut observer_started).await;
@@ -658,7 +913,10 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         registration, 0,
         "replacement mapper did not replace the watch"
     );
-    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
+    assert_eq!(
+        expect_exited(event).status,
+        ExitStatus::Completed { cancelled: false }
+    );
     let (registration, event) = recv_test_event(&mut observed, "tagged terminal event").await;
     assert_eq!(registration, 0);
     assert_eq!(expect_removed(event, "peer"), Some(0));
@@ -753,13 +1011,19 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut peer_started).await;
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut observer_started).await;
@@ -808,7 +1072,10 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         .expect("peer stop sent");
     let (registration, event) = recv_test_event(&mut observed, "replacement exited event").await;
     assert_eq!(registration, 2);
-    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
+    assert_eq!(
+        expect_exited(event).status,
+        ExitStatus::Completed { cancelled: false }
+    );
     let (registration, event) = recv_test_event(&mut observed, "replacement terminal event").await;
     assert_eq!(registration, 2);
     assert_eq!(expect_removed(event, "peer"), Some(0));
@@ -872,12 +1139,18 @@ async fn observer_membership_removal_finishes_its_watches_without_cancellation()
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut peer_started).await;
@@ -917,12 +1190,18 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut peer_started).await;
@@ -934,8 +1213,8 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
         .await
         .expect("peer stop sent");
     assert_eq!(
-        expect_exited(next_event(&mut observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut observed).await, "peer"),
@@ -961,7 +1240,10 @@ async fn watching_removed_peer_delivers_immediate_removed() {
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
@@ -994,7 +1276,10 @@ async fn watching_detached_peer_delivers_immediate_removed() {
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut observer_started).await;
@@ -1012,7 +1297,10 @@ async fn watch_survives_peer_restart_without_reregistration() {
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     let first_peer = fixture.peer.take().expect("peer host available");
@@ -1030,14 +1318,17 @@ async fn watch_survives_peer_restart_without_reregistration() {
         .expect("panic command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert!(notification.status.is_failure());
     let (peer, first_exit) = first_task.await.expect("first peer task joined");
     assert!(first_exit.is_err(), "first peer incarnation panicked");
 
     let second_peer = peer;
     let second_task = tokio::spawn(async move {
         second_peer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -1053,13 +1344,109 @@ async fn watch_survives_peer_restart_without_reregistration() {
         .expect("stop command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 1);
-    assert_eq!(notification.reason, ExitReason::Normal);
+    assert_eq!(
+        notification.status,
+        ExitStatus::Completed { cancelled: false }
+    );
 
     second_task
         .await
         .expect("second peer task joined")
         .expect("second peer stopped cleanly");
     observer_task.abort();
+}
+
+#[tokio::test]
+async fn overlapping_replacement_keeps_exit_bound_to_its_original_generation() {
+    let mut fixture = fixture(WatchMode::Detach);
+    let observer_stop = CancellationToken::new();
+    let stop = observer_stop.clone();
+    let observer = fixture.observer.take().expect("observer host available");
+    let observer_task = tokio::spawn(async move {
+        observer
+            .run_once(
+                stop.cancelled(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
+    });
+    started(&mut fixture.observer_started).await;
+
+    let mut peer = fixture.peer.take().expect("peer host available");
+    let mut first_run = Box::pin(peer.run_incarnation(
+        pending::<()>(),
+        Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+    ));
+    tokio::select! {
+        exit = &mut first_run => panic!("incarnation exited unexpectedly: {exit:?}"),
+        started = fixture.peer_started.recv() => started.expect("first incarnation started"),
+    }
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
+
+    drop(first_run);
+    let second_task = start_incarnation(peer);
+    started(&mut fixture.peer_started).await;
+
+    let mut saw_first_exit = false;
+    let mut saw_second_start = false;
+    for event in [
+        next_event(&mut fixture.observed).await,
+        next_event(&mut fixture.observed).await,
+    ] {
+        match event {
+            MonitorEvent::Started {
+                actor_id,
+                generation: 1,
+            } => {
+                assert_eq!(actor_id, "peer");
+                saw_second_start = true;
+            }
+            MonitorEvent::Exited {
+                actor_id,
+                generation: 0,
+                status:
+                    ExitStatus::Aborted {
+                        after_grace: false,
+                        cancelled: false,
+                    },
+            } => {
+                assert_eq!(actor_id, "peer");
+                saw_first_exit = true;
+            }
+            other => panic!("unexpected overlapping-incarnation event: {other:?}"),
+        }
+    }
+    assert!(
+        saw_first_exit,
+        "the cancelled first run reports generation 0"
+    );
+    assert!(saw_second_start, "the replacement reports generation 1");
+
+    fixture
+        .peer_ref
+        .send(PeerMessage::Stop)
+        .await
+        .expect("stop command sent");
+    assert_eq!(
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
+    );
+    let (peer, second_exit) = second_task.await.expect("second peer task joined");
+    assert!(matches!(second_exit, Ok(IncarnationExit::Stopped)));
+    drop(peer);
+    assert_eq!(
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
+        Some(1)
+    );
+
+    observer_stop.cancel();
+    observer_task
+        .await
+        .expect("observer task joined")
+        .expect("observer stopped cleanly");
 }
 
 #[tokio::test]
@@ -1079,7 +1466,10 @@ async fn watch_registered_between_incarnations_waits_for_next_started() {
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
@@ -1088,7 +1478,10 @@ async fn watch_registered_between_incarnations_waits_for_next_started() {
     let second_peer = peer;
     let second_task = tokio::spawn(async move {
         second_peer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -1108,7 +1501,10 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
@@ -1116,8 +1512,11 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
 
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut fixture.peer_started).await;
     assert_eq!(
@@ -1131,7 +1530,10 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
         .expect("stop command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Normal);
+    assert_eq!(
+        notification.status,
+        ExitStatus::Completed { cancelled: false }
+    );
 
     peer_task
         .await
@@ -1141,7 +1543,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
 }
 
 #[tokio::test]
-async fn shutdown_request_reports_normal_exit() {
+async fn shutdown_request_reports_cancelled_completion() {
     let mut fixture = fixture(WatchMode::Detach);
     let peer_stop = CancellationToken::new();
     let stop = peer_stop.clone();
@@ -1149,14 +1551,17 @@ async fn shutdown_request_reports_normal_exit() {
     let peer_task = tokio::spawn(async move {
         peer.run_once(
             stop.cancelled(),
-            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
         )
         .await
     });
     let observer = fixture.observer.take().expect("observer host available");
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -1168,8 +1573,8 @@ async fn shutdown_request_reports_normal_exit() {
 
     peer_stop.cancel();
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: true }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -1200,18 +1605,27 @@ async fn two_observers_receive_the_same_events() {
     let first_observer = fixture.observer.take().expect("observer host available");
     let first_task = tokio::spawn(async move {
         first_observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     let second_task = tokio::spawn(async move {
         second_observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     let peer = fixture.peer.take().expect("peer host available");
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
@@ -1282,12 +1696,18 @@ async fn cancelling_watch_cannot_retract_accepted_events() {
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut peer_started).await;
@@ -1310,8 +1730,8 @@ async fn cancelling_watch_cannot_retract_accepted_events() {
     gate.notify_one();
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     assert_eq!(
-        expect_exited(next_event(&mut observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
 
     peer_task
@@ -1363,7 +1783,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("peer", move || StubbornPeer {
                 started: peer_started_tx.clone(),
             })
@@ -1374,7 +1794,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("observer", {
+        .add_actor_spec(ActorSpec::new("observer", {
             let peer_ref = peer_ref.clone();
             move || UnitObserver {
                 peer: peer_ref.clone(),
@@ -1394,7 +1814,13 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         .expect("peer removed by abort");
     let notification = expect_exited(next_event(&mut observed).await);
     assert_eq!(notification.actor_id, "peer");
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert_eq!(
+        notification.status,
+        ExitStatus::Aborted {
+            after_grace: false,
+            cancelled: true,
+        }
+    );
     assert_eq!(
         expect_removed(next_event(&mut observed).await, "peer"),
         Some(0),
@@ -1447,12 +1873,18 @@ async fn mapping_panic_does_not_change_target_exit() {
         }
     });
     let peer_task = tokio::spawn(async move {
-        peer.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        peer.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut peer_started).await;
@@ -1489,7 +1921,10 @@ async fn pending_target_can_be_dropped_from_non_runtime_thread() {
     });
     let observer_task = tokio::spawn(async move {
         observer
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut observer_started).await;

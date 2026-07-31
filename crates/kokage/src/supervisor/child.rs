@@ -2,7 +2,12 @@ use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     actor::ExitResult,
-    supervisor::{context::TaskContext, owner::Supervisor, restart::Restart, shutdown::Shutdown},
+    supervisor::{
+        context::TaskContext,
+        owner::Supervisor,
+        restart::{RestartMode, RestartPolicy},
+        shutdown::Shutdown,
+    },
 };
 
 /// A type-erased, thread-safe error type used as the `Err` half of
@@ -17,7 +22,7 @@ pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 #[derive(Clone)]
 pub(crate) struct ChildDefinition {
     pub(crate) id: String,
-    pub(crate) restart: Restart,
+    pub(crate) restart: RestartPolicy,
     restart_is_default: bool,
     pub(crate) shutdown_policy: Shutdown,
     shutdown_is_default: bool,
@@ -100,7 +105,7 @@ impl TaskSpec {
             spec: ChildSpec {
                 inner: Arc::new(ChildDefinition {
                     id: id.into(),
-                    restart: Restart::default(),
+                    restart: RestartPolicy::default(),
                     restart_is_default: true,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
@@ -113,15 +118,19 @@ impl TaskSpec {
         }
     }
 
-    /// Sets this task's complete restart declaration. See [`Restart`] for
-    /// options.
-    ///
-    /// This replaces the inherited mode, budget, and backoff. Restate any
-    /// scope-level values this task should retain.
+    /// Overrides which exits restart this task, using the standard budget and backoff.
     #[must_use]
-    pub fn restart(self, restart: Restart) -> Self {
+    pub fn restart(self, mode: RestartMode) -> Self {
         Self {
-            spec: self.spec.restart(restart),
+            spec: self.spec.restart(mode),
+        }
+    }
+
+    /// Overrides the enclosing scope's complete restart policy.
+    #[must_use]
+    pub fn restart_policy(self, policy: RestartPolicy) -> Self {
+        Self {
+            spec: self.spec.restart_policy(policy),
         }
     }
 
@@ -137,11 +146,22 @@ impl TaskSpec {
     /// Removes this membership after an exit its restart policy does not restart.
     ///
     /// By default a terminal child remains visible as an inactive membership.
-    /// This setting is independent of the selected [`Restart`] policy.
+    /// This setting is independent of the selected [`RestartPolicy`].
     #[must_use]
     pub fn remove_when_done(self) -> Self {
         Self {
             spec: self.spec.remove_when_done(),
+        }
+    }
+
+    /// Marks finite dynamic work as non-restarting and removable on completion.
+    #[must_use]
+    pub fn temporary(self) -> Self {
+        Self {
+            spec: self
+                .spec
+                .restart_policy(RestartPolicy::never())
+                .remove_when_done(),
         }
     }
 
@@ -175,9 +195,9 @@ impl TaskSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
-    ) -> (Restart, Shutdown) {
+    ) -> (RestartPolicy, Shutdown) {
         self.spec
             .resolved_policies(default_restart, default_shutdown)
     }
@@ -201,7 +221,7 @@ impl ChildSpec {
         Self {
             inner: Arc::new(ChildDefinition {
                 id: id.into(),
-                restart: Restart::default(),
+                restart: RestartPolicy::default(),
                 restart_is_default: true,
                 shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
@@ -216,7 +236,14 @@ impl ChildSpec {
     /// Sets this child's complete restart declaration, replacing any
     /// inherited scope default.
     #[must_use]
-    pub(crate) fn restart(self, restart: Restart) -> Self {
+    pub(crate) fn restart(self, mode: RestartMode) -> Self {
+        self.restart_policy(mode.into())
+    }
+
+    /// Sets this child's complete restart declaration, replacing any
+    /// inherited scope default.
+    #[must_use]
+    pub(crate) fn restart_policy(self, restart: RestartPolicy) -> Self {
         self.map_inner(|inner| {
             inner.restart = restart;
             inner.restart_is_default = false;
@@ -265,9 +292,9 @@ impl ChildSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
-    ) -> (Restart, Shutdown) {
+    ) -> (RestartPolicy, Shutdown) {
         let restart = if self.inner.restart_is_default {
             default_restart
         } else {
@@ -288,7 +315,7 @@ impl ChildDefinition {
         Arc::get_mut(definition).expect("a child specification is uniquely owned while edited")
     }
 
-    pub(crate) fn apply_defaults(&mut self, restart: Restart, shutdown: Shutdown) {
+    pub(crate) fn apply_defaults(&mut self, restart: RestartPolicy, shutdown: Shutdown) {
         if self.restart_is_default {
             self.restart = restart;
         }

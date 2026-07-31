@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `kokage::ActorStatus`
+ --> tests/ui/public-api/actor_status_removed.rs:1:5
+  |
+1 | use kokage::ActorStatus;
+  |     ^^^^^^^^^^^^^^^^^^^ no `ActorStatus` in the root

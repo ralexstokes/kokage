@@ -1,6 +1,6 @@
-use kokage::{DynamicTree, OrderedTree};
+use kokage::{DynamicTree, Tree};
 
 fn main() {
     let _ = DynamicTree::Dynamic;
-    let _ = OrderedTree::Ordered;
+    let _ = Tree::Ordered;
 }

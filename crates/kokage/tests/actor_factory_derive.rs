@@ -8,7 +8,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, Restart, ScopeRef,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Tree,
     observe::SupervisorSnapshotReceiver,
 };
 
@@ -74,15 +74,15 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     assert_factory::<DerivedActorFactory>();
 
     let starts = Arc::new(AtomicUsize::new(0));
-    let mut builder = OrderedTree::new();
-    let actor_ref = builder.add_actor(ActorSpec::new(
+    let mut builder = Tree::new();
+    let actor_ref = builder.add_actor_spec(ActorSpec::new(
         "derived",
         DerivedActorFactory {
             starts: starts.clone(),
         },
     ));
     let handle = builder
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 

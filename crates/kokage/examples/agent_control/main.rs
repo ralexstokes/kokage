@@ -131,8 +131,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicTree, ExitReason, Guard as OperationGuard, MailboxMode, MonitorEvent,
-    ScopeRef, Strategy, prelude::*,
+    ActorSlot, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent, ScopeRef, Strategy,
+    prelude::*,
 };
 use tokio::time::Instant;
 
@@ -143,6 +143,19 @@ use guard::Guard;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
+
+fn lifecycle_total_restarts(event: &kokage::observe::LifecycleEvent) -> Option<u64> {
+    use kokage::observe::LifecycleEventKind;
+    match &event.kind {
+        LifecycleEventKind::ChildAdded { total_restarts, .. }
+        | LifecycleEventKind::ChildStarted { total_restarts, .. }
+        | LifecycleEventKind::ChildExited { total_restarts, .. }
+        | LifecycleEventKind::ChildRemoved { total_restarts, .. }
+        | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. }
+        | LifecycleEventKind::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
+        _ => None,
+    }
+}
 use router::RouterFactory;
 use telemetry::LatencyRecorder;
 use tool_host::ToolHost;
@@ -272,17 +285,17 @@ async fn build_app() -> Result<App, AnyError> {
         .define(Journal::default)
         .message_size(messages::journal_message_size);
 
-    let mut gateway_tree = OrderedTree::new().strategy(Strategy::RestForOne);
-    gateway_tree.add_actor(outbound_actor);
-    gateway_tree.add_actor(progress_actor);
-    gateway_tree.add_actor(inbound_actor);
-    let mut core_tree = OrderedTree::new();
-    core_tree.add_actor(journal_actor);
-    core_tree.add_actor(budget_actor);
-    core_tree.add_actor(guard_actor);
-    core_tree.add_actor(tool_host_actor);
-    core_tree.add_actor(router_actor);
-    let mut tree = OrderedTree::new();
+    let mut gateway_tree = Tree::new().strategy(Strategy::RestForOne);
+    gateway_tree.add_actor_spec(outbound_actor);
+    gateway_tree.add_actor_spec(progress_actor);
+    gateway_tree.add_actor_spec(inbound_actor);
+    let mut core_tree = Tree::new();
+    core_tree.add_actor_spec(journal_actor);
+    core_tree.add_actor_spec(budget_actor);
+    core_tree.add_actor_spec(guard_actor);
+    core_tree.add_actor_spec(tool_host_actor);
+    core_tree.add_actor_spec(router_actor);
+    let mut tree = Tree::new();
     // The router captures this pre-spawn identity, so make the sessions
     // scope ready before the core subtree starts the router.
     tree.add_subtree("sessions", sessions_runtime);
@@ -303,7 +316,7 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
-        if let Some(total) = event.total_restarts() {
+        if let Some(total) = lifecycle_total_restarts(&event) {
             bridge_restarts = total;
         }
         GuardMsg::BridgeRestarts {
@@ -407,10 +420,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             events.iter().any(|event| {
                 matches!(
                     event,
-                    MonitorEvent::Exited {
-                        reason: ExitReason::Failure,
-                        ..
-                    }
+                    MonitorEvent::Exited { status, .. } if status.is_failure()
                 )
             })
         })
@@ -442,7 +452,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             .session_generations[CHAT_B],
         b_generation
     );
-    println!("PHASE 2 OK — add_actor(Restart::never()) + ctx.watch Exited/Removed");
+    println!("PHASE 2 OK — add_actor(RestartPolicy::never()) + ctx.watch Exited/Removed");
     Ok(())
 }
 
@@ -535,10 +545,10 @@ async fn phase_5(app: &App) -> Result<(), AnyError> {
         .gateway
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "progress")
+        .find(|stats| stats.stats.actor_id == "progress")
         .expect("progress actor stats");
-    assert!(progress_stats.messages_received < progress_stats.messages_accepted);
-    assert!(progress_stats.messages_conflated > 0);
+    assert!(progress_stats.stats.messages_received < progress_stats.stats.messages_accepted);
+    assert!(progress_stats.stats.messages_conflated > 0);
     assert!(
         journal_report(&app.journal)
             .await?
@@ -741,10 +751,11 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
         .core
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "journal")
+        .find(|stats| stats.stats.actor_id == "journal")
         .expect("journal stats");
     assert!(
         journal_stats
+            .stats
             .message_bytes_accepted
             .is_some_and(|bytes| bytes > 0)
     );
@@ -770,7 +781,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
     println!("sessions actor stats: {session_stats:#?}");
     println!("final supervisor snapshot: {final_snapshot:#?}");
     println!(
-        "PHASE 8 OK — Shutdown::drain_for(std::time::Duration::from_secs(5)) staged shutdown + recursive telemetry"
+        "PHASE 8 OK — Shutdown::graceful_for(std::time::Duration::from_secs(5)) staged shutdown + recursive telemetry"
     );
     Ok(())
 }

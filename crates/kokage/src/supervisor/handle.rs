@@ -356,7 +356,7 @@ impl StableSupervisorChannels {
 
     pub(crate) fn project_declared_children(
         &self,
-        children: Vec<(String, crate::supervisor::Restart, bool)>,
+        children: Vec<(String, crate::supervisor::RestartPolicy, bool)>,
     ) {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
@@ -1742,14 +1742,23 @@ impl SupervisorHandle {
         }
     }
 
+    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    ///
+    /// Child sequences are local to each scope, so the aligned stream is
+    /// intentionally restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
+    /// when a recursive stream without an initial alignment boundary is needed.
+    pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
+        let events = self.watch_lifecycle().direct_children();
+        let snapshot = self.snapshot();
+        crate::supervisor::LifecycleObservation { snapshot, events }
+    }
+
     /// Returns the ordered lifecycle stream for this entire supervisor tree.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
-    /// To obtain a gap-free state-plus-stream view, create the watch first,
-    /// then read [`snapshot`](Self::snapshot), then discard watched child
-    /// transitions whose [`LifecycleEvent::seq`](crate::supervisor::LifecycleEvent::seq)
-    /// is at most
-    /// [`SupervisorSnapshot::lifecycle_seq`].
+    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
+    /// gap-free direct-child state-plus-stream setup. This lower-level method
+    /// is useful when recursive transitions after subscription are needed.
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
     /// keyed by `(child_id, lineage)`. Lineage allocation continues across

@@ -3,7 +3,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{Backoff, Restart, Shutdown, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{
+    Backoff, RestartMode, RestartPolicy, Shutdown, Strategy, Supervisor, TaskSpec,
+};
 use tokio::{
     sync::{Barrier, Notify, mpsc},
     time::{Duration, timeout},
@@ -149,7 +151,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -186,7 +188,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(Restart::never());
+    .restart(RestartMode::Never);
 
     let release_failure_for_child = release_failure.clone();
     let trigger = TaskSpec::new("trigger", move |ctx| {
@@ -206,7 +208,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -218,7 +220,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -268,7 +270,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let live_instances = live_instances.clone();
@@ -284,7 +286,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
             Ok(())
         }
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -328,8 +330,8 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure())
-    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
+    .restart(RestartMode::OnFailure)
+    .shutdown(Shutdown::graceful_for(common::SHORT_GRACE));
 
     let peer_live_flag_for_child = peer_live_flag.clone();
     let peer = TaskSpec::new("stubborn-peer", move |ctx| {
@@ -348,8 +350,8 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
             Ok(())
         }
     })
-    .restart(Restart::always())
-    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
+    .restart(RestartMode::Always)
+    .shutdown(Shutdown::graceful_for(common::SHORT_GRACE));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -392,8 +394,8 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
         }
         Ok(())
     })
-    .restart(Restart::always())
-    .shutdown(Shutdown::drain_for(Duration::from_millis(200)));
+    .restart(RestartMode::Always)
+    .shutdown(Shutdown::graceful_for(Duration::from_millis(200)));
 
     let release_failure_for_child = release_failure.clone();
     let trigger = TaskSpec::new("trigger", move |ctx| {
@@ -409,7 +411,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     // Blocks between polls, so its abort cannot land inside the cursor window.
     let late_peer = TaskSpec::new("late-abort-peer", move |ctx| {
@@ -424,7 +426,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
             }
         }
     })
-    .restart(Restart::always())
+    .restart(RestartMode::Always)
     .shutdown(Shutdown::abort());
 
     let handle_owner = Supervisor::ordered()
@@ -479,7 +481,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let finish_generation_one_for_peer = finish_generation_one.clone();
     let peer = TaskSpec::new("peer", move |ctx| {
@@ -499,7 +501,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -567,7 +569,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure().limit(1, Duration::from_secs(1)));
+    .restart_policy(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)));
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -579,11 +581,11 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
             Ok(())
         }
     })
-    .restart(Restart::always().limit(0, Duration::from_secs(1)));
+    .restart_policy(RestartPolicy::always().limit(0, Duration::from_secs(1)));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(trigger)
         .child(peer)
         .build()
@@ -619,7 +621,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -754,7 +756,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let peer_attempts = peer_attempts.clone();
@@ -770,7 +772,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)

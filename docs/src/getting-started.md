@@ -46,8 +46,8 @@ Three things to notice:
 ## Declaring and spawning
 
 An actor definition alone does not run anything. You *declare* an instance
-with [`ActorSpec`], giving it an id and a **factory** — a closure that builds
-a fresh actor value:
+by giving a tree an id and a **factory** — a closure that builds a fresh
+actor value:
 
 ```rust
 # use kokage::prelude::*;
@@ -56,7 +56,9 @@ a fresh actor value:
 #     type Msg = String;
 #     async fn handle(&mut self, _job: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
-let spec = ActorSpec::new("press", || Press { jobs_done: 0 });
+let mut tree = Tree::new();
+let press = tree.add_actor("press", || Press { jobs_done: 0 });
+# let _ = press;
 ```
 
 The factory matters: it is called once for the first start *and once for every
@@ -64,7 +66,7 @@ restart*, so each incarnation begins from a clean state. Anything the actor
 should keep across restarts must live outside it (or be re-derived in
 `on_start`).
 
-Declarations go into an [`OrderedTree`], the simplest supervision tree.
+Declarations go into a [`Tree`], the ordinary ordered supervision tree.
 `add_actor` returns the typed [`ActorRef`] for reaching the actor, and
 `spawn` brings the whole tree to life:
 
@@ -87,8 +89,8 @@ impl Actor for Press {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("press", || Press { jobs_done: 0 }));
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", || Press { jobs_done: 0 });
     let runtime = tree.spawn()?;
 
     press.send("100 business cards".to_owned()).await?;
@@ -132,7 +134,6 @@ Next, let's make the conversation two-way.
 
 [`Actor`]: https://stokes.io/kokage/api/kokage/trait.Actor.html
 [`ExitResult`]: https://stokes.io/kokage/api/kokage/type.ExitResult.html
-[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
-[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`Tree`]: https://stokes.io/kokage/api/kokage/struct.Tree.html
 [`ActorRef`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html

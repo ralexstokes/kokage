@@ -6,7 +6,7 @@ use crate::{
 /// Internal exit classification used by the runtime before public projection
 /// into [`ExitKind`].
 #[derive(Debug)]
-pub(crate) enum ExitStatus {
+pub(crate) enum RuntimeExitStatus {
     Completed,
     Failed(BoxError),
     Panicked,
@@ -14,7 +14,7 @@ pub(crate) enum ExitStatus {
     ShutdownTimedOut,
 }
 
-impl ExitStatus {
+impl RuntimeExitStatus {
     pub(crate) fn from_child_result(result: ExitResult) -> Self {
         match result {
             Ok(()) => Self::Completed,

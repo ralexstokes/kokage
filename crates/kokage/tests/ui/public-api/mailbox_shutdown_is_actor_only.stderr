@@ -1,0 +1,25 @@
+error[E0599]: no method named `mailbox_shutdown` found for struct `TaskSpec` in the current scope
+ --> tests/ui/public-api/mailbox_shutdown_is_actor_only.rs:5:10
+  |
+4 |       let _ = TaskSpec::new("task", |_| async { Ok(()) })
+  |  _____________-
+5 | |         .mailbox_shutdown(MailboxShutdown::Discard);
+  | |_________-^^^^^^^^^^^^^^^^
+  |
+help: there is a method `shutdown` with a similar name
+  |
+5 -         .mailbox_shutdown(MailboxShutdown::Discard);
+5 +         .shutdown(MailboxShutdown::Discard);
+  |
+
+error[E0599]: no method named `mailbox_shutdown` found for struct `SubtreeSpec` in the current scope
+ --> tests/ui/public-api/mailbox_shutdown_is_actor_only.rs:6:51
+  |
+6 |     let _ = SubtreeSpec::from(DynamicTree::new()).mailbox_shutdown(MailboxShutdown::Drain);
+  |                                                   ^^^^^^^^^^^^^^^^
+  |
+help: there is a method `shutdown` with a similar name
+  |
+6 -     let _ = SubtreeSpec::from(DynamicTree::new()).mailbox_shutdown(MailboxShutdown::Drain);
+6 +     let _ = SubtreeSpec::from(DynamicTree::new()).shutdown(MailboxShutdown::Drain);
+  |

@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{BoxError, DynamicTree, OrderedTree, Restart, TaskSpec};
+use kokage::{BoxError, DynamicTree, RestartMode, TaskSpec, Tree};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -34,8 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    let mut nested_tree = OrderedTree::new();
-    nested_tree.add_task(nested_worker);
+    let mut nested_tree = Tree::new();
+    nested_tree.add_task_spec(nested_worker);
 
     let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -43,11 +43,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("metrics observed shutdown");
         Ok(())
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let running_owner = DynamicTree::new().spawn()?;
     let running = running_owner.scope();
-    running.add_task(metrics).await?;
+    running.add_task_spec(metrics).await?;
     let nested_handle = running.add_subtree("nested-pipeline", nested_tree).await?;
     let mut nested_snapshots = nested_handle.subscribe_snapshots();
     timeout(

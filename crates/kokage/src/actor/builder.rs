@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use crate::supervisor::{Restart, Shutdown};
+use crate::supervisor::{MailboxShutdown, RestartMode, RestartPolicy, Shutdown};
 
 use crate::actor::{
     binding::{BindingCore, MailboxMode},
@@ -176,15 +176,16 @@ impl<M> Default for ActorOptions<M> {
 /// The declaration owns its incarnation factory, stable mailbox binding, and
 /// all per-actor configuration. It is intentionally not [`Clone`]. Obtain a
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
-/// the declaration through [`crate::OrderedTree::add_actor`] or
-/// [`crate::ScopeRef::add_actor`].
+/// the declaration through [`crate::Tree::add_actor_spec`] or
+/// [`crate::ScopeRef::add_actor_spec`].
 pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
     pub(crate) factory: Box<dyn ErasedActorFactory<M>>,
     pub(crate) actor_options: ActorOptions<M>,
-    pub(crate) restart: Option<Restart>,
+    pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
+    pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
     pub(crate) remove_when_done: bool,
 }
 
@@ -203,6 +204,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
+            mailbox_shutdown: None,
             remove_when_done: false,
         }
     }
@@ -238,13 +240,17 @@ impl<M: Send + 'static> ActorSpec<M> {
         self
     }
 
-    /// Overrides the enclosing scope's complete restart declaration.
-    ///
-    /// This replaces the inherited mode, budget, and backoff. Restate any
-    /// scope-level values this actor should retain.
+    /// Overrides which exits restart this actor, using the standard budget and backoff.
     #[must_use]
-    pub fn restart(mut self, restart: Restart) -> Self {
-        self.restart = Some(restart);
+    pub fn restart(mut self, mode: RestartMode) -> Self {
+        self.restart = Some(mode.into());
+        self
+    }
+
+    /// Overrides the enclosing scope's complete restart policy.
+    #[must_use]
+    pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
+        self.restart = Some(policy);
         self
     }
 
@@ -255,10 +261,25 @@ impl<M: Send + 'static> ActorSpec<M> {
         self
     }
 
+    /// Selects how accepted mailbox messages are handled during shutdown.
+    #[must_use]
+    pub fn mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+        self.mailbox_shutdown = Some(policy);
+        self
+    }
+
+    /// Marks finite dynamic work as non-restarting and removable on completion.
+    #[must_use]
+    pub fn temporary(mut self) -> Self {
+        self.restart = Some(RestartPolicy::never());
+        self.remove_when_done = true;
+        self
+    }
+
     /// Removes this membership after an exit its restart policy does not restart.
     ///
     /// By default a terminal child remains visible as an inactive membership.
-    /// This setting is independent of the selected [`Restart`] policy.
+    /// This setting is independent of the selected [`RestartPolicy`].
     #[must_use]
     pub fn remove_when_done(mut self) -> Self {
         self.remove_when_done = true;
@@ -279,12 +300,13 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// [`ActorRunError::ZeroMailboxCapacity`](crate::raw::ActorRunError::ZeroMailboxCapacity)
     /// when the run starts.
     pub fn into_host(self) -> ActorHost {
-        let actor = self
+        let node = self
             .into_deferred_node()
-            .materialize(&RunnableActorBuilder::new())
+            .materialize(&RunnableActorBuilder::new());
+        let actor = node
             .actor
             .expect("materialized actor declaration carries its runnable actor");
-        ActorHost::new(actor)
+        ActorHost::new(actor, node.mailbox_shutdown.unwrap_or_default())
     }
 
     pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
@@ -299,6 +321,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options,
             restart,
             shutdown,
+            mailbox_shutdown,
             remove_when_done,
         } = self;
         let deferred = DeferredActor(Box::new(DeferredActorSpec {
@@ -312,6 +335,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             deferred: Some(deferred),
             restart,
             shutdown,
+            mailbox_shutdown,
             remove_when_done,
         }
     }
@@ -323,6 +347,7 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
             .field("actor_id", &self.actor_id)
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
+            .field("mailbox_shutdown", &self.mailbox_shutdown)
             .field("remove_when_done", &self.remove_when_done)
             .finish_non_exhaustive()
     }
@@ -332,8 +357,9 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
 pub(crate) struct ActorNode {
     pub(crate) actor: Option<RunnableActor>,
     pub(crate) deferred: Option<DeferredActor>,
-    pub(crate) restart: Option<Restart>,
+    pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
+    pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
     pub(crate) remove_when_done: bool,
 }
 
@@ -368,6 +394,7 @@ impl fmt::Debug for ActorNode {
             .field("id", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
+            .field("mailbox_shutdown", &self.mailbox_shutdown)
             .field("remove_when_done", &self.remove_when_done)
             .finish()
     }
@@ -423,6 +450,7 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
+            mailbox_shutdown: None,
             remove_when_done: false,
         }
     }
@@ -433,7 +461,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{ActorSlot, ActorSpec, MailboxMode};
-    use crate::{Actor, Context, ExitResult, Restart, Shutdown};
+    use crate::{
+        Actor, Context, ExitResult, MailboxShutdown, RestartMode, RestartPolicy, Shutdown,
+    };
 
     struct OpaqueMessage;
 
@@ -517,7 +547,7 @@ mod tests {
         let result = actor
             .run_once(
                 std::future::ready(()),
-                Shutdown::drain_for(Duration::from_secs(1)),
+                Shutdown::graceful_for(Duration::from_secs(1)),
             )
             .await;
 
@@ -532,10 +562,10 @@ mod tests {
         let spec = ActorSpec::new("spec", || OpaqueActor);
         let _actor_ref = spec.actor_ref();
         let spec = spec
-            .restart(Restart::never())
+            .restart(RestartMode::Never)
             .shutdown(Shutdown::abort())
             .remove_when_done();
-        assert_eq!(spec.restart, Some(Restart::never()));
+        assert_eq!(spec.restart, Some(RestartPolicy::never()));
         assert_eq!(spec.shutdown, Some(Shutdown::abort()));
         assert!(spec.remove_when_done);
 
@@ -543,14 +573,24 @@ mod tests {
         let _actor_ref = slot.actor_ref();
         let spec = slot
             .define(|| OpaqueActor)
-            .restart(Restart::always())
-            .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)));
-        assert_eq!(spec.restart, Some(Restart::always()));
+            .restart(RestartMode::Always)
+            .shutdown(Shutdown::graceful_for(Duration::from_secs(1)))
+            .mailbox_shutdown(MailboxShutdown::Discard);
+        assert_eq!(spec.restart, Some(RestartPolicy::always()));
         assert_eq!(
             spec.shutdown,
-            Some(Shutdown::discard_after_current(Duration::from_secs(1)))
+            Some(Shutdown::graceful_for(Duration::from_secs(1)))
         );
+        assert_eq!(spec.mailbox_shutdown, Some(MailboxShutdown::Discard));
         assert!(!spec.remove_when_done);
+    }
+
+    #[test]
+    fn temporary_is_never_restarting_and_removable() {
+        let spec = ActorSpec::new("temporary", || OpaqueActor).temporary();
+
+        assert_eq!(spec.restart, Some(RestartPolicy::never()));
+        assert!(spec.remove_when_done);
     }
 
     #[test]

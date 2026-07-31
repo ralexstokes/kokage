@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, OrderedTree, Restart,
-    RunningTree, ScopeRef,
+    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartMode,
+    RestartPolicy, RunningTree, ScopeRef, Tree,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -25,6 +25,13 @@ enum SinkMsg {
     Lifecycle(LifecycleEvent),
     Crash,
     Barrier(oneshot::Sender<()>),
+}
+
+fn child_seq(event: &LifecycleEvent) -> u64 {
+    event
+        .kind
+        .seq()
+        .unwrap_or_else(|| panic!("expected child lifecycle event: {event:?}"))
 }
 
 struct Sink {
@@ -100,7 +107,7 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
                 Sink {
@@ -108,7 +115,7 @@ async fn runtime_with_watched_subtree() -> (
                     observed: observed_tx.clone(),
                 }
             })
-            .restart(Restart::on_failure()),
+            .restart(RestartMode::OnFailure),
         )
         .await
         .expect("sink added");
@@ -121,7 +128,7 @@ async fn runtime_with_watched_subtree() -> (
             "watched",
             graph
                 .build()
-                .default_restart(Restart::on_failure().limit(8, Duration::from_secs(1))),
+                .default_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1))),
         )
         .await
         .expect("watched subtree added");
@@ -229,8 +236,8 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
         &first[2].1.kind,
         LifecycleEventKind::ChildStarted { generation: 1, .. }
     ));
-    assert_eq!(first[1].1.seq(), first[0].1.seq().map(|seq| seq + 1));
-    assert_eq!(first[2].1.seq(), first[1].1.seq().map(|seq| seq + 1));
+    assert_eq!(child_seq(&first[1].1), child_seq(&first[0].1) + 1);
+    assert_eq!(child_seq(&first[2].1), child_seq(&first[1].1) + 1);
     assert_eq!(first[0].0, 0);
     assert_eq!(first[1].0, 0);
     assert_eq!(first[2].0, 0);
@@ -244,9 +251,9 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
     assert_eq!(second[0].0, 1);
     assert_eq!(second[1].0, 1);
     assert_eq!(second[2].0, 1);
-    assert_eq!(second[0].1.seq(), first[2].1.seq().map(|seq| seq + 1));
-    assert_eq!(second[1].1.seq(), second[0].1.seq().map(|seq| seq + 1));
-    assert_eq!(second[2].1.seq(), second[1].1.seq().map(|seq| seq + 1));
+    assert_eq!(child_seq(&second[0].1), child_seq(&first[2].1) + 1);
+    assert_eq!(child_seq(&second[1].1), child_seq(&second[0].1) + 1);
+    assert_eq!(child_seq(&second[2].1), child_seq(&second[1].1) + 1);
     assert!(!guard.is_cancelled());
     assert!(!guard.is_finished());
     guard.detach();
@@ -323,7 +330,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 
     let replacement = handle
         .scope()
-        .add_subtree("replacement", OrderedTree::new())
+        .add_subtree("replacement", Tree::new())
         .await
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
@@ -348,14 +355,14 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", move || ScopeSink {
+        .add_actor_spec(ActorSpec::new("sink", move || ScopeSink {
             observed: observed_tx.clone(),
             watch: None,
         }))
         .await
         .expect("scope sink added");
     let crasher = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("crasher", || Crasher).restart(Restart::on_failure()))
+        .add_actor_spec(ActorSpec::new("crasher", || Crasher).restart(RestartMode::OnFailure))
         .await
         .expect("crasher added");
     runtime
@@ -382,13 +389,11 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
         scheduled.kind,
         LifecycleEventKind::ChildRestartScheduled { .. }
     ));
-    assert_eq!(
-        scheduled
-            .child
-            .expect("child transition carries identity")
-            .child_id,
-        "crasher"
-    );
+    assert!(matches!(
+        scheduled.kind,
+        LifecycleEventKind::ChildRestartScheduled { ref child_id, .. }
+            if child_id == "crasher"
+    ));
 
     let handle = runtime.scope();
     shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;

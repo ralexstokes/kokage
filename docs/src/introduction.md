@@ -82,8 +82,8 @@ impl Actor for Press {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("press", || Press));
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", || Press);
     let runtime = tree.spawn()?;
 
     press.send("business cards x100".to_owned()).await?;

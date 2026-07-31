@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{Restart, Shutdown, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{RestartMode, Shutdown, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Notify, mpsc};
 
 use super::common;
@@ -37,7 +37,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let downstream = reporting_child("downstream", started_tx);
     let handle_owner = Supervisor::ordered()
@@ -90,7 +90,7 @@ async fn last_child_failure_restarts_only_itself() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -137,7 +137,7 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
             Ok(())
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let peer = TaskSpec::new("stubborn-peer", move |ctx| {
@@ -154,8 +154,8 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
             Ok(())
         }
     })
-    .restart(Restart::always())
-    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
+    .restart(RestartMode::Always)
+    .shutdown(Shutdown::graceful_for(common::SHORT_GRACE));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -206,7 +206,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let fail_middle_for_child = fail_middle.clone();
     let middle = TaskSpec::new("middle", {
@@ -228,7 +228,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let slow = TaskSpec::new("slow", {
         let started_tx = started_tx.clone();
@@ -251,8 +251,8 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(Restart::always())
-    .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
+    .restart(RestartMode::Always)
+    .shutdown(Shutdown::graceful_for(Duration::from_secs(1)));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -316,7 +316,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
             }
         }
     })
-    .restart(Restart::on_failure());
+    .restart(RestartMode::OnFailure);
 
     let never = TaskSpec::new("never", {
         let started_tx = started_tx.clone();
@@ -333,7 +333,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
             }
         }
     })
-    .restart(Restart::never());
+    .restart(RestartMode::Never);
     let eligible = reporting_child("eligible", started_tx);
 
     let handle_owner = Supervisor::ordered()
@@ -376,7 +376,7 @@ fn reporting_child(
             Ok(())
         }
     })
-    .restart(Restart::always())
+    .restart(RestartMode::Always)
 }
 
 /// Two upstream children fail while the suffix drain is held open, so both
@@ -418,8 +418,8 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
             }
         }
     })
-    .restart(Restart::always())
-    .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
+    .restart(RestartMode::Always)
+    .shutdown(Shutdown::graceful_for(Duration::from_secs(1)));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -492,6 +492,6 @@ fn failing_once_child(
             Ok(())
         }
     })
-    .restart(Restart::on_failure())
-    .shutdown(Shutdown::drain_for(Duration::from_millis(200)))
+    .restart(RestartMode::OnFailure)
+    .shutdown(Shutdown::graceful_for(Duration::from_millis(200)))
 }

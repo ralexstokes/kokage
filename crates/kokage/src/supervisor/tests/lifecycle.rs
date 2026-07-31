@@ -8,8 +8,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
-    Shutdown, Strategy, Supervisor, SupervisorError, TaskSpec,
+    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartMode,
+    RestartPolicy, Shutdown, Strategy, Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -19,28 +19,84 @@ fn failure(message: &'static str) -> crate::supervisor::BoxError {
     Box::new(io::Error::other(message))
 }
 
+#[derive(Clone, Copy)]
+struct TestChildIdentity<'a> {
+    seq: u64,
+    child_id: &'a str,
+    lineage: u64,
+    total_restarts: u64,
+    child_restart_count: u64,
+}
+
+fn try_child_identity(event: &LifecycleEvent) -> Option<TestChildIdentity<'_>> {
+    let (seq, child_id, lineage, total_restarts, child_restart_count) = match &event.kind {
+        LifecycleEventKind::ChildAdded {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+        }
+        | LifecycleEventKind::ChildStarted {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        }
+        | LifecycleEventKind::ChildExited {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        }
+        | LifecycleEventKind::ChildRemoved {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+        }
+        | LifecycleEventKind::ChildRestartScheduled {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        } => (
+            *seq,
+            child_id.as_str(),
+            *lineage,
+            *total_restarts,
+            *child_restart_count,
+        ),
+        _ => return None,
+    };
+    Some(TestChildIdentity {
+        seq,
+        child_id,
+        lineage,
+        total_restarts,
+        child_restart_count,
+    })
+}
+
 fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
-    event
-        .child
-        .as_ref()
-        .is_some_and(|child| child.child_id == child_id)
+    try_child_identity(event).is_some_and(|child| child.child_id == child_id)
 }
 
-fn child_identity(event: &LifecycleEvent) -> &crate::supervisor::ChildLifecycleIdentity {
-    event
-        .child
-        .as_ref()
-        .expect("child transition carries identity")
+fn child_identity(event: &LifecycleEvent) -> TestChildIdentity<'_> {
+    try_child_identity(event).expect("child transition carries identity")
 }
 
-/// The envelope carries child identity exactly for `Child*` kinds. Asserting
-/// it on every polled event covers locally emitted and recursively forwarded
-/// transitions alike.
 fn assert_envelope_invariant(event: &LifecycleEvent) {
     assert_eq!(
-        event.child.is_some(),
-        event.is_child_transition(),
-        "child identity is carried exactly by child transitions: {event:?}"
+        try_child_identity(event).is_some(),
+        event.is_child_transition()
     );
 }
 
@@ -91,13 +147,13 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
     let running = builder.build().expect("supervisor builds").spawn();
 
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -113,7 +169,7 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
 async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
-    let restart = Restart::on_failure()
+    let restart = RestartPolicy::on_failure()
         .limit(3, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(50)));
     let builder = Supervisor::ordered().child(
@@ -127,7 +183,7 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
                 Ok(())
             }
         })
-        .restart(restart),
+        .restart_policy(restart),
     );
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle().direct_children();
@@ -137,13 +193,14 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
     timeout(WAIT, async {
         while transitions.len() < 3 {
             let event = watch.next().await.expect("watch remains open");
-            let Some(child) = event.child.as_ref() else {
+            let Some(child) = try_child_identity(&event) else {
                 continue;
             };
             match &event.kind {
                 LifecycleEventKind::ChildExited {
                     generation: 0,
                     exit,
+                    ..
                 } if child.child_id == "flaky" => {
                     assert!(exit.failure_message().is_some());
                     assert!(!exit.cancelled());
@@ -169,7 +226,9 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
                         child.child_restart_count,
                     ));
                 }
-                LifecycleEventKind::ChildStarted { generation: 1 } if child.child_id == "flaky" => {
+                LifecycleEventKind::ChildStarted { generation: 1, .. }
+                    if child.child_id == "flaky" =>
+                {
                     transitions.push((
                         "started",
                         child.seq,
@@ -204,7 +263,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let nested = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
@@ -218,7 +277,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         .build()
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(3, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
         .child_spec(ChildSpec::supervisor("nested", nested));
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle();
@@ -270,7 +329,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .shutdown(Shutdown::abort()),
         )
         .child(
@@ -281,7 +340,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
                     Err(failure("fatal boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -289,7 +348,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle)
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -308,7 +367,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let restarted = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 1 }
+            LifecycleEventKind::ChildStarted { generation: 1, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -323,13 +382,13 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     })
     .await;
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -363,7 +422,7 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .await
         .expect("child is added");
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
@@ -385,7 +444,8 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
     })
     .await;
     let removed = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildRemoved { .. })
+            && child_id_is(event, "worker")
     })
     .await;
     assert!(matches!(
@@ -434,7 +494,7 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -457,9 +517,9 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(crate::supervisor::Shutdown::drain_for(Duration::from_secs(
-                1,
-            ))),
+            .shutdown(crate::supervisor::Shutdown::graceful_for(
+                Duration::from_secs(1),
+            )),
         )
         .await
         .expect("worker is added");
@@ -468,7 +528,8 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
     let removal = tokio::spawn(async move { dynamic.remove_child("worker").await });
 
     let removed = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildRemoved { .. })
+            && child_id_is(event, "worker")
     })
     .await;
     timeout(WAIT, removal)
@@ -485,7 +546,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
 #[tokio::test]
 async fn restart_intensity_failure_is_an_in_band_scope_event() {
     let builder = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("always-fails", |_| async {
             Err(failure("no restart budget"))
         }));
@@ -533,12 +594,7 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
         while let Some(event) = watch.next().await {
             assert_envelope_invariant(&event);
             match event.kind {
-                LifecycleEventKind::ChildExited { .. } => exited.push(
-                    event
-                        .child
-                        .expect("child transition carries identity")
-                        .child_id,
-                ),
+                LifecycleEventKind::ChildExited { child_id, .. } => exited.push(child_id),
                 LifecycleEventKind::SupervisorStopped => stopped = true,
                 _ => {}
             }
@@ -807,18 +863,18 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                 Ok(())
             }
         })
-        .restart(Restart::on_failure())
+        .restart(RestartMode::OnFailure)
         .shutdown(Shutdown::abort()),
     );
     let _leaf_finished = leaf_builder
         .handle()
-        .completions(["worker"])
-        .then_shutdown();
+        .shutdown_when_children_complete(["worker"])
+        .expect("completion condition is valid");
     let leaf = leaf_builder.build().expect("leaf supervisor builds");
     let sibling_crash = Arc::clone(&crash_sibling);
     let running = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(RestartMode::OnFailure))
         .child(
             TaskSpec::new("sibling", move |_| {
                 let crash = Arc::clone(&sibling_crash);
@@ -827,7 +883,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                     Err(failure("sibling boom"))
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -851,7 +907,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     crash_sibling.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
@@ -880,12 +936,12 @@ async fn never_policy_nested_stop_closes_its_watch() {
                     Err(failure("worker boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60))),
         )
         .build()
         .expect("nested supervisor builds");
     let running = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -928,7 +984,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -952,7 +1008,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_middle.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
@@ -990,7 +1046,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle)
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -1010,7 +1066,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
                     Err(failure("middle boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60))),
         )
         .await
         .expect("bomb is added");
@@ -1049,8 +1105,8 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
     let running = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
-        .child_spec(ChildSpec::supervisor("head", head_supervisor).restart(Restart::on_failure()))
-        .child_spec(ChildSpec::supervisor("tail", tail_supervisor).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("head", head_supervisor).restart(RestartMode::OnFailure))
+        .child_spec(ChildSpec::supervisor("tail", tail_supervisor).restart(RestartMode::OnFailure))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -1115,14 +1171,14 @@ fn middle_supervisor(
                     Err(failure("leaf boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
         .expect("leaf supervisor builds");
     let middle_crash = Arc::clone(crash_middle);
     Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(RestartMode::Never))
         .child(
             TaskSpec::new("bomb", move |_| {
                 let crash = Arc::clone(&middle_crash);
@@ -1131,7 +1187,7 @@ fn middle_supervisor(
                     Err(failure("middle boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -1148,9 +1204,12 @@ fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervis
                 Ok(())
             }
         })
-        .restart(Restart::on_failure()),
+        .restart(RestartMode::OnFailure),
     );
-    let finished = builder.handle().completions(["worker"]).then_shutdown();
+    let finished = builder
+        .handle()
+        .shutdown_when_children_complete(["worker"])
+        .expect("completion condition is valid");
     (
         builder.build().expect("completing supervisor builds"),
         finished,

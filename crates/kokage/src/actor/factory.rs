@@ -30,7 +30,7 @@ use crate::actor::raw::RawActor;
 /// # #[cfg(feature = "derive")]
 /// # fn main() {
 /// # use std::sync::{Arc, atomic::AtomicU64};
-/// # use kokage::{Actor, ActorSpec, Context, ExitResult, OrderedTree};
+/// # use kokage::{Actor, ActorSpec, Context, ExitResult, Tree};
 /// #[derive(kokage::ActorFactory)]
 /// struct Worker {
 ///     // This allocator lives in WorkerFactory, so its value survives restarts.
@@ -48,8 +48,8 @@ use crate::actor::raw::RawActor;
 /// # }
 ///
 /// let ids = Arc::new(AtomicU64::new(0));
-/// let mut tree = OrderedTree::new();
-/// let worker_ref = tree.add_actor(ActorSpec::new("worker", WorkerFactory { ids: ids.clone() }));
+/// let mut tree = Tree::new();
+/// let worker_ref = tree.add_actor_spec(ActorSpec::new("worker", WorkerFactory { ids: ids.clone() }));
 /// assert_eq!(worker_ref.id(), "worker");
 /// # let _ = tree;
 /// # }

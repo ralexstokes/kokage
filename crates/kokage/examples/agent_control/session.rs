@@ -9,7 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorSpec, CancellationToken, Context, ExitResult, Guard, Restart, TimerKey,
+    Actor, ActorRef, ActorSpec, CancellationToken, Context, ExitResult, Guard, RestartMode,
+    TimerKey,
 };
 use tokio::time::Instant;
 
@@ -107,7 +108,7 @@ impl Session {
             .subtree("children")
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
-            .add_actor(
+            .add_actor_spec(
                 ActorSpec::new(
                     id.clone(),
                     AgentRunFactory {
@@ -125,7 +126,7 @@ impl Session {
                         cancel: cancel.clone(),
                     },
                 )
-                .restart(Restart::never()),
+                .restart(RestartMode::Never),
             )
             .await?;
         ctx.watch(&run_ref, move |event| SessionMsg::RunEvent {
@@ -322,8 +323,8 @@ impl Actor for Session {
                     .entry(task)
                     .or_default()
                     .push(event.clone());
-                if let kokage::MonitorEvent::Exited { reason, .. } = &event
-                    && *reason == kokage::ExitReason::Failure
+                if let kokage::MonitorEvent::Exited { status, .. } = &event
+                    && status.is_failure()
                 {
                     if let Some(active) = self.active.as_mut()
                         && active.task == task

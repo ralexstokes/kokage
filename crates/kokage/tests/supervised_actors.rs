@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, OrderedTree, Reply, Restart, SendError,
-    Strategy,
+    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, Reply, RestartPolicy, SendError, Strategy,
+    Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -76,9 +76,9 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let (failed_tx, failed_rx) = oneshot::channel();
 
-    let mut builder = OrderedTree::new();
+    let mut builder = Tree::new();
     let failed = oneshot_slot(failed_tx);
-    let worker_ref = builder.add_actor(ActorSpec::new("worker", {
+    let worker_ref = builder.add_actor_spec(ActorSpec::new("worker", {
         let worker_starts = worker_starts.clone();
         move || Worker {
             observed: observed_tx.clone(),
@@ -86,7 +86,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
             failed: failed.clone(),
         }
     }));
-    let frontend_ref = builder.add_actor(ActorSpec::new("frontend", {
+    let frontend_ref = builder.add_actor_spec(ActorSpec::new("frontend", {
         let worker_ref = worker_ref.clone();
         let frontend_starts = frontend_starts.clone();
         move || Frontend {
@@ -98,7 +98,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -162,7 +162,7 @@ impl RawActor for CleanThenReceive {
 
 #[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
-    let restart = Restart::always()
+    let restart = RestartPolicy::always()
         .limit(10, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
@@ -175,11 +175,11 @@ async fn send_waits_during_permanent_restart_window() {
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
     })
-    .restart(restart);
+    .restart_policy(restart);
     let worker_ref = worker.actor_ref();
 
-    let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
-    tree.add_actor(worker);
+    let mut tree = Tree::new().strategy(Strategy::OneForOne);
+    tree.add_actor_spec(worker);
     let handle = tree.spawn().expect("runtime builds");
 
     timeout(Duration::from_secs(1), first_exited_rx)
@@ -233,15 +233,15 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let (exited_tx, exited_rx) = oneshot::channel();
     let exited = oneshot_slot(exited_tx);
 
-    let mut builder = OrderedTree::new();
-    let worker_ref = builder.add_actor(ActorSpec::new("worker", move || NotifyCleanExit {
+    let mut builder = Tree::new();
+    let worker_ref = builder.add_actor_spec(ActorSpec::new("worker", move || NotifyCleanExit {
         exited: exited.clone(),
     }));
     let graph = builder;
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -315,7 +315,7 @@ impl RawActor for RestartingRpc {
 
 #[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
-    let restart = Restart::on_failure()
+    let restart = RestartPolicy::on_failure()
         .limit(10, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (failed_tx, failed_rx) = oneshot::channel();
@@ -326,11 +326,11 @@ async fn call_succeeds_across_restart_window() {
         runs: runs.clone(),
         failed: failed.clone(),
     })
-    .restart(restart);
+    .restart_policy(restart);
     let rpc_ref = rpc.actor_ref();
 
-    let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
-    tree.add_actor(rpc);
+    let mut tree = Tree::new().strategy(Strategy::OneForOne);
+    tree.add_actor_spec(rpc);
     let handle = tree.spawn().expect("runtime builds");
 
     rpc_ref

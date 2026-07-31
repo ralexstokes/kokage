@@ -517,8 +517,9 @@ impl SupervisorRuntime {
             self.finalize_removed_child(classified.key, true);
             return Ok(());
         }
-        let naturally_completed = matches!(classified.status, super::exit::ExitStatus::Completed)
-            && self.children[classified.key].runtime.completion.is_clean();
+        let naturally_completed =
+            matches!(classified.status, super::exit::RuntimeExitStatus::Completed)
+                && self.children[classified.key].runtime.completion.is_clean();
         let non_cursor_ordered_exit = ordered_cursor.is_some_and(|cursor| cursor != classified.key);
         if !scope.contains(classified.key) || naturally_completed || non_cursor_ordered_exit {
             deferred.push(classified);

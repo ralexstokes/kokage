@@ -1,4 +1,4 @@
-/// Restart strategy that determines how sibling children are affected when one
+/// RestartPolicy strategy that determines how sibling children are affected when one
 /// child exits unexpectedly.
 ///
 /// Modelled after Erlang/OTP supervisor strategies.

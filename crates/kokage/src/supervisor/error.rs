@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors returned when validating or spawning an [`OrderedTree`](crate::OrderedTree),
+/// Errors returned when validating or spawning an [`Tree`](crate::Tree),
 /// a [`DynamicTree`](crate::DynamicTree), or a dynamic subtree insertion.
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
@@ -22,7 +22,7 @@ pub enum SupervisorError {
     /// readiness.
     #[error("supervisor startup aborted: {0}")]
     StartupAborted(String),
-    /// A child exceeded its [`Restart`](crate::Restart)
+    /// A child exceeded its [`RestartPolicy`](crate::RestartPolicy)
     /// limit, so the supervisor cannot continue.
     #[error("restart intensity exceeded")]
     RestartIntensityExceeded,

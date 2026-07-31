@@ -15,16 +15,14 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub use binding::{ActorStats, MailboxMode};
+pub use binding::{ActorStats, MailboxMode, ScopedActorStats};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
-pub use context::{ActorRef, ActorStatus, Context, RawContext, Reply, StopContext, TimerKey};
-pub use error::{
-    BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind, SendRejection,
-};
+pub use context::{ActorRef, Context, RawContext, Reply, StopContext, TimerKey};
+pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind};
 pub use factory::ActorFactory;
 pub use graph::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActor, RunnableActorBuilder};
 pub use handler::Actor;
-pub use monitor::{ExitReason, MonitorEvent};
+pub use monitor::MonitorEvent;
 pub use raw::{ExitResult, RawActor};

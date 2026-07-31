@@ -6,7 +6,8 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningTree, TaskSpec, observe::ActorStats,
+    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningTree, TaskSpec,
+    observe::ScopedActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
 use serde_json::{Value, json};
@@ -37,33 +38,35 @@ impl Actor for IdleActor {
     }
 }
 
-fn actor_stats() -> Vec<ActorStats> {
+fn actor_stats() -> Vec<ScopedActorStats> {
     vec![
         serde_json::from_value(json!({
-            "actor_id": "worker",
             "scope_path": [],
             "lineage": 0,
-            "messages_received": 11,
-            "messages_accepted": 10,
-            "messages_conflated": 3,
-            "sends_rejected": 1,
-            "outstanding_offloads": 0,
-            "mailbox_depth": 3,
-            "mailbox_capacity": 32,
+            "stats": {
+                "actor_id": "worker",
+                "messages_received": 11,
+                "messages_accepted": 10,
+                "messages_conflated": 3,
+                "sends_rejected": 1,
+                "outstanding_offloads": 0,
+                "mailbox_depth": 3,
+                "mailbox_capacity": 32,
+            },
         }))
         .expect("actor stats fixture is valid"),
     ]
 }
 
 async fn spawn_console_with_stats(
-    stats: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
+    stats: impl Fn() -> Vec<ScopedActorStats> + Send + Sync + 'static,
 ) -> (ConsoleHandle, RunningTree, RunningTree) {
     let snapshots = DynamicTree::new()
         .spawn()
         .expect("test snapshot tree spawns");
     let snapshots_handle = snapshots.scope();
     snapshots_handle
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -160,6 +163,12 @@ async fn index_serves_dashboard() {
         .expect("HTTP response did not contain a header/body separator");
     assert!(headers.to_ascii_lowercase().contains("text/html"));
     assert!(body.contains("kokage console"));
+    assert!(body.contains("return sample.stats.actor_id === child.id"));
+    assert!(body.contains("const actor = sample.stats;"));
+    assert!(body.contains(
+        "const childId = lifecycle && lifecycle.child_id != null ? lifecycle.child_id : \"unknown\";"
+    ));
+    assert!(!body.contains("envelope.child"));
 }
 
 #[tokio::test]
@@ -383,16 +392,18 @@ async fn ws_sends_snapshot_then_stats_on_connect() {
     assert_eq!(
         stats["data"],
         json!([{
-            "actor_id": "worker",
             "scope_path": [],
             "lineage": 0,
-            "messages_received": 11,
-            "messages_accepted": 10,
-            "messages_conflated": 3,
-            "sends_rejected": 1,
-            "outstanding_offloads": 0,
-            "mailbox_depth": 3,
-            "mailbox_capacity": 32,
+            "stats": {
+                "actor_id": "worker",
+                "messages_received": 11,
+                "messages_accepted": 10,
+                "messages_conflated": 3,
+                "sends_rejected": 1,
+                "outstanding_offloads": 0,
+                "mailbox_depth": 3,
+                "mailbox_capacity": 32,
+            },
         }])
     );
 }
@@ -422,11 +433,12 @@ async fn ws_skips_unchanged_stats() {
         .expect("actor stats mutex poisoned")
         .first_mut()
         .expect("actor stats fixture was empty")
+        .stats
         .mailbox_depth += 1;
 
     let frame = read_json(&mut socket).await;
     assert_eq!(frame["type"], "actor_stats");
-    assert_eq!(frame["data"][0]["mailbox_depth"], 4);
+    assert_eq!(frame["data"][0]["stats"]["mailbox_depth"], 4);
 }
 
 #[tokio::test]
@@ -437,7 +449,7 @@ async fn ws_streams_snapshot_updates() {
 
     snapshots
         .scope()
-        .add_task(TaskSpec::new("updated", |ctx| async move {
+        .add_task_spec(TaskSpec::new("updated", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -472,7 +484,7 @@ async fn ws_streams_events() {
 
     lifecycle
         .scope()
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -483,17 +495,15 @@ async fn ws_streams_events() {
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
     assert_eq!(frame["data"]["scope_path"], json!([]));
-    assert_eq!(frame["data"]["child"]["child_id"], "worker");
-    assert!(frame["data"]["child"]["seq"].is_number());
-    assert!(frame["data"]["child"]["lineage"].is_number());
-    assert_eq!(frame["data"]["child"]["total_restarts"], 0);
-    assert_eq!(frame["data"]["child"]["child_restart_count"], 0);
-    assert_eq!(frame["data"]["kind"]["ChildStarted"]["generation"], 0);
-    assert!(
-        frame["data"]["kind"]["ChildStarted"]
-            .get("child_id")
-            .is_none()
+    assert_eq!(frame["data"]["kind"]["ChildStarted"]["child_id"], "worker");
+    assert!(frame["data"]["kind"]["ChildStarted"]["seq"].is_number());
+    assert!(frame["data"]["kind"]["ChildStarted"]["lineage"].is_number());
+    assert_eq!(frame["data"]["kind"]["ChildStarted"]["total_restarts"], 0);
+    assert_eq!(
+        frame["data"]["kind"]["ChildStarted"]["child_restart_count"],
+        0
     );
+    assert_eq!(frame["data"]["kind"]["ChildStarted"]["generation"], 0);
 }
 
 #[tokio::test]
@@ -515,7 +525,7 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .scope()
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -524,7 +534,7 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .scope()
-        .add_actor(ActorSpec::new("tracked", || IdleActor))
+        .add_actor_spec(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");
 
@@ -539,7 +549,7 @@ async fn dynamic_tree_wires_public_observability() {
                     .as_array()
                     .is_some_and(|stats| !stats.is_empty()) =>
             {
-                assert_eq!(frame["data"][0]["actor_id"], "tracked");
+                assert_eq!(frame["data"][0]["stats"]["actor_id"], "tracked");
                 saw_actor_stats = true;
             }
             _ => {}
