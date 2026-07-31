@@ -14,7 +14,7 @@ Events arrive as *ordinary messages* — you provide a mapping from
 like everything else:
 
 ```rust
-use kokage::{ExitReason, prelude::*};
+use kokage::prelude::*;
 use tokio::sync::mpsc;
 
 struct Press;
@@ -51,7 +51,7 @@ impl Actor for FrontDesk {
     async fn handle(&mut self, DeskMsg::Press(event): DeskMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let line = match event {
             MonitorEvent::Started { generation, .. } => format!("press up (run {generation})"),
-            MonitorEvent::Exited { reason: ExitReason::Failure, .. } => "press down: failure".to_owned(),
+            MonitorEvent::Exited { status, .. } if status.is_failure() => "press down: failure".to_owned(),
             MonitorEvent::Exited { .. } => "press stopped".to_owned(),
             MonitorEvent::Removed { .. } => "press permanently gone".to_owned(),
             MonitorEvent::Lagged { dropped, .. } => format!("missed {dropped} press events"),
@@ -65,13 +65,13 @@ impl Actor for FrontDesk {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (log_tx, mut log_rx) = mpsc::unbounded_channel();
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("press", || Press));
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", || Press);
     let watched = press.clone();
-    tree.add_actor(ActorSpec::new("front-desk", move || FrontDesk {
+    tree.add_actor("front-desk", move || FrontDesk {
         press: watched.clone(),
         log: log_tx.clone(),
-    }));
+    });
     let runtime = tree.spawn()?;
 
     println!("{}", log_rx.recv().await.expect("event")); // press up (run 0)
@@ -105,9 +105,10 @@ of fighting it:
   keeps the watch for the actor's lifetime. Re-watching the same target is
   an alias, not a duplicate subscription.
 
-`Exited` carries an [`ExitReason`] — `Normal` or `Failure` — which is
-deliberately coarse: peers get to know *that* and *how* a collaborator went
-away, not its diagnostics.
+`Exited` carries the shared observational [`ExitStatus`]: completed, failed,
+panicked, or controller-aborted, together with whether shutdown was requested.
+It is the same vocabulary snapshots and lifecycle streams use; the original
+application error remains producer-side.
 
 ## Three lifecycle tools, three audiences
 
@@ -129,4 +130,4 @@ supervisor's job. Monitors are for reacting, not supervising.
 [`Context::watch`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.watch
 [`MonitorEvent`]: https://stokes.io/kokage/api/kokage/enum.MonitorEvent.html
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
-[`ExitReason`]: https://stokes.io/kokage/api/kokage/enum.ExitReason.html
+[`ExitStatus`]: https://stokes.io/kokage/api/kokage/enum.ExitStatus.html

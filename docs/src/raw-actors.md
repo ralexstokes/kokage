@@ -39,8 +39,8 @@ impl RawActor for BatchPress {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Raw actors are declared and supervised exactly like handler actors.
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("batch-press", || BatchPress));
+    let mut tree = Tree::new();
+    let press = tree.add_actor("batch-press", || BatchPress);
     let runtime = tree.spawn()?;
 
     for n in 1..=4 {
@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let run = tokio::spawn({
         let stop = stop.clone();
         async move {
-            host.run_once(stop.cancelled(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            host.run_once(stop.cancelled(), Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND))
                 .await
         }
     });
@@ -132,7 +132,7 @@ to make the binding terminal. The rustdoc for
 walks through a complete hand-rolled supervision loop.
 
 Two things a directly hosted actor gives up: there is no supervisor
-applying a [`Restart`] policy for you, and the actor's `ctx.scope()` is a
+applying a [`RestartPolicy`] for you, and the actor's `ctx.scope()` is a
 stub — control operations fail and observation streams are closed. The
 escape hatch is deliberately shaped like one: reach for it at the edges,
 embedding kokage actors in a foreign framework, not as an alternative
@@ -145,5 +145,5 @@ architecture.
 [`ActorSpec::into_host`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html#method.into_host
 [`raw::ActorHost`]: https://stokes.io/kokage/api/kokage/raw/struct.ActorHost.html
 [`raw::IncarnationExit`]: https://stokes.io/kokage/api/kokage/raw/enum.IncarnationExit.html
-[`Restart`]: https://stokes.io/kokage/api/kokage/struct.Restart.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/struct.RestartPolicy.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html

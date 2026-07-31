@@ -47,19 +47,18 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let incarnations = Arc::new(AtomicUsize::new(0));
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("press", {
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", {
         let incarnations = incarnations.clone();
         move || Press { incarnation: 0, incarnations: incarnations.clone() }
-    }));
+    });
     let runtime = tree.spawn()?;
-    let scope = runtime.scope();
 
     press.send("flyers x500".to_owned()).await?;
 
     // Jam the press, then wait until the supervisor has restarted it.
-    let baseline = scope.snapshot().child("press").expect("declared").generation;
-    let mut snapshots = scope.subscribe_snapshots();
+    let baseline = runtime.snapshot().child("press").expect("declared").generation;
+    let mut snapshots = runtime.subscribe_snapshots();
     press.send("jam".to_owned()).await?;
     snapshots
         .wait_for_child("press", |child| {
@@ -99,13 +98,13 @@ not a delivery guarantee.
 
 ## Restart policies
 
-How eagerly should the supervisor restart? That is the child's [`Restart`]
-policy:
+How eagerly should the supervisor restart? [`RestartMode`] selects which
+exits restart, while [`RestartPolicy`] adds a budget and retry backoff:
 
 ```rust
 # use std::time::Duration;
-# use kokage::{Backoff, prelude::*};
-let policy = Restart::on_failure()          // restart on failure only (the default)
+# use kokage::{Backoff, RestartPolicy, prelude::*};
+let policy = RestartPolicy::on_failure()    // restart on failure only (the default)
     .limit(3, Duration::from_secs(10))      // at most 3 restarts within any 10s window
     .backoff(Backoff::exponential(
         Duration::from_millis(50),          // first delay
@@ -115,30 +114,30 @@ let policy = Restart::on_failure()          // restart on failure only (the defa
 # let _ = policy;
 ```
 
-- [`Restart::on_failure()`] — restart after errors, panics, and aborts;  a
-  clean exit stays down. This is the default.
-- [`Restart::always()`] — restart even after a clean exit; for children that
+- `RestartMode::OnFailure` — restart after errors, panics, and aborts; a clean
+  exit stays down. This is the default.
+- `RestartMode::Always` — restart even after a clean exit; for children that
   should run forever.
-- [`Restart::never()`] — run at most once; failure is recorded, not retried.
+- `RestartMode::Never` — run at most once; failure is recorded, not retried.
 
 Every policy carries a restart *budget* — by default 5 restarts within 30
 seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 `exponential_with_jitter`) spacing the attempts. Attach a policy to one actor
-with `ActorSpec::restart(...)`, or set a scope-wide default with
-`OrderedTree::default_restart(...)`. One caveat: an override *replaces* the
-whole policy — mode, budget, and backoff — so restate the parts you want to
-keep.
+with `ActorSpec::restart_policy(...)`, or set a scope-wide default with
+`Tree::default_restart(...)`. When only the mode differs, the adjacent
+`ActorSpec::restart(RestartMode::...)` shortcut keeps the ordinary case
+concise.
 
 ```rust
 # use std::time::Duration;
-# use kokage::prelude::*;
+# use kokage::{RestartPolicy, prelude::*};
 # struct Press;
 # impl Actor for Press {
 #     type Msg = String;
 #     async fn handle(&mut self, _j: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
 let spec = ActorSpec::new("press", || Press)
-    .restart(Restart::on_failure().limit(5, Duration::from_secs(5)));
+    .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(5)));
 # let _ = spec;
 ```
 
@@ -156,8 +155,6 @@ level either absorbs it or the root gives up and
 
 Which brings us to shaping those trees.
 
-[`Restart`]: https://stokes.io/kokage/api/kokage/struct.Restart.html
-[`Restart::on_failure()`]: https://stokes.io/kokage/api/kokage/struct.Restart.html#method.on_failure
-[`Restart::always()`]: https://stokes.io/kokage/api/kokage/struct.Restart.html#method.always
-[`Restart::never()`]: https://stokes.io/kokage/api/kokage/struct.Restart.html#method.never
+[`RestartMode`]: https://stokes.io/kokage/api/kokage/enum.RestartMode.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/struct.RestartPolicy.html
 [`Backoff`]: https://stokes.io/kokage/api/kokage/enum.Backoff.html

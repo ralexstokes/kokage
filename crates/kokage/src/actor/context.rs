@@ -1386,10 +1386,12 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// exits, [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) replays
     /// already accepted mailbox messages and offload completions with this
     /// method returning `true`. Nothing follows the drain except
-    /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
-    /// will not run: continuations are dropped, new timers and intervals never
-    /// fire, and a fresh [`offload`](Self::offload) races the shutdown budget.
-    /// A `Context` passed to `on_start` never reports that it is draining.
+    /// [`on_stop`](crate::Actor::on_stop), so work deferred back to this actor
+    /// will not run: continuations are dropped, self-directed timers and
+    /// intervals never deliver, and a fresh [`offload`](Self::offload) races
+    /// the shutdown budget. Cross-actor timers can still deliver to a live
+    /// target. A `Context` passed to `on_start` never reports that it is
+    /// draining.
     ///
     /// This phase is deliberately distinct from runtime shutdown. A local stop
     /// can lead to a drain while [`shutdown_token`](Self::shutdown_token)

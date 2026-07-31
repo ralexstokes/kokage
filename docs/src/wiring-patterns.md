@@ -6,10 +6,10 @@ hand-writing clone boilerplate.
 
 ## Cycles with `ActorSlot`
 
-`OrderedTree::add_actor` returns the ref *after* consuming the spec, which
-works while dependencies flow one way. The moment two actors need each
-other — the front desk sends jobs to the press, the press reports
-completions back to the desk — neither can be declared "first".
+`Tree::add_actor` returns the ref after receiving the id and factory, which
+works while dependencies flow one way. The moment two actors need each other
+— the front desk sends jobs to the press, the press reports completions back
+to the desk — neither can be declared "first".
 
 [`ActorSlot`] breaks the cycle by separating *identity* from *definition*.
 Create every slot, take refs from all of them, then consume each slot into a
@@ -77,9 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // 3. Place the specs wherever they belong.
-    let mut tree = OrderedTree::new();
-    tree.add_actor(desk_spec);
-    tree.add_actor(press_spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(desk_spec);
+    tree.add_actor_spec(press_spec);
     let runtime = tree.spawn()?;
 
     desk_ref.send(DeskMsg::Order("menus x50".to_owned())).await?;

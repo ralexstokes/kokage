@@ -2,9 +2,15 @@
 
 A supervised system heals itself — which means things can go wrong *and get
 fixed* without anyone noticing. That is only a virtue if, when you do look,
-the system can tell you exactly what has been happening. Kokage exposes four
-complementary views: structured logs, point-in-time snapshots, an ordered
-lifecycle event stream, and message-level counters.
+the system can tell you exactly what has been happening. Kokage exposes three
+observation contracts:
+
+1. `snapshot()` / `subscribe_snapshots()` for conflated current state;
+2. `observe_lifecycle()` / `watch_lifecycle()` for ordered structural history;
+3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
+
+Tracing, actor stats, metrics, and `kokage-console` project those contracts for
+diagnostics and dashboards.
 
 ## Tracing: free structured logs
 
@@ -36,20 +42,19 @@ use kokage::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("ingest", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("ingest", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
-    tree.add_task(TaskSpec::new("serve", |ctx| async move {
+    });
+    tree.add_task("serve", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
+    });
     let runtime = tree.spawn()?;
-    let scope = runtime.scope();
 
     // Readiness: wait until every child is running.
-    let mut snapshots = scope.subscribe_snapshots();
+    let mut snapshots = runtime.subscribe_snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -71,7 +76,9 @@ previous exit and its failure message, if any), `generation`,
 and — for subtree children — a nested snapshot, recursively. This is the
 raw material for health endpoints: liveness is "the tree is running",
 readiness is a predicate over children, and "why is it broken" is
-`state.last_exit()`.
+`state.last_exit()`. Exit details use [`ExitStatus`], the same completed,
+failed, panicked, or aborted vocabulary used by lifecycle and peer-monitor
+events.
 
 Two receiver habits keep you honest: the feed *conflates* (you always see
 the latest truth, never a backlog), so predicates passed to `wait_for` /
@@ -79,7 +86,24 @@ the latest truth, never a backlog), so predicates passed to `wait_for` /
 `generation == baseline + 1`, because intermediate states may be skipped.
 You saw this pattern in [Let It Crash](let-it-crash.md).
 
-## The lifecycle stream: what happened, in order
+## Aligned state and events
+
+The common lifecycle entry point is [`observe_lifecycle`]. It registers a
+direct-child event stream and reads a snapshot at one sequence boundary, so
+startup and lag resynchronization do not require a hand-written race-avoidance
+recipe:
+
+```rust,ignore
+let observation = runtime.observe_lifecycle();
+let initial = observation.snapshot;
+let mut events = observation.events;
+```
+
+Initialize state from `initial`, then apply events whose child sequence is
+greater than `initial.lifecycle_seq`. The lower-level snapshot and lifecycle
+methods remain available independently.
+
+## The recursive lifecycle stream: what happened, in order
 
 Snapshots tell you *now*; the lifecycle stream tells you *the story*.
 [`watch_lifecycle`] on any `ScopeRef` yields every transition in the scope —
@@ -91,13 +115,13 @@ use kokage::{observe::LifecycleEventKind, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("worker", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
+    });
     let runtime = tree.spawn()?;
-    let mut events = runtime.scope().watch_lifecycle();
+    let mut events = runtime.watch_lifecycle();
 
     runtime.shutdown();
     while let Some(event) = events.next().await {
@@ -120,12 +144,11 @@ enum is `#[non_exhaustive]`; always match with a catch-all arm.
 
 Delivery is buffered, not conflated. A consumer that falls far behind gets
 the oldest details collapsed into one `Lagged { dropped }` marker — the
-stream never lies by omission. On lag, refetch a snapshot and realign: every
-snapshot carries `lifecycle_seq`, and events expose `seq()`, so the gap-free
-recipe is *subscribe first, snapshot second, then skip child events with*
-`seq() <= snapshot.lifecycle_seq`. To feed events into an actor instead of a
-loop, [`watch_lifecycle_to`] pumps them into any `ActorRef` through a
-mapping closure, returning a `Guard`.
+stream never lies by omission. On direct-child lag, use a fresh
+`observe_lifecycle()` pair to realign. Recursive streams have per-scope
+sequence spaces, so resynchronize each affected scope from its snapshot. To
+feed events into an actor instead of a loop, [`watch_lifecycle_to`] pumps them
+into any `ActorRef` through a mapping closure, returning a `Guard`.
 
 Note how this differs from a peer [`MonitorEvent`] watch
 ([Watching Peers](watching-peers.md)): monitors give one actor a typed,
@@ -135,11 +158,12 @@ projection per audience.
 
 ## Message counters
 
-[`ActorRef::stats`] (one actor) and [`ScopeRef::actor_stats`] (every actor
-in a scope, recursively) report [`ActorStats`]: messages received, accepted,
+[`ActorRef::stats`] returns local [`ActorStats`]: messages received, accepted,
 and conflated, sends rejected, outstanding offloads, and current mailbox
-depth against capacity. Counters accumulate across restarts; a restarting
-actor doesn't reset your dashboards.
+depth against capacity. [`ScopeRef::actor_stats`] returns
+[`ScopedActorStats`] values that add scope path and lineage for every actor in
+the subtree. Counters accumulate across restarts; a restarting actor doesn't
+reset your dashboards.
 
 Byte-level accounting is opt-in per actor — give the spec a size estimator
 (a plain `fn` pointer) and `message_bytes_accepted` starts counting:
@@ -185,6 +209,8 @@ serves a web dashboard over a running tree
 [`subscribe_snapshots`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.subscribe_snapshots
 [`SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
 [`ChildSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildSnapshot.html
+[`ExitStatus`]: https://stokes.io/kokage/api/kokage/observe/enum.ExitStatus.html
+[`observe_lifecycle`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.observe_lifecycle
 [`watch_lifecycle`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.watch_lifecycle
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
 [`watch_lifecycle_to`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.watch_lifecycle_to
@@ -192,3 +218,4 @@ serves a web dashboard over a running tree
 [`ActorRef::stats`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.stats
 [`ScopeRef::actor_stats`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.actor_stats
 [`ActorStats`]: https://stokes.io/kokage/api/kokage/observe/struct.ActorStats.html
+[`ScopedActorStats`]: https://stokes.io/kokage/api/kokage/observe/struct.ScopedActorStats.html

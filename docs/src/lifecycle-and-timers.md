@@ -48,13 +48,14 @@ other machinery for a world that is ending.
 ## Stopping yourself
 
 Inside `handle`, [`Context::stop`] requests a clean stop: the current
-callback finishes, the loop winds down (draining per the actor's shutdown
-policy), and `on_stop` runs. A cleanly stopped actor is *done* under the
-default `Restart::on_failure()` — only `Restart::always()` brings it back.
+callback finishes, the loop winds down (draining per the actor's mailbox
+shutdown policy), and `on_stop` runs. A cleanly stopped actor is *done* under
+the default `RestartMode::OnFailure` — only `RestartMode::Always` brings it
+back.
 
-The context also reports which world you're in: [`Context::status`] returns
-`Running`, `Draining` (runtime shutdown in progress, queued messages being
-finished), or `Stopping`.
+[`Context::is_draining`] reports whether work queued by the current callback
+can still run. The separate shutdown token answers whether runtime shutdown
+has been requested.
 
 ## Working without input: `continue_with`
 
@@ -139,10 +140,10 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (maintained_tx, mut maintained_rx) = mpsc::unbounded_channel();
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(ActorSpec::new("press", move || Press {
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", move || Press {
         maintained: maintained_tx.clone(),
-    }));
+    });
     let runtime = tree.spawn()?;
 
     press.send(PressMsg::Job("posters x20".to_owned())).await?;
@@ -163,13 +164,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   never fired into a fresh incarnation that doesn't remember arming them.
   Re-arm in `on_start` (as above) if the schedule should survive restarts.
 
-For periodic work there is [`interval`] (requires `Msg: Clone`), which
-delivers through the *ordinary mailbox* with backpressure — a slow actor
-skips ticks rather than piling them up. And for scheduling messages to *other*
-actors, [`send_after_to`] and [`interval_to`] do the same against any
-`ActorRef`.
+For guard-owned mailbox timers, [`send_after`] schedules a one-shot message
+to self and [`interval`] repeats one (requiring `Msg: Clone`). Both use the
+*ordinary mailbox* with backpressure; a slow interval skips ticks rather than
+piling them up. The adjacent [`send_after_to`] and [`interval_to`] forms target
+any `ActorRef`.
 
-These three return a [`Guard`] — your first meeting with a type that recurs
+These helpers return a [`Guard`] — your first meeting with a type that recurs
 throughout kokage. A `Guard` owns a background operation: **dropping it
 cancels the operation**. Keep it in the actor's state to tie the interval's
 lifetime to yours, call `.cancel()` to stop it early, or `.detach()` when
@@ -197,11 +198,12 @@ guard to hold.)
 [`Actor`]: https://stokes.io/kokage/api/kokage/trait.Actor.html
 [`StopContext`]: https://stokes.io/kokage/api/kokage/struct.StopContext.html
 [`Context::stop`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.stop
-[`Context::status`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.status
+[`Context::is_draining`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.is_draining
 [`Context::continue_with`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.continue_with
 [`set_timeout`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.set_timeout
 [`TimerKey`]: https://stokes.io/kokage/api/kokage/struct.TimerKey.html
 [`clear_timeout`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.clear_timeout
+[`send_after`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.send_after
 [`interval`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.interval
 [`send_after_to`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.send_after_to
 [`interval_to`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.interval_to

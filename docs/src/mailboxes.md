@@ -12,10 +12,10 @@ and the delivery contract they all share.
 use std::sync::Arc;
 
 use kokage::{SendErrorKind, prelude::*};
-use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 struct SlowPress {
-    gate: Arc<Notify>,
+    gate: Arc<Semaphore>,
 }
 
 impl Actor for SlowPress {
@@ -23,7 +23,7 @@ impl Actor for SlowPress {
 
     async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         // The press works only when main() releases the gate.
-        self.gate.notified().await;
+        self.gate.acquire().await?.forget();
         println!("printed: {job}");
         Ok(())
     }
@@ -31,15 +31,15 @@ impl Actor for SlowPress {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let gate = Arc::new(Notify::new());
+    let gate = Arc::new(Semaphore::new(0));
     let spec = ActorSpec::new("press", {
         let gate = gate.clone();
         move || SlowPress { gate: gate.clone() }
     })
     .mailbox_capacity(1);
 
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(spec);
+    let mut tree = Tree::new();
+    let press = tree.add_actor_spec(spec);
     let runtime = tree.spawn()?;
 
     // Accepted immediately; the press picks it up and blocks on the gate.
@@ -53,8 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("rejected while busy: {}", rejected.message);
 
     // Release the press twice and drain on shutdown.
-    gate.notify_one();
-    gate.notify_one();
+    gate.add_permits(2);
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
@@ -78,8 +77,9 @@ The three flavors, and when to reach for each:
 
 Every rejection is a [`SendError`] carrying `actor_id`, the `kind`, and —
 importantly — `message`, the value you tried to send, so nothing is lost
-silently. Call `.into_message()` to recover it, or `.discard()` to keep just
-the metadata ([`SendRejection`]) for logging.
+silently. Call `.into_message()` to recover it, or `.into_boxed()` to erase
+the payload while retaining the actor id and rejection kind in an application
+error.
 
 ## Sizing the mailbox
 
@@ -94,7 +94,7 @@ for a whole tree:
 #     async fn handle(&mut self, _job: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
 let spec = ActorSpec::new("press", || Press).mailbox_capacity(8);
-let tree = OrderedTree::new().mailbox_capacity(128); // default for actors in this tree
+let tree = Tree::new().mailbox_capacity(128); // default for actors in this tree
 # let _ = (spec, tree);
 ```
 
@@ -158,5 +158,4 @@ acknowledgements are made of.
 [`try_send`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.try_send
 [`send_timeout`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.send_timeout
 [`SendError`]: https://stokes.io/kokage/api/kokage/struct.SendError.html
-[`SendRejection`]: https://stokes.io/kokage/api/kokage/struct.SendRejection.html
 [`MailboxMode`]: https://stokes.io/kokage/api/kokage/struct.MailboxMode.html

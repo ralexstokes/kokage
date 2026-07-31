@@ -2,9 +2,10 @@
 
 Not everything is an actor. A cache warmer, a metrics flusher, a listener
 loop accepting connections — some children are just *futures* that should be
-supervised like everything else. [`TaskSpec`] declares an arbitrary async
-task as a first-class tree child, with the same restart policies, shutdown
-handling, and observability as actors.
+supervised like everything else. `Tree::add_task` declares an arbitrary async
+task with default configuration; [`TaskSpec`] is the adjacent explicit form
+for readiness and policy overrides. Tasks have the same restart behavior,
+shutdown timing, and observability as actors.
 
 ## Declaring a task
 
@@ -13,9 +14,9 @@ use kokage::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
+    let mut tree = Tree::new();
 
-    tree.add_task(
+    tree.add_task_spec(
         TaskSpec::new("cache-warmer", |ctx| async move {
             println!("warming cache (generation {})", ctx.generation());
             // ... load things ...
@@ -28,23 +29,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .wait_for_ready(),
     );
 
-    tree.add_task(TaskSpec::new("api", |ctx| async move {
+    tree.add_task("api", |ctx| async move {
         println!("api serving (cache is warm)");
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
+    });
 
     let runtime = tree.spawn()?;
-    runtime.scope().wait_started().await?;
+    runtime.wait_started().await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
 
-The closure you give [`TaskSpec::new`] receives a [`TaskContext`] and returns
-a future ending in [`ExitResult`] — the same contract as an actor: `Ok(())`
-is a clean completion, `Err` is a failure the supervisor answers with the
-child's restart policy.
+The closure you give `add_task` (or the explicitly configured
+[`TaskSpec::new`]) receives a [`TaskContext`] and returns a future ending in
+[`ExitResult`] — the same contract as an actor: `Ok(())` is a clean
+completion, `Err` is a failure the supervisor answers with the child's
+restart policy.
 
 Because the closure is a factory (`Fn`, not `FnOnce`), it is called again for
 every restart — exactly like an actor factory. State captured by the closure
@@ -98,17 +100,15 @@ Tasks take the same per-child configuration as actors:
 # use std::time::Duration;
 # use kokage::prelude::*;
 let spec = TaskSpec::new("indexer", |_ctx| async move { Ok(()) })
-    .restart(Restart::never())
     .shutdown(Shutdown::abort())
-    .remove_when_done();
+    .temporary();
 # let _ = spec;
 ```
 
-`remove_when_done` is the interesting one for job-style work: after the task
-completes cleanly (with no pending restart), its membership is removed from
-the scope entirely, rather than sitting there as a stopped child. Combined
-with dynamic trees, this is the substrate for "run a job, then forget it" —
-see [Dynamic Trees](dynamic-trees.md).
+`temporary()` is the job-style preset: never restart, and remove the
+membership after completion rather than leaving a stopped child in the
+scope. Combined with dynamic trees, this is the substrate for "run a job,
+then forget it" — see [Dynamic Trees](dynamic-trees.md).
 
 `ctx.generation()` tells a task which incarnation it is (0 for the first
 run), which is handy for logging and for warm-up work that only the first

@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A big client walks in: give them a dedicated press.
     let acme = scope
-        .add_actor(ActorSpec::new("acme-press", || Press { client: "acme" }))
+        .add_actor("acme-press", || Press { client: "acme" })
         .await?;
     acme.send("letterhead x1000".to_owned()).await?;
 
@@ -47,12 +47,15 @@ always supervises `OneForOne` — group strategies need a stable group, so
 they belong to ordered scopes. Membership is managed through the
 [`ScopeRef`]:
 
-- `scope.add_actor(spec).await?` — returns the typed `ActorRef`.
-- `scope.add_task(spec).await?` — supervised tasks work too.
+- `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
+- `scope.add_task(id, task).await?` — supervised tasks work too.
 - `scope.add_subtree(id, tree).await?` — insert a whole *ordered or dynamic*
   subtree, and get back the new scope's `ScopeRef`.
 - `scope.remove_child(id).await?` — stop (honoring the child's shutdown
   policy, so a draining child finishes its queue) and remove.
+
+The adjacent `add_actor_spec`, `add_task_spec`, and `add_subtree_spec` forms
+accept explicitly configured declarations.
 
 All four are `async` and return [`ControlError`] on misuse: `NotDynamic` if
 the scope is ordered, `UnknownChildId`, `ChildRemovalInProgress` if you
@@ -79,17 +82,17 @@ tree spawns:
 let dynamic_tree = DynamicTree::new();
 let sessions = dynamic_tree.scope(); // usable for wiring before spawn
 
-let mut shop = OrderedTree::new();
+let mut shop = Tree::new();
 // ... static children: front desk, press room ...
 shop.add_subtree("sessions", dynamic_tree);
 let runtime = shop.spawn()?;
 // `spawn` returns while children are still starting; wait for the tree to
 // come up before the dynamic scope can accept members.
-runtime.scope().wait_started().await?;
+runtime.wait_started().await?;
 
 // Later, as clients arrive:
 let session = sessions
-    .add_actor(ActorSpec::new("session-1", || Session))
+    .add_actor("session-1", || Session)
     .await?;
 # let _ = session;
 # runtime.shutdown_and_wait().await?;
@@ -104,9 +107,9 @@ client leaves.
 
 ## Job scopes: run to completion, then clean up
 
-Dynamic trees plus two tools from earlier chapters give you batch semantics.
-`remove_when_done` makes a finished child leave the scope; a **completion
-watch** waits for the work:
+Dynamic trees plus two direct scope operations give you batch semantics.
+`temporary()` makes a finished child leave the scope, while a completion
+operation waits for the work or shuts the scope down:
 
 ```rust
 # use kokage::prelude::*;
@@ -116,27 +119,25 @@ let batch = DynamicTree::new();
 let scope = batch.scope();
 let runtime = batch.spawn()?;
 
-// Arm the watch first so no completion can slip past it.
-let done = scope.completions(["job-42"]).allow_future_members();
+// Arm shutdown first so no fast completion can slip past it.
+let done = scope.shutdown_when_future_children_complete(["job-42"])?;
 
 scope
-    .add_task(TaskSpec::new("job-42", |_ctx| async move { Ok(()) }).remove_when_done())
+    .add_task_spec(TaskSpec::new("job-42", |_ctx| async move { Ok(()) }).temporary())
     .await?;
 
-let outcome = done.wait().await?;
-println!("batch finished: {outcome:?}");
-# runtime.shutdown_and_wait().await?;
+done.finished().await;
+runtime.wait().await?;
 # Ok(())
 # }
 ```
 
-[`completions`] counts a child as done when its current run exited cleanly
-with no restart pending (children under `Restart::always()` never qualify —
-they are services, not jobs). `allow_future_members` lets the watch name
-children that haven't been added yet, which also closes the race between
-adding a fast job and watching for it. For a scope that should *shut itself
-down* when the batch drains, `scope.completions(ids).then_shutdown()` returns
-a [`Guard`] that does exactly that.
+`wait_for_children` counts a child as done when its current run exited cleanly
+with no restart pending (children under `RestartMode::Always` never qualify —
+they are services, not jobs). The explicitly named
+`wait_for_future_children` and `shutdown_when_future_children_complete`
+variants accept ids that have not been inserted yet. Shutdown triggers return
+a [`Guard`], so dropping the owner revokes the operation.
 
 ## What restarts cannot restore
 
@@ -157,5 +158,5 @@ mechanism.
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`ControlError`]: https://stokes.io/kokage/api/kokage/enum.ControlError.html
-[`completions`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.completions
+[`wait_for_children`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.wait_for_children
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html

@@ -69,8 +69,8 @@ freshly minted `Reply` and returns the message to send:
 # }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    let desk = tree.add_actor(ActorSpec::new("front-desk", || FrontDesk { orders_taken: 0 }));
+    let mut tree = Tree::new();
+    let desk = tree.add_actor("front-desk", || FrontDesk { orders_taken: 0 });
     let runtime = tree.spawn()?;
 
     let price = desk
@@ -104,8 +104,8 @@ enum CounterMsg {
 # }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let mut tree = OrderedTree::new();
-# let counter = tree.add_actor(ActorSpec::new("counter", || Counter { total: 0 }));
+# let mut tree = Tree::new();
+# let counter = tree.add_actor("counter", || Counter { total: 0 });
 # let runtime = tree.spawn()?;
 let total = counter.call(Duration::from_secs(1), CounterMsg::Total).await?;
 # assert_eq!(total, 0);
@@ -120,8 +120,8 @@ The `Duration` you pass to `call` bounds the *entire* round trip: waiting for
 mailbox capacity, the actor picking the message up, and the reply arriving.
 [`CallError`] tells you which part failed:
 
-- `CallError::Send(rejection)` — the request never got in (actor permanently
-  terminated, for example).
+- `CallError::Terminated { .. }` — the request never got in because the actor
+  was permanently gone.
 - `CallError::Timeout { .. }` — the deadline passed. Note that once the
   request has been *accepted* into the mailbox, timing out cannot retract it:
   the actor may still process the request; only the answer is abandoned.

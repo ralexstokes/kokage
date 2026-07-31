@@ -23,25 +23,30 @@ supervision tree. Ownership here is literal Rust ownership:
 
 Everything else holds a [`ScopeRef`] — the cheap, cloneable, *non-owning*
 reference to a supervision scope, parallel to what `ActorRef` is for one
-actor. `runtime.scope()` gives the root's; `scope.subtree("press-room")`
-navigates down; trees hand them out even before spawn. A `ScopeRef` never
-keeps the tree alive, and dropping one means nothing. What it does carry is
-*control capability*: observation (snapshots, lifecycle watches, stats — see
-[Observability](observability.md)), dynamic membership on dynamic scopes,
-and targeted shutdown — `scope.shutdown_and_wait()` on a subtree stops just
-that compartment, whose parent then sees a completed child.
+actor. `RunningTree` delegates common root operations directly;
+`runtime.scope()` gives you a cloneable root ref when another component needs
+one. `scope.subtree("press-room")` navigates down, and trees hand refs out even
+before spawn. A `ScopeRef` never keeps the tree alive, and dropping one means
+nothing. What it does carry is *control capability*: observation (snapshots,
+lifecycle watches, stats — see [Observability](observability.md)), dynamic
+membership on dynamic scopes, and targeted shutdown —
+`scope.shutdown_and_wait()` on a subtree stops just that compartment, whose
+parent then sees a completed child.
 
 ## Shutdown policies: how children stop
 
-Shutdown flows down the tree in reverse declaration order, and each child
-stops according to its [`Shutdown`] policy:
+Shutdown flows down the tree in reverse declaration order. [`Shutdown`]
+controls timing for every child, while actor-only [`MailboxShutdown`] decides
+what happens to accepted messages:
 
-- `Shutdown::drain_for(grace)` — the default (with a 5-second grace): stop
-  accepting new messages, finish what is already queued, then run `on_stop`.
-- `Shutdown::discard_after_current(grace)` — finish only the message in
-  flight; drop the rest of the queue.
+- `Shutdown::graceful_for(grace)` — the default (with a 5-second grace):
+  request cooperative shutdown and wait up to the bound.
 - `Shutdown::abort()` — cancel the future outright. For a subtree, the abort
   cascades through everything inside.
+- `MailboxShutdown::Drain` — the actor default: stop accepting messages,
+  finish what is already queued, then run `on_stop`.
+- `MailboxShutdown::Discard` — finish only the message in flight and drop the
+  rest of the actor's queue.
 
 The `grace` is a bound, not a hope: a child still busy when it expires is
 aborted, and the abort is recorded distinctly (`Aborted { after_grace: true,
@@ -71,9 +76,10 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = ActorSpec::new("press", || Press)
-        .shutdown(Shutdown::drain_for(Duration::from_secs(5)));
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(spec);
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5)))
+        .mailbox_shutdown(MailboxShutdown::Drain);
+    let mut tree = Tree::new();
+    let press = tree.add_actor_spec(spec);
     let runtime = tree.spawn()?;
 
     for n in 1..=5 {
@@ -86,11 +92,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Set policies per child (`ActorSpec::shutdown`, `TaskSpec::shutdown`), per
-scope default (`default_shutdown`), or on a subtree's edge
-(`SubtreeSpec::shutdown`). Inside an actor, `ctx.status()` reports
-`Draining` while a drain is in progress, and hand-written loops can check
-their [`Context::shutdown_token`].
+Set timing per child (`ActorSpec::shutdown`, `TaskSpec::shutdown`), per scope
+default (`default_shutdown`), or on a subtree's edge
+(`SubtreeSpec::shutdown`). Mailbox behavior exists only on `ActorSpec`. Inside
+an actor, `ctx.is_draining()` reports whether queued work is being drained,
+and hand-written raw-actor loops can check their
+[`raw::RawContext::shutdown_token`].
 
 ## Guards: scoped ownership for background operations
 
@@ -125,11 +132,11 @@ use kokage::{CancellationToken, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("service", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("service", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
-    }));
+    });
     let runtime = tree.spawn()?;
 
     let stop = CancellationToken::new();
@@ -153,7 +160,8 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 [`SupervisorError`]: https://stokes.io/kokage/api/kokage/enum.SupervisorError.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html
+[`MailboxShutdown`]: https://stokes.io/kokage/api/kokage/enum.MailboxShutdown.html
 [`TaskContext::abort_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.abort_token
-[`Context::shutdown_token`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.shutdown_token
+[`raw::RawContext::shutdown_token`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html#method.shutdown_token
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
 [`CancellationToken`]: https://stokes.io/kokage/api/kokage/struct.CancellationToken.html

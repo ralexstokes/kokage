@@ -64,10 +64,10 @@ impl Actor for FrontDesk {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (quotes_tx, mut quotes_rx) = mpsc::unbounded_channel();
-    let mut tree = OrderedTree::new();
-    let desk = tree.add_actor(ActorSpec::new("front-desk", move || FrontDesk {
+    let mut tree = Tree::new();
+    let desk = tree.add_actor("front-desk", move || FrontDesk {
         quotes: quotes_tx.clone(),
-    }));
+    });
     let runtime = tree.spawn()?;
 
     desk.send(DeskMsg::RestockPaper { reams: 40 }).await?;
