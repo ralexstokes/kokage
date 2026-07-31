@@ -163,12 +163,12 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
 /// Venue actors use a shallower mailbox than the core scope's default.
 const VENUE_MAILBOX: usize = 16;
 
-fn venue_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
-    ActorSlot::new(label).mailbox_capacity(VENUE_MAILBOX)
+fn venue_spec<M: Send + 'static>(spec: ActorSpec<M>) -> ActorSpec<M> {
+    spec.mailbox_capacity(VENUE_MAILBOX)
 }
 
-fn feed_slot(label: &str) -> ActorSlot<FeedMsg> {
-    venue_slot(label)
+fn feed_spec(spec: ActorSpec<FeedMsg>) -> ActorSpec<FeedMsg> {
+    venue_spec(spec)
         .mailbox(MailboxMode::conflate_by_key(feed_message_key))
         .message_size(messages::feed_message_size)
 }
@@ -219,13 +219,13 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let intake_gate = Arc::new(AtomicBool::new(true));
 
     // Open every slot first so cyclic factories can capture the stable refs.
-    let venue_a_feed_slot = feed_slot("venue-a-feed");
+    let venue_a_feed_slot = ActorSlot::new("venue-a-feed");
     let venue_a_feed = venue_a_feed_slot.actor_ref();
-    let venue_a_gateway_slot = venue_slot("venue-a-gateway");
+    let venue_a_gateway_slot = ActorSlot::new("venue-a-gateway");
     let venue_a_gateway = venue_a_gateway_slot.actor_ref();
-    let venue_b_feed_slot = feed_slot("venue-b-feed");
+    let venue_b_feed_slot = ActorSlot::new("venue-b-feed");
     let venue_b_feed = venue_b_feed_slot.actor_ref();
-    let venue_b_gateway_slot = venue_slot("venue-b-gateway");
+    let venue_b_gateway_slot = ActorSlot::new("venue-b-gateway");
     let venue_b_gateway = venue_b_gateway_slot.actor_ref();
     let reconciler_slot = ActorSlot::<ReconcilerMsg>::new("reconciler");
     let reconciler = reconciler_slot.actor_ref();
@@ -283,30 +283,30 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         move || Health::new(control.clone())
     });
 
-    let venue_a_feed_actor = venue_a_feed_slot.define(VenueFeedFactory {
+    let venue_a_feed_actor = feed_spec(venue_a_feed_slot.define(VenueFeedFactory {
         venue: VENUE_A,
         exchange: venue_a.clone(),
         reconciler: reconciler.clone(),
         latency: latency.clone(),
-    });
-    let venue_a_gateway_actor = venue_a_gateway_slot.define(VenueGatewayFactory {
+    }));
+    let venue_a_gateway_actor = venue_spec(venue_a_gateway_slot.define(VenueGatewayFactory {
         venue: VENUE_A,
         exchange: venue_a.clone(),
         ledger: ledger.clone(),
         latency: latency.clone(),
-    });
-    let venue_b_feed_actor = venue_b_feed_slot.define(VenueFeedFactory {
+    }));
+    let venue_b_feed_actor = feed_spec(venue_b_feed_slot.define(VenueFeedFactory {
         venue: VENUE_B,
         exchange: venue_b.clone(),
         reconciler: reconciler.clone(),
         latency: latency.clone(),
-    });
-    let venue_b_gateway_actor = venue_b_gateway_slot.define(VenueGatewayFactory {
+    }));
+    let venue_b_gateway_actor = venue_spec(venue_b_gateway_slot.define(VenueGatewayFactory {
         venue: VENUE_B,
         exchange: venue_b.clone(),
         ledger: ledger.clone(),
         latency: latency.clone(),
-    });
+    }));
 
     let venues = OrderedTree::new()
         .default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)))

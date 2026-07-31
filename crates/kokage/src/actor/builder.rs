@@ -358,13 +358,10 @@ impl fmt::Debug for ActorNode {
 ///
 /// Create the slot and its ref before factories that close a cycle, then pass
 /// the factory to [`define`](Self::define) to obtain an ordinary [`ActorSpec`].
-/// A slot has the same fluent configuration vocabulary as `ActorSpec`.
+/// Apply mailbox and supervision configuration to that returned spec.
 pub struct ActorSlot<M: Send + 'static> {
     actor_id: Arc<str>,
     binding: OnceLock<Arc<BindingCore<M>>>,
-    actor_options: ActorOptions<M>,
-    restart: Option<Restart>,
-    shutdown: Option<Shutdown>,
 }
 
 impl<M: Send + 'static> ActorSlot<M> {
@@ -373,16 +370,14 @@ impl<M: Send + 'static> ActorSlot<M> {
         Self {
             actor_id: Arc::from(actor_id.into()),
             binding: OnceLock::new(),
-            actor_options: ActorOptions::new(),
-            restart: None,
-            shutdown: None,
         }
     }
 
     /// Returns a restart-stable typed ref for this slot.
     ///
-    /// This borrows the slot and can be called repeatedly. Configuration
-    /// remains mutable until [`define`](Self::define) consumes the slot.
+    /// This borrows the slot and can be called repeatedly. After
+    /// [`define`](Self::define) consumes the slot, configure the returned
+    /// [`ActorSpec`] before placing it.
     pub fn actor_ref(&self) -> ActorRef<M> {
         ActorRef::from_core(self.binding(), None)
     }
@@ -390,44 +385,6 @@ impl<M: Send + 'static> ActorSlot<M> {
     fn binding(&self) -> &Arc<BindingCore<M>> {
         self.binding
             .get_or_init(|| Arc::new(BindingCore::new(Arc::clone(&self.actor_id))))
-    }
-
-    /// Overrides the hosting scope's default mailbox capacity for this slot.
-    #[must_use]
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.actor_options = self.actor_options.mailbox_capacity(capacity);
-        self
-    }
-
-    /// Selects the slot's mailbox storage policy.
-    #[must_use]
-    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
-        self.actor_options = self.actor_options.mailbox(mailbox);
-        self
-    }
-
-    /// Enables accepted-message byte observation for this slot.
-    #[must_use]
-    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
-        self.actor_options = self.actor_options.message_size(size_hint);
-        self
-    }
-
-    /// Overrides the enclosing scope's complete restart declaration.
-    ///
-    /// This replaces the inherited mode, budget, backoff, and terminal-removal
-    /// behavior. Restate any scope-level values this actor should retain.
-    #[must_use]
-    pub fn restart(mut self, restart: Restart) -> Self {
-        self.restart = Some(restart);
-        self
-    }
-
-    /// Overrides the enclosing scope's shutdown policy.
-    #[must_use]
-    pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
-        self.shutdown = Some(shutdown);
-        self
     }
 
     /// Defines this cyclic-wiring slot into an ordinary actor declaration.
@@ -444,9 +401,9 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_id: self.actor_id,
             binding: self.binding,
             factory: Box::new(factory),
-            actor_options: self.actor_options,
-            restart: self.restart,
-            shutdown: self.shutdown,
+            actor_options: ActorOptions::new(),
+            restart: None,
+            shutdown: None,
         }
     }
 }
@@ -562,9 +519,9 @@ mod tests {
         let slot = ActorSlot::<OpaqueMessage>::new("slot");
         let _actor_ref = slot.actor_ref();
         let spec = slot
+            .define(|| OpaqueActor)
             .restart(Restart::always())
-            .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)))
-            .define(|| OpaqueActor);
+            .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)));
         assert_eq!(spec.restart, Some(Restart::always()));
         assert_eq!(
             spec.shutdown,

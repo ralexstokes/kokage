@@ -159,8 +159,8 @@ in snapshots and lifecycle watches but not actor stats.
 ## Cycles remain typed
 
 Use `ActorSlot` when factories form a cycle. Mint every ref, define the slots,
-then place the returned specs in whichever scopes express the intended failure
-relationships. Wiring does not choose topology.
+configure the returned specs, then place them in whichever scopes express the
+intended failure relationships. Wiring does not choose topology.
 
 ## Dynamic membership
 

@@ -1354,17 +1354,20 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
     let handling_gate = Arc::new(Notify::new());
     let release_gate = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
-    let worker_slot =
-        ActorSlot::new("worker").shutdown(Shutdown::drain_for(Duration::from_millis(20)));
+    let worker_slot = ActorSlot::new("worker");
     let worker = worker_slot.actor_ref();
-    graph.define(worker_slot, {
-        let handling_gate = handling_gate.clone();
-        let release_gate = release_gate.clone();
-        move || StuckDrainActor {
-            handling_gate: handling_gate.clone(),
-            release_gate: release_gate.clone(),
-        }
-    });
+    graph.actor(
+        worker_slot
+            .define({
+                let handling_gate = handling_gate.clone();
+                let release_gate = release_gate.clone();
+                move || StuckDrainActor {
+                    handling_gate: handling_gate.clone(),
+                    release_gate: release_gate.clone(),
+                }
+            })
+            .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
+    );
     let handle = graph.build().spawn().expect("runtime builds");
 
     worker

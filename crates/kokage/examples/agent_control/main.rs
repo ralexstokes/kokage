@@ -152,8 +152,8 @@ type AnyError = Box<dyn Error + Send + Sync>;
 /// Gateway actors use a shallower mailbox than the core scope's default.
 const GATEWAY_MAILBOX: usize = 32;
 
-fn gateway_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
-    ActorSlot::new(label).mailbox_capacity(GATEWAY_MAILBOX)
+fn gateway_spec<M: Send + 'static>(spec: ActorSpec<M>) -> ActorSpec<M> {
+    spec.mailbox_capacity(GATEWAY_MAILBOX)
 }
 
 struct App {
@@ -208,15 +208,12 @@ async fn build_app() -> Result<App, AnyError> {
     let session_epoch = Arc::new(AtomicU64::new(0));
 
     // Open every slot first so cyclic factories can capture the stable refs.
-    let outbound_slot = gateway_slot::<OutboundMsg>("outbound");
+    let outbound_slot = ActorSlot::<OutboundMsg>::new("outbound");
     let outbound = outbound_slot.actor_ref();
-    let progress_slot = gateway_slot::<ProgressMsg>("progress").mailbox(
-        MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat()),
-    );
+    let progress_slot = ActorSlot::<ProgressMsg>::new("progress");
     let progress = progress_slot.actor_ref();
-    let inbound_slot = gateway_slot::<InboundMsg>("inbound");
-    let journal_slot =
-        ActorSlot::<JournalMsg>::new("journal").message_size(messages::journal_message_size);
+    let inbound_slot = ActorSlot::<InboundMsg>::new("inbound");
+    let journal_slot = ActorSlot::<JournalMsg>::new("journal");
     let journal = journal_slot.actor_ref();
     let budget_slot = ActorSlot::<BudgetMsg>::new("budget");
     let budget = budget_slot.actor_ref();
@@ -252,21 +249,29 @@ async fn build_app() -> Result<App, AnyError> {
         session_epoch: session_epoch.clone(),
         proof: proof.clone(),
     });
-    let outbound_actor = outbound_slot.define({
+    let outbound_actor = gateway_spec(outbound_slot.define({
         let chat = chat.clone();
         move || Outbound::new(chat.clone())
-    });
-    let progress_actor = progress_slot.define({
-        let chat = chat.clone();
-        move || Progress::new(chat.clone())
-    });
-    let inbound_actor = inbound_slot.define({
+    }));
+    let progress_actor = gateway_spec(
+        progress_slot
+            .define({
+                let chat = chat.clone();
+                move || Progress::new(chat.clone())
+            })
+            .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
+                message.chat()
+            })),
+    );
+    let inbound_actor = gateway_spec(inbound_slot.define({
         let chat = chat.clone();
         let journal = journal.clone();
         let router = router.clone();
         move || Inbound::new(chat.clone(), journal.clone(), router.clone())
-    });
-    let journal_actor = journal_slot.define(Journal::default);
+    }));
+    let journal_actor = journal_slot
+        .define(Journal::default)
+        .message_size(messages::journal_message_size);
 
     let gateway_tree = OrderedTree::new()
         .strategy(Strategy::RestForOne)

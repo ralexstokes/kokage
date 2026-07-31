@@ -37,7 +37,8 @@ before adding mailbox or policy options.
 
 When factories refer to each other, create all `ActorSlot` values and refs
 first. `define` consumes a slot and returns its `ActorSpec`, making a
-partially defined declaration structurally impossible:
+partially defined declaration structurally impossible. Configure mailbox and
+supervision policy on that returned spec:
 
 ```rust
 # use kokage::{ActorSlot, prelude::*};
@@ -53,7 +54,7 @@ let right = right_slot.actor_ref();
 let left_actor = left_slot.define({
     let right = right.clone();
     move || Left(right.clone())
-});
+}).mailbox_capacity(32);
 let right_actor = right_slot.define({
     let left = left.clone();
     move || Right(left.clone())
@@ -66,7 +67,9 @@ let tree = OrderedTree::new()
 ```
 
 Rust checks the slot message type and prevents defining the same slot twice.
-The tree checks placement rules when it is spawned or inserted.
+The slot itself only mints the ref and accepts the factory; the returned spec
+has the same configuration vocabulary as every other actor declaration. The
+tree checks placement rules when it is spawned or inserted.
 
 ## Incarnation-local state
 
