@@ -354,7 +354,7 @@ pub enum ExitStatus {
         /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
-    /// The child task was aborted by the supervisor.
+    /// The child task was aborted by its controller.
     Aborted {
         /// Whether cooperative shutdown exhausted its grace period first.
         after_grace: bool,
@@ -399,7 +399,7 @@ impl ExitStatus {
         matches!(self, Self::Panicked { .. })
     }
 
-    /// Returns whether the supervisor aborted the child after its grace
+    /// Returns whether the controller aborted the child after its grace
     /// period expired.
     pub fn timed_out(&self) -> bool {
         matches!(
@@ -411,7 +411,7 @@ impl ExitStatus {
         )
     }
 
-    /// Returns whether the supervisor stopped this generation.
+    /// Returns whether shutdown was requested for this generation.
     pub fn cancelled(&self) -> bool {
         match self {
             Self::Completed { cancelled }

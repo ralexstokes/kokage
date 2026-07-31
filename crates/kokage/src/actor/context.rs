@@ -28,7 +28,7 @@ use crate::actor::{
     },
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind},
     handler::Actor,
-    monitor::{ActorMonitors, MonitorEvent, MonitorHub},
+    monitor::{ActorMonitorLease, MonitorEvent, MonitorHub},
     observability::{MessageOperation, MessageRejection, ScopeObservability, trace_actor_message},
 };
 
@@ -738,7 +738,7 @@ pub struct RawContext<M> {
     pub(crate) observability: ScopeObservability,
     pub(crate) timers: TimerTable<M>,
     pub(crate) lifetime: ActorLifetime,
-    pub(crate) monitors: Arc<ActorMonitors>,
+    pub(crate) monitors: ActorMonitorLease,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
     pub(crate) stop_requested: bool,
@@ -1633,12 +1633,15 @@ mod tests {
         let core = Arc::new(BindingCore::new(Arc::clone(&actor_id)));
         let actor = ActorRef::from_core(&core, None);
         let (sender, mut receiver) = mailbox(&MailboxMode::conflate(), 1);
+        let monitor_run = core.monitor_run();
         let _binding = BindingGuard::bind(
             Arc::clone(&core),
             MailboxRef::new(actor_id, sender),
+            &monitor_run,
             ScopeObservability::new(),
             RestartPolicy::never(),
-        );
+        )
+        .expect("unterminated binding accepts its first run");
         receiver.close_external();
 
         let output = capture_tracing_output(|| {

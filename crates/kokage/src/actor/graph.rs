@@ -3,7 +3,7 @@ use std::{
     io::Error as IoError,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -26,6 +26,7 @@ use crate::{
         },
         context::{ActorLifetime, ActorRef, RawContext},
         factory::ActorFactory,
+        monitor::MonitorRun,
         observability::{ActorExitStatus, ScopeObservability},
         raw::{BoxError, RawActor},
     },
@@ -44,6 +45,7 @@ pub(crate) struct RunnerStart {
     pub(crate) drain_messages: bool,
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: ScopeRef,
+    exit_reporter: ActorExitReporter,
 }
 
 /// Type-erased actor runner.
@@ -100,17 +102,21 @@ where
 
         Box::pin(async move {
             let actor_shutdown = start.shutdown;
-            let monitors = binding.outbound_monitors();
             let observability = start.observability;
             let (sender, mailbox) = mailbox(&mailbox_mode, start.mailbox_capacity);
             let actor_id = binding.actor_id().clone();
             let incarnation = MailboxRef::new(actor_id.clone(), sender);
-            let bound_mailbox = BindingGuard::bind(
+            let exit_report = ActorTaskExitGuard::new(start.exit_reporter);
+            let Some(bound_mailbox) = BindingGuard::bind(
                 binding.clone(),
                 incarnation.clone(),
+                exit_report.monitor_run(),
                 observability.clone(),
                 start.restart_policy,
-            );
+            ) else {
+                return Ok(());
+            };
+            let monitors = bound_mailbox.monitor_lease();
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
             let mut ctx = RawContext {
                 id: actor_id,
@@ -137,7 +143,10 @@ where
                 ctx.mark_ready();
             }
             let _bound_mailbox = bound_mailbox;
-            actor.run(ctx).await
+            let result = actor.run(ctx).await;
+            drop(actor);
+            exit_report.report_result(&result);
+            result
         })
     }
 }
@@ -385,8 +394,11 @@ impl ActorHost {
             .run_incarnation_until_ready(
                 bounded_shutdown,
                 abort,
-                RestartPolicy::always(),
-                self.mailbox_shutdown.drains(),
+                IncarnationControl {
+                    restart: RestartPolicy::always(),
+                    drain_messages: self.mailbox_shutdown.drains(),
+                    dropped_is_cancelled: false,
+                },
                 ScopeRef::unavailable(),
                 || {},
             )
@@ -421,6 +433,144 @@ struct RunnableActorInner {
     mailbox_capacity: usize,
     observability: ScopeObservability,
     running: AtomicBool,
+}
+
+#[derive(Clone)]
+struct ActorExitReporter {
+    inner: Arc<ActorExitReporterInner>,
+}
+
+struct ActorExitReporterInner {
+    monitor_run: MonitorRun,
+    state: Mutex<ActorExitReportState>,
+}
+
+struct ActorExitReportState {
+    fallback: ExitStatus,
+    shutdown_requested: bool,
+    reported: bool,
+}
+
+impl ActorExitReporter {
+    fn new(monitor_run: MonitorRun, dropped_is_cancelled: bool) -> Self {
+        Self {
+            inner: Arc::new(ActorExitReporterInner {
+                monitor_run,
+                state: Mutex::new(ActorExitReportState {
+                    fallback: ExitStatus::Aborted {
+                        after_grace: false,
+                        cancelled: dropped_is_cancelled,
+                    },
+                    shutdown_requested: false,
+                    reported: false,
+                }),
+            }),
+        }
+    }
+
+    fn shutdown_requested(&mut self) {
+        let mut state = self.state();
+        if !state.reported {
+            state.shutdown_requested = true;
+            if let ExitStatus::Aborted { cancelled, .. } = &mut state.fallback {
+                *cancelled = true;
+            }
+        }
+    }
+
+    fn aborted(&mut self, after_grace: bool) {
+        let mut state = self.state();
+        if !state.reported {
+            state.shutdown_requested = true;
+            state.fallback = ExitStatus::Aborted {
+                after_grace,
+                cancelled: true,
+            };
+        }
+    }
+
+    fn report_result(&self, result: &Result<(), BoxError>) {
+        let message = result.as_ref().err().map(ToString::to_string);
+        let Some(cancelled) = self.claim() else {
+            return;
+        };
+        let status = match message {
+            Some(message) => ExitStatus::Failed { message, cancelled },
+            None => ExitStatus::Completed { cancelled },
+        };
+        self.inner.monitor_run.exited(status);
+    }
+
+    fn report_panicked(&self) {
+        let Some(cancelled) = self.claim() else {
+            return;
+        };
+        self.inner
+            .monitor_run
+            .exited(ExitStatus::Panicked { cancelled });
+    }
+
+    fn report_fallback(&self) {
+        let status = {
+            let mut state = self.state();
+            if state.reported {
+                return;
+            }
+            state.reported = true;
+            state.fallback.clone()
+        };
+        self.inner.monitor_run.exited(status);
+    }
+
+    fn claim(&self) -> Option<bool> {
+        let mut state = self.state();
+        if state.reported {
+            return None;
+        }
+        state.reported = true;
+        Some(state.shutdown_requested)
+    }
+
+    fn state(&self) -> MutexGuard<'_, ActorExitReportState> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+struct ActorTaskExitGuard {
+    reporter: ActorExitReporter,
+}
+
+impl ActorTaskExitGuard {
+    fn new(reporter: ActorExitReporter) -> Self {
+        Self { reporter }
+    }
+
+    fn report_result(&self, result: &Result<(), BoxError>) {
+        self.reporter.report_result(result);
+    }
+
+    fn monitor_run(&self) -> &MonitorRun {
+        &self.reporter.inner.monitor_run
+    }
+}
+
+impl Drop for ActorTaskExitGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.reporter.report_panicked();
+        } else {
+            self.reporter.report_fallback();
+        }
+    }
+}
+
+struct IncarnationControl {
+    restart: RestartPolicy,
+    drain_messages: bool,
+    dropped_is_cancelled: bool,
 }
 
 pub(crate) struct RunnableActorParts {
@@ -476,8 +626,11 @@ impl RunnableActor {
             .run_incarnation_until_ready(
                 shutdown,
                 abort,
-                restart,
-                drain_messages,
+                IncarnationControl {
+                    restart,
+                    drain_messages,
+                    dropped_is_cancelled: true,
+                },
                 supervisor,
                 ready,
             )
@@ -494,8 +647,7 @@ impl RunnableActor {
         &self,
         shutdown: F,
         abort: A,
-        restart_on_drop: RestartPolicy,
-        drain_messages: bool,
+        control: IncarnationControl,
         supervisor: ScopeRef,
         ready: R,
     ) -> IncarnationExit
@@ -514,6 +666,8 @@ impl RunnableActor {
         let actor_shutdown = CancellationToken::new();
         let mut shutdown = std::pin::pin!(shutdown);
         let mut abort = std::pin::pin!(abort);
+        let monitor_run = self.inner.binding_lifecycle.monitor_run();
+        let mut exit_reporter = ActorExitReporter::new(monitor_run, control.dropped_is_cancelled);
         let actor_span = self.inner.observability.actor_span(&actor_id);
         let (ready_tx, mut ready_rx) = oneshot::channel();
         let mut actor_task = AbortOnDropHandle::new(tokio::spawn(
@@ -523,10 +677,11 @@ impl RunnableActor {
                     shutdown: actor_shutdown.clone(),
                     mailbox_capacity: self.inner.mailbox_capacity,
                     observability: self.inner.observability.clone(),
-                    restart_policy: restart_on_drop,
-                    drain_messages,
+                    restart_policy: control.restart,
+                    drain_messages: control.drain_messages,
                     ready: ready_tx,
                     supervisor,
+                    exit_reporter: exit_reporter.clone(),
                 })
                 .instrument(actor_span),
         ));
@@ -536,7 +691,6 @@ impl RunnableActor {
 
         let mut shutdown_requested = false;
         let mut shutdown_timed_out = false;
-        let mut abort_after_grace = false;
         let mut ready = Some(ready);
         let result = loop {
             tokio::select! {
@@ -548,14 +702,15 @@ impl RunnableActor {
                     }
                 }
                 after_grace = abort.as_mut(), if !shutdown_timed_out => {
+                    exit_reporter.aborted(after_grace);
                     shutdown_requested = true;
                     shutdown_timed_out = true;
-                    abort_after_grace = after_grace;
                     actor_shutdown.cancel();
                     actor_task.abort();
                 }
                 joined = &mut actor_task => break joined,
                 _ = shutdown.as_mut(), if !shutdown_requested => {
+                    exit_reporter.shutdown_requested();
                     shutdown_requested = true;
                     actor_shutdown.cancel();
                 }
@@ -564,11 +719,6 @@ impl RunnableActor {
 
         match result {
             Ok(Ok(())) => {
-                self.inner
-                    .binding_lifecycle
-                    .report_exit(ExitStatus::Completed {
-                        cancelled: shutdown_requested,
-                    });
                 let status = if shutdown_requested {
                     ActorExitStatus::Shutdown
                 } else {
@@ -584,12 +734,6 @@ impl RunnableActor {
                 }
             }
             Ok(Err(source)) => {
-                self.inner
-                    .binding_lifecycle
-                    .report_exit(ExitStatus::Failed {
-                        message: source.to_string(),
-                        cancelled: shutdown_requested,
-                    });
                 let error = ActorRunError::Failed {
                     actor_id: actor_id.to_string(),
                     source,
@@ -602,11 +746,6 @@ impl RunnableActor {
                 IncarnationExit::Failed(error)
             }
             Err(err) if err.is_panic() => {
-                self.inner
-                    .binding_lifecycle
-                    .report_exit(ExitStatus::Panicked {
-                        cancelled: shutdown_requested,
-                    });
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
                     ActorExitStatus::Panicked,
@@ -620,12 +759,6 @@ impl RunnableActor {
                 std::panic::resume_unwind(err.into_panic());
             }
             Err(_err) if shutdown_timed_out => {
-                self.inner
-                    .binding_lifecycle
-                    .report_exit(ExitStatus::Aborted {
-                        after_grace: abort_after_grace,
-                        cancelled: true,
-                    });
                 let error = ActorRunError::ShutdownTimedOut {
                     actor_id: actor_id.to_string(),
                 };
@@ -637,12 +770,6 @@ impl RunnableActor {
                 IncarnationExit::Failed(error)
             }
             Err(_err) => {
-                self.inner
-                    .binding_lifecycle
-                    .report_exit(ExitStatus::Aborted {
-                        after_grace: false,
-                        cancelled: shutdown_requested,
-                    });
                 let source: BoxError = Box::new(IoError::other(format!(
                     "actor `{actor_id}` task was cancelled"
                 )));
