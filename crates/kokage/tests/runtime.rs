@@ -297,7 +297,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     dynamic_scope
-        .remove_child("dynamic-worker")
+        .remove_actor(&dynamic)
         .await
         .expect("nested actor removed through runtime handle");
     assert!(
@@ -309,7 +309,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     raw_members
-        .remove_child("raw")
+        .remove_child_named("raw")
         .await
         .expect("raw supervisor removed");
 
@@ -379,7 +379,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     assert_eq!(root.scope().actor_stats().len(), 1);
     assert!(middle.subtree("leaf").is_some());
     support::dynamic_root(&root)
-        .remove_child("middle")
+        .remove_child_named("middle")
         .await
         .expect("middle subtree removed");
     assert!(root.scope().subtree("middle").is_none());
@@ -505,7 +505,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     });
 
     support::dynamic_root(&handle)
-        .remove_child("worker")
+        .remove_child_named("worker")
         .await
         .expect("tracked actor removed through runtime handle");
     support::dynamic_root(&handle)
@@ -1428,7 +1428,10 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("runtime-added actor reported in runtime stats");
     assert_eq!(extra_stats.stats.messages_accepted, 1);
 
-    dynamic.remove_child("extra").await.expect("actor removed");
+    dynamic
+        .remove_child_named("extra")
+        .await
+        .expect("actor removed");
     let stats = handle.scope().actor_stats();
     assert!(
         stats.iter().all(|stats| stats.stats.actor_id != "extra"),

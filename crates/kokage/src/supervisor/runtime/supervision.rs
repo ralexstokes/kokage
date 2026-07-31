@@ -934,7 +934,11 @@ impl SupervisorRuntime {
             SupervisorCommand::AddChild { child, reply } => {
                 complete_command(reply, self.add_child(child))
             }
-            SupervisorCommand::RemoveChild { id, reply } => self.remove_child(id, reply),
+            SupervisorCommand::RemoveChild {
+                id,
+                expected_lineage,
+                reply,
+            } => self.remove_child(id, expected_lineage, reply),
             SupervisorCommand::AddNested { child, reply } => {
                 complete_command(reply, self.add_nested(child))
             }
@@ -1088,6 +1092,7 @@ impl SupervisorRuntime {
     fn remove_child(
         &mut self,
         id: String,
+        expected_lineage: Option<u64>,
         reply: oneshot::Sender<Result<(), ControlError>>,
     ) -> RuntimeResult<()> {
         self.assert_dynamic_membership();
@@ -1096,6 +1101,11 @@ impl SupervisorRuntime {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));
             return Ok(());
         };
+
+        if expected_lineage.is_some_and(|lineage| self.children[key].lineage != lineage) {
+            let _ = reply.send(Err(ControlError::UnknownChildId(id)));
+            return Ok(());
+        }
 
         if self.children[key].membership == MembershipState::Removing {
             let _ = reply.send(Err(ControlError::ChildRemovalInProgress(id)));

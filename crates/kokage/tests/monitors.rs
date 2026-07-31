@@ -1825,7 +1825,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
 
     support::dynamic_root(&running_tree)
-        .remove_child("peer")
+        .remove_child_named("peer")
         .await
         .expect("peer removed by abort");
     let notification = expect_exited(next_event(&mut observed).await);

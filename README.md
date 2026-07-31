@@ -95,8 +95,9 @@ an `ActorRef`. `ScopeRef` is the common observation and control surface:
 snapshots, lifecycle observation, subtree traversal, and either non-waiting
 `request_shutdown()` or waiting `shutdown().await`. Dynamic scopes
 return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
-`add_task`, `spawn_once`, and `remove_child`. A scope found through untyped tree
-traversal can request that capability with `scope.dynamic()`.
+`add_task`, `spawn_once`, exact-handle removal, and the `remove_child_named`
+escape hatch. A scope found through untyped tree traversal can request that
+capability with `scope.dynamic()`.
 
 The common actor operations own their natural lifetimes:
 

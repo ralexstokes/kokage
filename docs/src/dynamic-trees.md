@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     acme.send("letterhead x1000".to_owned()).await?;
 
     // Contract over: the press drains its queue and leaves the tree.
-    scope.remove_child("acme-press").await?;
+    scope.remove_actor(&acme).await?;
 
     running_tree.shutdown().await?;
     Ok(())
@@ -55,8 +55,11 @@ they belong to ordered scopes. Membership is managed through the
   subtree, and get back the new scope's `ScopeRef`.
 - `scope.add_dynamic_subtree(id, tree).await?` — retain a nested dynamic
   subtree's `DynamicScopeRef` directly.
-- `scope.remove_child(id).await?` — stop (honoring the child's shutdown
-  policy, so a draining child finishes its queue) and remove.
+- `scope.remove_actor(&actor).await?`, `remove_task(&task)`, or
+  `remove_subtree(&subtree)` — stop and remove the exact membership represented
+  by a returned handle. A stale handle cannot remove a same-id replacement.
+- `scope.remove_child_named(id).await?` — the id-based escape hatch for an
+  external registry or operator command.
 
 The adjacent `add_actor_spec`, `add_task_spec`, and `spawn_once_spec` forms
 accept explicitly configured declarations. `OneShotTaskSpec` preserves a

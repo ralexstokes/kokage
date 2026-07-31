@@ -1632,7 +1632,7 @@ mod actor_host {
             .expect("dynamic actor started");
         assert!(matches!(
             crate::support::dynamic_root(&running_tree)
-                .remove_child("worker")
+                .remove_child_named("worker")
                 .await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"

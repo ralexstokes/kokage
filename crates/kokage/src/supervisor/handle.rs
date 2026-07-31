@@ -39,9 +39,17 @@ impl ControlEndpoint {
             .await
     }
 
-    async fn remove_child(&self, id: String) -> Result<(), ControlError> {
-        self.send(|reply| SupervisorCommand::RemoveChild { id, reply })
-            .await
+    async fn remove_child(
+        &self,
+        id: String,
+        expected_lineage: Option<u64>,
+    ) -> Result<(), ControlError> {
+        self.send(|reply| SupervisorCommand::RemoveChild {
+            id,
+            expected_lineage,
+            reply,
+        })
+        .await
     }
 
     async fn add_nested(&self, child: PendingSupervisorChild) -> Result<u64, ControlError> {
@@ -1349,6 +1357,7 @@ pub(crate) enum SupervisorCommand {
     },
     RemoveChild {
         id: String,
+        expected_lineage: Option<u64>,
         reply: oneshot::Sender<Result<(), ControlError>>,
     },
     AddNested {
@@ -1406,6 +1415,10 @@ impl std::fmt::Debug for SupervisorHandle {
 }
 
 impl SupervisorHandle {
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.channels, &other.channels)
+    }
+
     pub(crate) fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
         self.channels.publish_snapshot(binding_epoch, snapshot);
     }
@@ -1514,7 +1527,18 @@ impl DynamicSupervisorHandle {
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.handle
             .control_endpoint()?
-            .remove_child(id.into())
+            .remove_child(id.into(), None)
+            .await
+    }
+
+    pub(crate) async fn remove_child_membership(
+        &self,
+        id: impl Into<String>,
+        lineage: u64,
+    ) -> Result<(), ControlError> {
+        self.handle
+            .control_endpoint()?
+            .remove_child(id.into(), Some(lineage))
             .await
     }
 }

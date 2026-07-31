@@ -316,13 +316,91 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     assert!(post_spawn.snapshot().child("worker").is_some());
     assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
     post_spawn
-        .remove_child("worker")
+        .remove_child_named("worker")
         .await
         .expect("post-spawn capability reaches the same membership");
     assert!(pre_spawn.snapshot().child("worker").is_none());
     assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
 
     dynamic_root.shutdown().await.expect("dynamic root stops");
+}
+
+#[tokio::test]
+async fn handle_removal_never_targets_a_same_id_replacement() {
+    let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
+    let scope = running_tree.scope();
+
+    let first_actor = scope
+        .add_actor("worker", || Idle)
+        .await
+        .expect("first actor added");
+    scope
+        .remove_actor(&first_actor)
+        .await
+        .expect("first actor removed");
+    let replacement_actor = scope
+        .add_actor("worker", || Idle)
+        .await
+        .expect("replacement actor added");
+    assert!(matches!(
+        scope.remove_actor(&first_actor).await,
+        Err(ControlError::UnknownChildId(id)) if id == "worker"
+    ));
+    assert!(scope.snapshot().child("worker").is_some());
+    scope
+        .remove_actor(&replacement_actor)
+        .await
+        .expect("replacement actor removed");
+
+    let task_factory = |ctx: kokage::TaskContext| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    };
+    let first_task = scope
+        .add_task("worker", task_factory)
+        .await
+        .expect("first task added");
+    scope
+        .remove_task(&first_task)
+        .await
+        .expect("first task removed");
+    let replacement_task = scope
+        .add_task("worker", task_factory)
+        .await
+        .expect("replacement task added");
+    assert!(matches!(
+        scope.remove_task(&first_task).await,
+        Err(ControlError::UnknownChildId(id)) if id == "worker"
+    ));
+    assert!(scope.snapshot().child("worker").is_some());
+    scope
+        .remove_task(&replacement_task)
+        .await
+        .expect("replacement task removed");
+
+    let first_subtree = scope
+        .add_subtree("worker", Tree::new())
+        .await
+        .expect("first subtree added");
+    scope
+        .remove_subtree(&first_subtree)
+        .await
+        .expect("first subtree removed");
+    let replacement_subtree = scope
+        .add_subtree("worker", Tree::new())
+        .await
+        .expect("replacement subtree added");
+    assert!(matches!(
+        scope.remove_subtree(&first_subtree).await,
+        Err(ControlError::Unavailable)
+    ));
+    assert!(scope.snapshot().child("worker").is_some());
+    scope
+        .remove_subtree(&replacement_subtree)
+        .await
+        .expect("replacement subtree removed");
+
+    running_tree.shutdown().await.expect("dynamic root stops");
 }
 
 #[tokio::test]

@@ -1016,9 +1016,9 @@ impl DynamicScopeRef {
 
     /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
-    /// The actor id is its direct supervisor child id, so it can be removed
-    /// later through [`DynamicScopeRef::remove_child`]. See [`crate::ActorFactory`] for
-    /// the incarnation lifecycle contract. Success means membership was
+    /// The returned ref identifies the exact membership and can be passed to
+    /// [`DynamicScopeRef::remove_actor`]. See [`crate::ActorFactory`] for the
+    /// incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
     /// the stronger readiness contract. A zero-capacity
@@ -1084,7 +1084,12 @@ impl DynamicScopeRef {
         Ok(actor_ref)
     }
 
-    /// Removes a child from the supervisor.
+    /// Removes the exact actor membership identified by `actor`.
+    ///
+    /// A stale ref never removes a same-id replacement. Use
+    /// [`remove_child_named`](Self::remove_child_named) when only the id is
+    /// available and targeting whichever membership currently owns it is
+    /// intentional.
     ///
     /// Removal marks the membership as removing and starts its configured
     /// shutdown. When cooperative shutdown completes within its grace period,
@@ -1118,7 +1123,78 @@ impl DynamicScopeRef {
     ///
     /// A stopped scope returns [`ControlError::Unavailable`], and
     /// operation failures are reported through the remaining variants.
-    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
+    pub async fn remove_actor<M>(&self, actor: &ActorRef<M>) -> Result<(), ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        let membership = __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                let attachment = attached.attachment();
+                if !attachment.belongs_to(&self.actors) {
+                    return None;
+                }
+                let RuntimeAttachmentKind::Actor(member) = &attachment.kind else {
+                    return None;
+                };
+                Arc::ptr_eq(member.identity(), actor.identity())
+                    .then(|| (identity.id.clone(), identity.lineage))
+            })
+            .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))?;
+        dynamic
+            .remove_child_membership(membership.0, membership.1)
+            .await
+    }
+
+    /// Removes the exact task membership identified by `task`.
+    ///
+    /// A stale ref never removes a same-id replacement.
+    pub async fn remove_task(&self, task: &TaskRef) -> Result<(), ControlError> {
+        if !self.supervisor.same_identity(&task.inner.scope.supervisor) {
+            return Err(ControlError::UnknownChildId(task.id().to_owned()));
+        }
+        self.dynamic_supervisor()?
+            .remove_child_membership(task.id(), task.inner.lineage)
+            .await
+    }
+
+    /// Removes the exact direct subtree membership identified by `subtree`.
+    ///
+    /// A stale or foreign scope handle never removes a same-id replacement.
+    pub async fn remove_subtree(&self, subtree: &ScopeRef) -> Result<(), ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        let membership = __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                let attachment = attached.attachment();
+                if !attachment.belongs_to(&self.actors)
+                    || !matches!(attachment.kind, RuntimeAttachmentKind::Subtree(_))
+                    || !attached
+                        .supervisor()
+                        .is_some_and(|member| member.same_identity(&subtree.supervisor))
+                {
+                    return None;
+                }
+                Some((identity.id.clone(), identity.lineage))
+            })
+            .ok_or(ControlError::Unavailable)?;
+        dynamic
+            .remove_child_membership(membership.0, membership.1)
+            .await
+    }
+
+    /// Removes whichever current child membership owns `id`.
+    ///
+    /// Prefer [`remove_actor`](Self::remove_actor),
+    /// [`remove_task`](Self::remove_task), or
+    /// [`remove_subtree`](Self::remove_subtree) when the insertion handle is
+    /// available. This name-based operation is the escape hatch for external
+    /// registries and operator input.
+    pub async fn remove_child_named(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.remove_child(id).await
     }
 }
@@ -1242,8 +1318,8 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicScopeRef, DynamicTree, ExitResult,
-        RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef, Tree,
+        Actor, ActorSpec, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
+        ExitResult, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef, Tree,
     };
 
     #[test]
@@ -1381,7 +1457,7 @@ mod tests {
             .lineage;
 
         dynamic
-            .remove_child("workers")
+            .remove_child_named("workers")
             .await
             .expect("first subtree removed");
         dynamic
@@ -1406,6 +1482,18 @@ mod tests {
             root.scope()
                 .subtree_membership("workers", Some(replacement_lineage))
                 .is_some()
+        );
+        assert!(matches!(
+            dynamic
+                .dynamic_supervisor()
+                .expect("dynamic supervisor")
+                .remove_child_membership("workers", first_lineage)
+                .await,
+            Err(ControlError::UnknownChildId(id)) if id == "workers"
+        ));
+        assert!(
+            root.scope().snapshot().child("workers").is_some(),
+            "a conditional remove cannot detach the replacement"
         );
 
         root.shutdown().await.expect("clean shutdown");

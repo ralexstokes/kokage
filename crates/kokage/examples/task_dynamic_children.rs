@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scope = running_tree.scope();
     let mut snapshots = scope.snapshots();
 
-    scope
+    let cache_warmer = scope
         .add_task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    scope.remove_child("cache-warmer").await?;
+    scope.remove_task(&cache_warmer).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
     let mut nested_snapshots = nested.snapshots();
-    nested
+    let nested_cache = nested
         .add_task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested.remove_child("nested-cache").await?;
+    nested.remove_task(&nested_cache).await?;
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),
