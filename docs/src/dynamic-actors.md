@@ -50,7 +50,7 @@ returns the typed ref. Success means startup was scheduled; use
 requires the actor to be ready.
 
 Terminal dynamic actors remain as inactive memberships by default. Select
-`Restart::remove_when_done()` on an `ActorSpec` for an ephemeral child that
+`ActorSpec::remove_when_done()` for an ephemeral child that
 removes itself after terminal exit; `remove_child` explicitly removes either
 kind.
 

@@ -37,9 +37,9 @@ If you know Erlang/OTP or Elixir, the concepts map directly:
 
 If you do not know OTP, the tutorial builds these pieces from scratch.
 
-One `Restart` value combines the exit mode, restart budget, backoff, and
-terminal-membership behavior. Call `limit` on whichever mode constructor fits
-the child; a child-level declaration replaces the enclosing scope's complete
+One `Restart` value combines the exit mode, restart budget, and backoff. Call
+`limit` on whichever mode constructor fits the child; a child-level declaration
+replaces the enclosing scope's complete
 restart default.
 
 An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox

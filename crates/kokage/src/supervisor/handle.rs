@@ -356,7 +356,7 @@ impl StableSupervisorChannels {
 
     pub(crate) fn project_declared_children(
         &self,
-        children: Vec<(String, crate::supervisor::Restart)>,
+        children: Vec<(String, crate::supervisor::Restart, bool)>,
     ) {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
@@ -374,19 +374,22 @@ impl StableSupervisorChannels {
             let children = children
                 .into_iter()
                 .enumerate()
-                .map(|(lineage, (id, restart_policy))| ChildSnapshot {
-                    id,
-                    lineage: lineage as u64,
-                    generation: 0,
-                    state: ChildStateView::Starting {
-                        previous_exit: None,
+                .map(
+                    |(lineage, (id, restart_policy, remove_when_done))| ChildSnapshot {
+                        id,
+                        lineage: lineage as u64,
+                        generation: 0,
+                        state: ChildStateView::Starting {
+                            previous_exit: None,
+                        },
+                        membership: ChildMembershipView::Active,
+                        restart_count: 0,
+                        restart_policy,
+                        remove_when_done,
+                        next_restart_in: None,
+                        supervisor: None,
                     },
-                    membership: ChildMembershipView::Active,
-                    restart_count: 0,
-                    restart_policy,
-                    next_restart_in: None,
-                    supervisor: None,
-                })
+                )
                 .collect::<Vec<_>>();
             if snapshot.children == children {
                 false

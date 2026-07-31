@@ -90,10 +90,9 @@ impl Backoff {
 
 /// Complete restart behavior for a supervised child.
 ///
-/// A single value selects which exits restart, the restart budget and delay,
-/// and whether a terminal dynamic membership is removed. The default is
-/// [`on_failure`](Self::on_failure), limited to five restarts within thirty
-/// seconds, with immediate retries and retained terminal membership.
+/// A single value selects which exits restart, the restart budget, and the
+/// delay between attempts. The default is [`on_failure`](Self::on_failure),
+/// limited to five restarts within thirty seconds, with immediate retries.
 ///
 /// With the `serde` feature, the `mode` field serializes as `Always` (every
 /// exit), `OnFailure` (only errors, panics, and aborts), or `Never` (at most
@@ -105,7 +104,6 @@ pub struct Restart {
     max_restarts: usize,
     within: Duration,
     backoff: Backoff,
-    remove_when_done: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -134,7 +132,6 @@ impl Restart {
             max_restarts: 5,
             within: Duration::from_secs(30),
             backoff: Backoff::none(),
-            remove_when_done: false,
         }
     }
 
@@ -168,13 +165,6 @@ impl Restart {
         self
     }
 
-    /// Removes the membership after an exit this policy does not restart.
-    #[must_use]
-    pub const fn remove_when_done(mut self) -> Self {
-        self.remove_when_done = true;
-        self
-    }
-
     pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
         match self.mode {
             RestartMode::Always => true,
@@ -189,10 +179,6 @@ impl Restart {
 
     pub(crate) const fn is_never(self) -> bool {
         matches!(self.mode, RestartMode::Never)
-    }
-
-    pub(crate) const fn remove_on_exit(self) -> bool {
-        self.remove_when_done
     }
 
     pub(crate) const fn max_restarts(self) -> usize {

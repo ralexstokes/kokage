@@ -675,6 +675,7 @@ impl SupervisionChild {
                 id: actor.label().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
+                remove_when_done: actor.remove_when_done,
             },
             Self::Task(child) => {
                 let (restart, shutdown) =
@@ -683,6 +684,7 @@ impl SupervisionChild {
                     id: child.id().to_owned(),
                     restart,
                     shutdown,
+                    remove_when_done: child.removes_when_done(),
                 }
             }
             Self::Scope {
@@ -717,6 +719,7 @@ impl SupervisionChild {
                     deferred: _,
                     restart,
                     shutdown,
+                    remove_when_done,
                 } = actors.materialize_actor_node(actor);
                 builder.child_spec(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
@@ -724,6 +727,7 @@ impl SupervisionChild {
                     ActorChildOptions::new(
                         restart.unwrap_or(default_restart),
                         shutdown.unwrap_or(default_shutdown),
+                        remove_when_done,
                     ),
                 ))
             }
@@ -797,20 +801,22 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             ScopeNode::Ordered { children, .. } => children
                 .iter()
                 .map(|child| {
-                    let restart = match child {
-                        SupervisionChild::Actor(actor) => {
-                            actor.restart.unwrap_or(config.default_restart)
-                        }
-                        SupervisionChild::Task(child) => {
+                    let (restart, remove_when_done) = match child {
+                        SupervisionChild::Actor(actor) => (
+                            actor.restart.unwrap_or(config.default_restart),
+                            actor.remove_when_done,
+                        ),
+                        SupervisionChild::Task(child) => (
                             child
                                 .resolved_policies(config.default_restart, config.default_shutdown)
-                                .0
-                        }
+                                .0,
+                            child.removes_when_done(),
+                        ),
                         SupervisionChild::Scope { restart, .. } => {
-                            restart.unwrap_or(config.default_restart)
+                            (restart.unwrap_or(config.default_restart), false)
                         }
                     };
-                    (child.declared_id().to_owned(), restart)
+                    (child.declared_id().to_owned(), restart, remove_when_done)
                 })
                 .collect(),
             ScopeNode::Dynamic { .. } => Vec::new(),
@@ -974,6 +980,9 @@ pub enum ChildOutline {
         restart: Restart,
         /// Resolved shutdown policy.
         shutdown: Shutdown,
+        /// Whether terminal membership is removed automatically.
+        #[cfg_attr(feature = "serde", serde(default))]
+        remove_when_done: bool,
     },
     /// An arbitrary task child.
     Task {
@@ -983,6 +992,9 @@ pub enum ChildOutline {
         restart: Restart,
         /// Shutdown policy.
         shutdown: Shutdown,
+        /// Whether terminal membership is removed automatically.
+        #[cfg_attr(feature = "serde", serde(default))]
+        remove_when_done: bool,
     },
     /// A nested ordered or dynamic scope.
     Scope {
@@ -1027,11 +1039,15 @@ mod outline_wire {
             id: String,
             restart: Restart,
             shutdown: Shutdown,
+            #[serde(default)]
+            remove_when_done: bool,
         },
         Task {
             id: String,
             restart: Restart,
             shutdown: Shutdown,
+            #[serde(default)]
+            remove_when_done: bool,
         },
         Scope {
             id: String,
@@ -1059,19 +1075,23 @@ mod outline_wire {
                         id,
                         restart,
                         shutdown,
+                        remove_when_done,
                     } => ChildOutline::Actor {
                         id,
                         restart,
                         shutdown,
+                        remove_when_done,
                     },
                     WireChild::Task {
                         id,
                         restart,
                         shutdown,
+                        remove_when_done,
                     } => ChildOutline::Task {
                         id,
                         restart,
                         shutdown,
+                        remove_when_done,
                     },
                     WireChild::Scope {
                         id,

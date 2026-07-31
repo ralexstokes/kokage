@@ -185,6 +185,7 @@ pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_options: ActorOptions<M>,
     pub(crate) restart: Option<Restart>,
     pub(crate) shutdown: Option<Shutdown>,
+    pub(crate) remove_when_done: bool,
 }
 
 impl<M: Send + 'static> ActorSpec<M> {
@@ -202,6 +203,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
+            remove_when_done: false,
         }
     }
 
@@ -238,8 +240,8 @@ impl<M: Send + 'static> ActorSpec<M> {
 
     /// Overrides the enclosing scope's complete restart declaration.
     ///
-    /// This replaces the inherited mode, budget, backoff, and terminal-removal
-    /// behavior. Restate any scope-level values this actor should retain.
+    /// This replaces the inherited mode, budget, and backoff. Restate any
+    /// scope-level values this actor should retain.
     #[must_use]
     pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);
@@ -250,6 +252,16 @@ impl<M: Send + 'static> ActorSpec<M> {
     #[must_use]
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = Some(shutdown);
+        self
+    }
+
+    /// Removes this membership after an exit its restart policy does not restart.
+    ///
+    /// By default a terminal child remains visible as an inactive membership.
+    /// This setting is independent of the selected [`Restart`] policy.
+    #[must_use]
+    pub fn remove_when_done(mut self) -> Self {
+        self.remove_when_done = true;
         self
     }
 
@@ -285,6 +297,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options,
             restart,
             shutdown,
+            remove_when_done,
         } = self;
         let deferred = DeferredActor(Box::new(DeferredActorSpec {
             actor_id,
@@ -297,6 +310,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             deferred: Some(deferred),
             restart,
             shutdown,
+            remove_when_done,
         }
     }
 }
@@ -307,6 +321,7 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
             .field("actor_id", &self.actor_id)
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
+            .field("remove_when_done", &self.remove_when_done)
             .finish_non_exhaustive()
     }
 }
@@ -317,6 +332,7 @@ pub(crate) struct ActorNode {
     pub(crate) deferred: Option<DeferredActor>,
     pub(crate) restart: Option<Restart>,
     pub(crate) shutdown: Option<Shutdown>,
+    pub(crate) remove_when_done: bool,
 }
 
 impl ActorNode {
@@ -350,6 +366,7 @@ impl fmt::Debug for ActorNode {
             .field("id", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
+            .field("remove_when_done", &self.remove_when_done)
             .finish()
     }
 }
@@ -404,6 +421,7 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
+            remove_when_done: false,
         }
     }
 }
@@ -512,9 +530,13 @@ mod tests {
     fn refs_do_not_end_declaration_configuration() {
         let spec = ActorSpec::new("spec", || OpaqueActor);
         let _actor_ref = spec.actor_ref();
-        let spec = spec.restart(Restart::never()).shutdown(Shutdown::abort());
+        let spec = spec
+            .restart(Restart::never())
+            .shutdown(Shutdown::abort())
+            .remove_when_done();
         assert_eq!(spec.restart, Some(Restart::never()));
         assert_eq!(spec.shutdown, Some(Shutdown::abort()));
+        assert!(spec.remove_when_done);
 
         let slot = ActorSlot::<OpaqueMessage>::new("slot");
         let _actor_ref = slot.actor_ref();
@@ -527,6 +549,7 @@ mod tests {
             spec.shutdown,
             Some(Shutdown::discard_after_current(Duration::from_secs(1)))
         );
+        assert!(!spec.remove_when_done);
     }
 
     #[test]

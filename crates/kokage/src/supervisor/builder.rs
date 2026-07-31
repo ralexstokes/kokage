@@ -86,7 +86,7 @@ impl OrderedSupervisorBuilder {
     /// the membership its own higher-level builders will lower to, and is
     /// superseded by the real declaration once the scope is built.
     #[doc(hidden)]
-    pub fn project_declared_children(&self, children: Vec<(String, Restart)>) {
+    pub fn project_declared_children(&self, children: Vec<(String, Restart, bool)>) {
         self.channels().project_declared_children(children);
     }
 

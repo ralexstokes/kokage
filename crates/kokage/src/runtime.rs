@@ -117,6 +117,7 @@ impl RuntimeAttachment {
 struct DynamicChildOptions {
     restart: Restart,
     shutdown: Shutdown,
+    remove_when_done: bool,
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
@@ -569,6 +570,7 @@ impl ScopeRef {
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
+            remove_when_done: spec.remove_when_done,
         };
         let actor = self.actors.make_actor(spec);
         self.add_constructed_actor(
@@ -593,7 +595,7 @@ impl ScopeRef {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            ActorChildOptions::new(options.restart, options.shutdown),
+            ActorChildOptions::new(options.restart, options.shutdown, options.remove_when_done),
         );
         dynamic.add_child_spec(child).await?;
 
@@ -671,11 +673,16 @@ impl Drop for TerminateBindingOnDrop {
 pub(crate) struct ActorChildOptions {
     pub(crate) restart: Restart,
     pub(crate) shutdown: Shutdown,
+    pub(crate) remove_when_done: bool,
 }
 
 impl ActorChildOptions {
-    pub(crate) fn new(restart: Restart, shutdown: Shutdown) -> Self {
-        Self { restart, shutdown }
+    pub(crate) fn new(restart: Restart, shutdown: Shutdown, remove_when_done: bool) -> Self {
+        Self {
+            restart,
+            shutdown,
+            remove_when_done,
+        }
     }
 }
 
@@ -684,13 +691,17 @@ pub(crate) fn actor_child_spec(
     owner: &Arc<ActorRuntimeState>,
     options: ActorChildOptions,
 ) -> ChildSpec {
-    let ActorChildOptions { restart, shutdown } = options;
+    let ActorChildOptions {
+        restart,
+        shutdown,
+        remove_when_done,
+    } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    TaskSpec::new(actor_id, move |ctx| {
+    let child = TaskSpec::new(actor_id, move |ctx| {
         let actor = child_guard.actor.clone();
         let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
         async move {
@@ -711,7 +722,12 @@ pub(crate) fn actor_child_spec(
     .attachment(attachment)
     .wait_for_ready()
     .restart(restart)
-    .shutdown(shutdown)
+    .shutdown(shutdown);
+    if remove_when_done {
+        child.remove_when_done()
+    } else {
+        child
+    }
 }
 
 fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
@@ -821,7 +837,8 @@ mod tests {
         let actor_ref = dynamic
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(Restart::never().remove_when_done()),
+                    .restart(Restart::never())
+                    .remove_when_done(),
             )
             .await
             .expect("dynamic actor is inserted");
