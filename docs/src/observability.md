@@ -42,8 +42,8 @@ subtree's local lineage sequence may therefore begin at zero even if its
 predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. Dynamically
-added task children receive lineages under the same rules, and publish them in
-snapshots and lifecycle events.
+added task children receive lineages under the same rules, and those lineages
+are published in snapshots and lifecycle events like any other child's.
 
 Readiness and exit details live inside `ChildSnapshot::state` rather than in
 parallel booleans and optional fields. `ChildStateView` exposes only details

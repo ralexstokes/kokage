@@ -25,7 +25,9 @@ pins the replacement of the former `host` module by `raw` and root exports.
 `send_error_types_removed.rs` keeps the superseded `TrySendError` and
 `SendTimeoutError` carriers absent. `actor_slot_configuration_removed.rs`
 pins that cyclic slots do not duplicate the configuration vocabulary of the
-`ActorSpec` returned by `define`.
+`ActorSpec` returned by `define`. `add_task_returns_unit.rs` pins that task
+insertion reports only success, keeping the lineage an internal identity read
+back through snapshots and lifecycle events.
 
 `declaration-unsealed/` contains compile-pass probes proving declarations can
 still be configured after one or more `actor_ref()` calls. For a slot, the
