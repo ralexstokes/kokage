@@ -197,7 +197,7 @@ impl<M> ActorRef<M> {
                         Some(MessageRejection::Timeout),
                     );
                     self.stats.record_send(false);
-                    return Err(self.send_timed_out(message));
+                    return Err(self.send_error(message, SendErrorKind::TimedOut));
                 }
                 mailbox = self.wait_for_next_mailbox(&mut binding) => match mailbox {
                     Ok(mailbox) => mailbox,
@@ -207,7 +207,7 @@ impl<M> ActorRef<M> {
                             Some(MessageRejection::ActorTerminated),
                         );
                         self.stats.record_send(false);
-                        return Err(self.actor_send_timeout_terminated(message));
+                        return Err(self.send_error(message, SendErrorKind::Terminated));
                     }
                 }
             };
@@ -241,7 +241,7 @@ impl<M> ActorRef<M> {
                                 Some(MessageRejection::Timeout),
                             );
                             self.stats.record_send(false);
-                            return Err(self.send_timed_out(message));
+                            return Err(self.send_error(message, SendErrorKind::TimedOut));
                         }
                         rebound = self.wait_for_rebind_or_termination(&mut binding, &mailbox) => {
                             rebound
@@ -253,7 +253,7 @@ impl<M> ActorRef<M> {
                             Some(MessageRejection::ActorTerminated),
                         );
                         self.stats.record_send(false);
-                        return Err(self.actor_send_timeout_terminated(message));
+                        return Err(self.send_error(message, SendErrorKind::Terminated));
                     }
                 }
                 TimedSendOutcome::Timeout(returned) => {
@@ -262,7 +262,7 @@ impl<M> ActorRef<M> {
                         Some(MessageRejection::Timeout),
                     );
                     self.stats.record_send(false);
-                    return Err(self.send_timed_out(returned));
+                    return Err(self.send_error(returned, SendErrorKind::TimedOut));
                 }
             }
         }
@@ -288,7 +288,7 @@ impl<M> ActorRef<M> {
                         Some(MessageRejection::ActorTerminated),
                     );
                     self.stats.record_send(false);
-                    return Err(self.actor_terminated(message));
+                    return Err(self.send_error(message, SendErrorKind::Terminated));
                 }
             };
             // Materialization installs the observer before binding the first
@@ -322,7 +322,7 @@ impl<M> ActorRef<M> {
                             Some(MessageRejection::ActorTerminated),
                         );
                         self.stats.record_send(false);
-                        return Err(self.actor_terminated(message));
+                        return Err(self.send_error(message, SendErrorKind::Terminated));
                     }
                 }
             }
@@ -345,32 +345,28 @@ impl<M> ActorRef<M> {
         let mailbox = match binding {
             BindingState::Bound(mailbox) => mailbox,
             BindingState::Unbound if self.binding.has_changed().is_err() => {
-                let error = self.actor_try_send_terminated(message);
+                let error = self.send_error(message, SendErrorKind::Terminated);
                 self.observe_send(
                     MessageOperation::TrySend,
-                    Some(send_error_rejection(&error)),
+                    Some(send_error_rejection(error.kind)),
                 );
                 self.stats.record_send(false);
                 return Err(error);
             }
             BindingState::Unbound => {
-                let error = SendError {
-                    actor_id: self.actor_id.to_string(),
-                    message,
-                    kind: SendErrorKind::NotRunning,
-                };
+                let error = self.send_error(message, SendErrorKind::NotRunning);
                 self.observe_send(
                     MessageOperation::TrySend,
-                    Some(send_error_rejection(&error)),
+                    Some(send_error_rejection(error.kind)),
                 );
                 self.stats.record_send(false);
                 return Err(error);
             }
             BindingState::Terminated => {
-                let error = self.actor_try_send_terminated(message);
+                let error = self.send_error(message, SendErrorKind::Terminated);
                 self.observe_send(
                     MessageOperation::TrySend,
-                    Some(send_error_rejection(&error)),
+                    Some(send_error_rejection(error.kind)),
                 );
                 self.stats.record_send(false);
                 return Err(error);
@@ -516,35 +512,11 @@ impl<M> ActorRef<M> {
         }
     }
 
-    fn actor_terminated(&self, message: M) -> SendError<M> {
+    fn send_error(&self, message: M, kind: SendErrorKind) -> SendError<M> {
         SendError {
             actor_id: self.actor_id.to_string(),
             message,
-            kind: SendErrorKind::Terminated,
-        }
-    }
-
-    fn actor_try_send_terminated(&self, message: M) -> SendError<M> {
-        SendError {
-            actor_id: self.actor_id.to_string(),
-            message,
-            kind: SendErrorKind::Terminated,
-        }
-    }
-
-    fn send_timed_out(&self, message: M) -> SendError<M> {
-        SendError {
-            actor_id: self.actor_id.to_string(),
-            message,
-            kind: SendErrorKind::TimedOut,
-        }
-    }
-
-    fn actor_send_timeout_terminated(&self, message: M) -> SendError<M> {
-        SendError {
-            actor_id: self.actor_id.to_string(),
-            message,
-            kind: SendErrorKind::Terminated,
+            kind,
         }
     }
 
@@ -1647,8 +1619,8 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 }
 
-fn send_error_rejection<M>(error: &SendError<M>) -> MessageRejection {
-    match error.kind {
+fn send_error_rejection(kind: SendErrorKind) -> MessageRejection {
+    match kind {
         SendErrorKind::NotRunning => MessageRejection::NotRunning,
         SendErrorKind::Terminated => MessageRejection::ActorTerminated,
         SendErrorKind::Full => MessageRejection::MailboxFull,

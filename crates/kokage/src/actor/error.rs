@@ -188,12 +188,13 @@ mod tests {
             SendErrorKind::Terminated,
             SendErrorKind::TimedOut,
         ] {
-            let rejection = SendError {
+            let error = SendError {
                 actor_id: "worker".to_owned(),
                 message: Opaque,
                 kind,
-            }
-            .discard();
+            };
+            let carrier_display = error.to_string();
+            let rejection = error.discard();
             assert_eq!(
                 rejection,
                 SendRejection {
@@ -201,6 +202,8 @@ mod tests {
                     kind,
                 }
             );
+            // The payload-free projection formats exactly like its carrier.
+            assert_eq!(rejection.to_string(), carrier_display);
         }
     }
 }
