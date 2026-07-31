@@ -74,6 +74,46 @@ async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
+struct MailboxOneShot {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for MailboxOneShot {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.send_after("tick", Duration::from_millis(20)).detach();
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn context_send_after_delivers_once_through_the_self_mailbox() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, actor_ref) = build_runtime(move || MailboxOneShot {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("tick"));
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "one-shot mailbox timer must not fire twice"
+    );
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 1);
+    assert_eq!(stats.messages_received, 1);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 struct ChainedTimeout {
     ticks: usize,
     observed: mpsc::UnboundedSender<usize>,

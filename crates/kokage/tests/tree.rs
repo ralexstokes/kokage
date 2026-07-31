@@ -14,8 +14,8 @@ use std::{
 use support::{ActorHostBuilder, ActorHosts};
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BoxError, CallError, Context,
-    ExitResult, MailboxShutdown, Reply, SendError, SendErrorKind, Shutdown, StopContext,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, CallError, Context, ExitResult,
+    MailboxShutdown, Reply, SendError, SendErrorKind, Shutdown, StopContext,
     raw::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 
@@ -545,9 +545,9 @@ impl Actor for ContextStop {
     type Msg = ();
 
     async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
-        assert_eq!(ctx.status(), ActorStatus::Running);
+        assert!(!ctx.is_draining());
         ctx.stop();
-        assert_eq!(ctx.status(), ActorStatus::Stopping);
+        assert!(!ctx.is_draining());
         ctx.stop();
         Ok(())
     }

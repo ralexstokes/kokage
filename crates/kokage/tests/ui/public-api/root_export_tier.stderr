@@ -24,8 +24,9 @@ error[E0432]: unresolved import `kokage::ActorStats`
    |
 help: a similar name exists in the module
    |
-19 | use kokage::ActorStatus;
-   |                      +
+19 - use kokage::ActorStats;
+19 + use kokage::ActorSlot;
+   |
 
 error[E0432]: unresolved import `kokage::ScopedActorStats`
   --> tests/ui/public-api/root_export_tier.rs:20:5

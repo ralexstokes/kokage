@@ -292,9 +292,9 @@ pub mod prelude {
 pub use kokage_derive::ActorFactory;
 
 pub use actor::{
-    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
-    Context, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
-    SendErrorKind, StopContext, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
+    ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
+    StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};

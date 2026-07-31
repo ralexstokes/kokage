@@ -3,8 +3,8 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, BoxError, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef,
-    Shutdown, SupervisorError, TaskSpec,
+    ActorSpec, BoxError, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef, Shutdown,
+    SupervisorError, TaskSpec,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -282,9 +282,9 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     assert_eq!(&*handled.lock().await, &["hold-and-continue", "mailbox"]);
 }
 
-/// One `handle` call as the probe saw it: the message, callback status, and
+/// One `handle` call as the probe saw it: the message, drain phase, and
 /// graph shutdown state.
-type HandleCalls = Arc<Mutex<Vec<(&'static str, ActorStatus, bool)>>>;
+type HandleCalls = Arc<Mutex<Vec<(&'static str, bool, bool)>>>;
 
 /// Records, for every handled message, which phase the provided loop called
 /// `handle` from and whether the graph was shutting down at the time.
@@ -301,7 +301,7 @@ impl Actor for DrainPhaseProbe {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.lock().await.push((
             message,
-            ctx.status(),
+            ctx.is_draining(),
             ctx.shutdown_token().is_cancelled(),
         ));
         match message {
@@ -345,7 +345,7 @@ fn drain_phase_probe_graph(
 }
 
 #[tokio::test]
-async fn status_separates_the_drain_phase_from_ordinary_handling() {
+async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -362,15 +362,12 @@ async fn status_separates_the_drain_phase_from_ordinary_handling() {
 
     assert_eq!(
         &*observed.lock().await,
-        &[
-            ("hold", ActorStatus::Running, false),
-            ("queued", ActorStatus::Draining, true),
-        ]
+        &[("hold", false, false), ("queued", true, true)]
     );
 }
 
 #[tokio::test]
-async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
+async fn is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -397,17 +394,14 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
     // is going away: the shutdown token is still live for the drained message.
     assert_eq!(
         &*observed.lock().await,
-        &[
-            ("stop", ActorStatus::Running, false),
-            ("queued", ActorStatus::Draining, false),
-        ]
+        &[("stop", false, false), ("queued", true, false)]
     );
     handle.shutdown_and_wait().await.unwrap();
 }
 
 #[derive(Clone)]
 struct OverlappingStopProbe {
-    observed: mpsc::UnboundedSender<ActorStatus>,
+    observed: mpsc::UnboundedSender<bool>,
 }
 
 impl Actor for OverlappingStopProbe {
@@ -416,16 +410,16 @@ impl Actor for OverlappingStopProbe {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             "hold" => {
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.shutdown_token().cancelled().await;
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.stop();
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
             }
             "queued" => {
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
                 ctx.stop();
-                self.observed.send(ctx.status()).unwrap();
+                self.observed.send(ctx.is_draining()).unwrap();
             }
             other => panic!("unexpected message: {other}"),
         }
@@ -434,7 +428,7 @@ impl Actor for OverlappingStopProbe {
 }
 
 #[tokio::test]
-async fn status_carves_local_stop_during_graph_shutdown() {
+async fn is_draining_changes_only_after_the_stopping_callback_returns() {
     let (observed, mut statuses) = mpsc::unbounded_channel();
     let mut graph = Tree::new();
     let actor = graph.add_actor_spec(ActorSpec::new("OverlappingStopProbe", move || {
@@ -446,14 +440,14 @@ async fn status_carves_local_stop_during_graph_shutdown() {
     handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Running));
+    assert_eq!(statuses.recv().await, Some(false));
     actor.send("queued").await.unwrap();
     handle.shutdown();
 
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Running));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Stopping));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Draining));
-    assert_eq!(statuses.recv().await, Some(ActorStatus::Draining));
+    assert_eq!(statuses.recv().await, Some(false));
+    assert_eq!(statuses.recv().await, Some(false));
+    assert_eq!(statuses.recv().await, Some(true));
+    assert_eq!(statuses.recv().await, Some(true));
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -468,12 +462,12 @@ impl Actor for StopsOnStart {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        assert_eq!(ctx.status(), ActorStatus::Running);
+        assert!(!ctx.is_draining());
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
         ctx.stop();
-        assert_eq!(ctx.status(), ActorStatus::Stopping);
+        assert!(!ctx.is_draining());
         Ok(())
     }
 

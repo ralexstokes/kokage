@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
-    ActorStatus, RestartMode, RestartPolicy,
+    RestartMode, RestartPolicy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -146,14 +146,6 @@ fn policy_values_expose_their_declared_behavior() {
         }
     }
 
-    fn actor_status_name(status: ActorStatus) -> &'static str {
-        match status {
-            ActorStatus::Running => "running",
-            ActorStatus::Draining => "draining",
-            ActorStatus::Stopping => "stopping",
-        }
-    }
-
     fn scope_name(kind: kokage::observe::ScopeKind) -> &'static str {
         match kind {
             kokage::observe::ScopeKind::Ordered => "ordered",
@@ -176,7 +168,6 @@ fn policy_values_expose_their_declared_behavior() {
         )),
         "jittered-exponential"
     );
-    assert_eq!(actor_status_name(ActorStatus::Running), "running");
     assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
 }
 

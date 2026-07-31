@@ -560,22 +560,6 @@ pub struct Reply<T> {
     sender: oneshot::Sender<T>,
 }
 
-/// The lifecycle state visible through an actor context.
-///
-/// `Draining` takes precedence once a handler is replaying accepted work,
-/// including when a local stop and runtime shutdown overlap. Runtime shutdown on
-/// its own does not change this status; inspect [`Context::shutdown_token`]
-/// when execution-wide cancellation matters.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ActorStatus {
-    /// The callback is live and has not requested a local stop.
-    Running,
-    /// This handler call is replaying accepted work before stopping.
-    Draining,
-    /// The live callback has requested a local stop.
-    Stopping,
-}
-
 impl<T> Reply<T> {
     /// Sends the reply to the caller.
     ///
@@ -967,14 +951,6 @@ impl<M: Send + 'static> RawContext<M> {
         self.supervisor.clone()
     }
 
-    fn live_status(&self) -> ActorStatus {
-        if self.stop_requested {
-            ActorStatus::Stopping
-        } else {
-            ActorStatus::Running
-        }
-    }
-
     /// Returns a sender targeting this actor's own mailbox.
     pub fn myself(&self) -> ActorRef<M> {
         self.myself.clone()
@@ -1324,9 +1300,10 @@ impl<M> Drop for RawContext<M> {
 /// the provided receive loop owns it; reading it directly would bypass drain
 /// accounting and the continuation queue.
 ///
-/// [`status`](Context::status) reports `Running` during startup and ordinary
-/// message handling, `Stopping` after a local stop request, and `Draining`
-/// only while the framework replays accepted work during shutdown.
+/// [`is_draining`](Context::is_draining) returns `false` during startup and
+/// ordinary message handling, including after a local stop request, and
+/// returns `true` only while the framework replays accepted work during
+/// shutdown.
 ///
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut Context<'_, Self>` and the message type is projected from
@@ -1401,33 +1378,28 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.run_blocking(f)
     }
 
-    /// Returns the lifecycle state of this live callback.
+    /// Returns whether this handler is replaying accepted work while stopping.
     ///
     /// The provided receive loop calls [`Actor::handle`](crate::Actor::handle)
-    /// from two phases. Ordinary calls report [`ActorStatus::Running`] until
-    /// this callback requests a local stop. Once the receive loop exits,
-    /// [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) replays already accepted
-    /// mailbox messages and offload completions as [`ActorStatus::Draining`].
-    /// Nothing follows the drain except
+    /// from two phases. Ordinary calls return `false`, including immediately
+    /// after this callback calls [`stop`](Self::stop). Once the receive loop
+    /// exits, [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) replays
+    /// already accepted mailbox messages and offload completions with this
+    /// method returning `true`. Nothing follows the drain except
     /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
     /// will not run: continuations are dropped, new timers and intervals never
     /// fire, and a fresh [`offload`](Self::offload) races the shutdown budget.
-    /// A `Context` passed to `on_start` never reports `Draining`.
+    /// A `Context` passed to `on_start` never reports that it is draining.
     ///
-    /// This status is deliberately distinct from runtime shutdown. A local
-    /// [`stop`](Self::stop) can lead to `Draining` while
-    /// [`shutdown_token`](Self::shutdown_token) remains live; conversely,
-    /// runtime shutdown requested during an in-flight ordinary callback cancels
-    /// that token while this method still reports `Running`. Ask `status` when
-    /// the question is whether work queued by this callback can run, and
-    /// inspect the token when the question is about the runtime. `Draining`
-    /// takes precedence when local stop and runtime shutdown overlap.
-    pub fn status(&self) -> ActorStatus {
-        if self.draining {
-            ActorStatus::Draining
-        } else {
-            self.cx.live_status()
-        }
+    /// This phase is deliberately distinct from runtime shutdown. A local stop
+    /// can lead to a drain while [`shutdown_token`](Self::shutdown_token)
+    /// remains live; conversely, runtime shutdown requested during an in-flight
+    /// ordinary callback cancels that token while this method still returns
+    /// `false`. Ask `is_draining` when the question is whether work queued by
+    /// this callback can run, and inspect the token when the question is about
+    /// the runtime.
+    pub fn is_draining(&self) -> bool {
+        self.draining
     }
 
     /// Requests a clean stop of this actor incarnation.
@@ -1441,9 +1413,10 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// A startup request skips the ordinary receive loop but still reports
     /// readiness before clean shutdown, preserving the lifecycle boundary for
-    /// ordered supervision. A handler whose [`status`](Self::status) is
-    /// [`ActorStatus::Draining`] is already on the stop path, so another
-    /// request there has no additional effect. Repeated calls are harmless.
+    /// ordered supervision. A handler for which
+    /// [`is_draining`](Self::is_draining) returns `true` is already on the stop
+    /// path, so another request there has no additional effect. Repeated calls
+    /// are harmless.
     pub fn stop(&mut self) {
         self.cx.request_stop();
     }
@@ -1463,11 +1436,11 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// accepted mailbox messages. They are abandoned once the actor begins
     /// stopping, which is why [`StopContext`] does not expose this method.
     ///
-    /// Two stopping paths still reach this method: a handler called during
-    /// [`ActorStatus::Draining`] and an `on_start` callback that also calls
-    /// [`stop`](Self::stop). Continuations queued there are dropped with the
-    /// incarnation. The provided receive loop emits a `WARN` naming the actor
-    /// and the number dropped before `on_stop` runs.
+    /// Two stopping paths still reach this method: a handler for which
+    /// [`is_draining`](Self::is_draining) returns `true` and an `on_start`
+    /// callback that also calls [`stop`](Self::stop). Continuations queued
+    /// there are dropped with the incarnation. The provided receive loop emits
+    /// a `WARN` naming the actor and the number dropped before `on_stop` runs.
     pub fn continue_with(&mut self, message: A::Msg) {
         self.cx.push_continuation(message);
     }
@@ -1502,6 +1475,15 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Clears the timeout at `key`, if one is armed.
     pub fn clear_timeout(&mut self, key: TimerKey) {
         self.cx.timers.clear(key);
+    }
+
+    /// Sends `message` to this actor after `delay`, bound to this incarnation.
+    ///
+    /// Unlike [`set_timeout`](Self::set_timeout), this uses ordinary mailbox
+    /// delivery and is owned by the returned [`Guard`]. See
+    /// [`RawContext::send_after`] for the full contract.
+    pub fn send_after(&self, message: A::Msg, delay: Duration) -> Guard {
+        self.cx.send_after(message, delay)
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
