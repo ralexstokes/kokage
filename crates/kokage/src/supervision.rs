@@ -106,7 +106,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// # Example
 ///
 /// ```
-/// use kokage::{ActorSpec, OrderedTree, Restart, Strategy, prelude::*};
+/// use kokage::prelude::*;
 ///
 /// struct Worker;
 ///
