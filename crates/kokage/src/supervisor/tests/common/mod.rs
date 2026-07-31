@@ -251,11 +251,26 @@ impl EventWatch {
     }
 
     fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
+        // Every supervisor test streams through here, so this is where the
+        // envelope invariant is checked against live runtime emissions rather
+        // than hand-built events.
+        assert_eq!(
+            event.child.is_some(),
+            event.is_child_transition(),
+            "child identity is carried exactly by child transitions: {event:?}"
+        );
         let LifecycleEvent {
             scope_path: path,
             child,
             kind,
         } = event;
+        let child_id = || {
+            child
+                .as_ref()
+                .expect("child transition carries identity")
+                .child_id
+                .clone()
+        };
         let mut pending = None;
         let leaf = match kind {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
@@ -263,11 +278,7 @@ impl EventWatch {
             LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
             LifecycleEventKind::ChildAdded => return Ok(None),
             LifecycleEventKind::ChildStarted { generation } => {
-                let child_id = child
-                    .as_ref()
-                    .expect("child transition carries identity")
-                    .child_id
-                    .clone();
+                let child_id = child_id();
                 // This compatibility shim preserves the removed test-event
                 // shape. It deliberately assumes runtime generations are
                 // contiguous when synthesizing `ChildRestarted`. If that
@@ -285,33 +296,15 @@ impl EventWatch {
                     generation,
                 }
             }
-            LifecycleEventKind::ChildExited { generation, exit } => {
-                let child_id = child
-                    .as_ref()
-                    .expect("child transition carries identity")
-                    .child_id
-                    .clone();
-                ObservedEvent::ChildExited {
-                    id: child_id,
-                    generation,
-                    status: exit.into(),
-                }
-            }
-            LifecycleEventKind::ChildRemoved => ObservedEvent::ChildRemoved {
-                id: child
-                    .as_ref()
-                    .expect("child transition carries identity")
-                    .child_id
-                    .clone(),
+            LifecycleEventKind::ChildExited { generation, exit } => ObservedEvent::ChildExited {
+                id: child_id(),
+                generation,
+                status: exit.into(),
             },
+            LifecycleEventKind::ChildRemoved => ObservedEvent::ChildRemoved { id: child_id() },
             LifecycleEventKind::ChildRestartScheduled { generation, delay } => {
-                let child_id = child
-                    .as_ref()
-                    .expect("child transition carries identity")
-                    .child_id
-                    .clone();
                 ObservedEvent::ChildRestartScheduled {
-                    id: child_id,
+                    id: child_id(),
                     generation,
                     delay,
                 }

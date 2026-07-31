@@ -114,15 +114,11 @@ impl LifecycleEvent {
     /// Other supervisor-level events and lag markers return `None`.
     pub fn total_restarts(&self) -> Option<u64> {
         match &self.kind {
-            LifecycleEventKind::ChildAdded
-            | LifecycleEventKind::ChildStarted { .. }
-            | LifecycleEventKind::ChildExited { .. }
-            | LifecycleEventKind::ChildRemoved
-            | LifecycleEventKind::ChildRestartScheduled { .. } => {
-                self.child.as_ref().map(|child| child.total_restarts)
-            }
             LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
                 Some(*total_restarts)
+            }
+            kind if kind.is_child_transition() => {
+                self.child.as_ref().map(|child| child.total_restarts)
             }
             _ => None,
         }
