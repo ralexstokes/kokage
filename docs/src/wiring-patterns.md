@@ -151,7 +151,7 @@ let spec = ActorSpec::new("press", PressFactory {
   for per-run working state that must *not* leak across restarts.
 
 The derive works on non-generic structs with named fields, and lives behind
-the (default-on) `derive` feature. It is intentionally not in the prelude:
+the opt-in `derive` feature. It is intentionally not in the prelude:
 write `#[derive(kokage::ActorFactory)]` or `use kokage::ActorFactory;`.
 
 One design note that applies to *all* factories, closure or derived: a
