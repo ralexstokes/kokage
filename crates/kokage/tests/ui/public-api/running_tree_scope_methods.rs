@@ -1,6 +1,6 @@
 use kokage::{
     Actor as ActorTrait, ActorSpec, Context, ExitResult, OrderedTree, RunningTree,
-    host::TaskSpec,
+    TaskSpec,
 };
 
 struct Actor;

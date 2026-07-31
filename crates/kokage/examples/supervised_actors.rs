@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kokage::{ActorSpec, host::BoxError, prelude::*};
+use kokage::{ActorSpec, BoxError, prelude::*};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]

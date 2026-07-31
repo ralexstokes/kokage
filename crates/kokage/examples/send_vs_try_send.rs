@@ -2,7 +2,7 @@ use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
     ActorSpec, ExitResult, Restart, SendTimeoutError, Shutdown, TrySendError,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
+    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
     sync::{

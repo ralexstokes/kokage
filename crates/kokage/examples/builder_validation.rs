@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use kokage::{
     ActorSlot, ActorSpec, BuildError, ExitResult, OrderedTree,
-    host::{RawActor, RawContext},
+    raw::{RawActor, RawContext},
 };
 
 struct Idle<M>(PhantomData<fn(M)>);

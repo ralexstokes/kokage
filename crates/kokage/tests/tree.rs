@@ -14,9 +14,9 @@ use std::{
 use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuilder};
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, CallError, Context,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BoxError, CallError, Context,
     ExitResult, Reply, Restart, SendError, Shutdown, StopContext, TrySendError,
-    host::{ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 
 use tokio::{
@@ -1263,11 +1263,9 @@ mod runnable_actor {
     };
 
     use kokage::{
-        Actor, ActorRef, ActorSlot, ActorSpec, Context, ControlError, DynamicTree, ExitResult,
-        Restart, SendError, Shutdown, SupervisorError, TrySendError,
-        host::{
-            ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
-        },
+        Actor, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ControlError, DynamicTree,
+        ExitResult, Restart, SendError, Shutdown, SupervisorError, TrySendError,
+        raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
     };
     use tokio::{
         sync::{Notify, mpsc},

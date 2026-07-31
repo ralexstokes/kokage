@@ -3,10 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{
-    DynamicTree, OrderedTree, Restart,
-    host::{BoxError, TaskSpec},
-};
+use kokage::{BoxError, DynamicTree, OrderedTree, Restart, TaskSpec};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {

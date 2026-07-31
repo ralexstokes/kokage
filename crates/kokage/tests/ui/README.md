@@ -18,6 +18,11 @@ observation. `scope_type_names_removed.rs` keeps the retired `Runtime`,
 `RestrictedScope`, `RestrictedScopeRef`, and `DynamicRestrictedScope` root
 names absent.
 
+`root_export_tier.rs`, `raw_export_tier.rs`, and
+`prelude_export_tier.rs` keep root task types, raw actor execution types, and
+the common prelude vocabulary in their declared tiers. `removed_host_module.rs`
+pins the replacement of the former `host` module by `raw` and root exports.
+
 `declaration-unsealed/` contains compile-pass probes proving actor and slot
 mailbox configuration remains available after one or more `actor_ref()` calls.
 

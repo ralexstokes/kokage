@@ -2,7 +2,7 @@ use std::error::Error;
 
 use kokage::{
     CancellationToken, Restart, Shutdown,
-    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor},
+    raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor},
 };
 use tokio::task::JoinHandle;
 

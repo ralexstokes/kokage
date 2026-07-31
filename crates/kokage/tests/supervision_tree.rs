@@ -15,10 +15,10 @@ use tokio::{
 
 use kokage::{
     ActorSpec, Backoff, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy,
-    TreeNode,
-    host::{RawActor, RawContext, TaskSpec},
+    TaskSpec, TreeNode,
     observe::{ChildOutline, ScopeKind},
     prelude::*,
+    raw::{RawActor, RawContext},
 };
 
 struct Worker;

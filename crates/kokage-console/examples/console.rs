@@ -24,9 +24,8 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorSpec, Backoff, Context, DynamicTree, ExitResult, OrderedTree, Restart,
-    Strategy,
-    host::{BoxError, TaskSpec},
+    Actor, ActorRef, ActorSpec, Backoff, BoxError, Context, DynamicTree, ExitResult, OrderedTree,
+    Restart, Strategy, TaskSpec,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use tokio::time::sleep;

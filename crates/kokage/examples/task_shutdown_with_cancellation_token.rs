@@ -1,4 +1,4 @@
-use kokage::{CancellationToken, OrderedTree, host::TaskSpec};
+use kokage::{CancellationToken, OrderedTree, TaskSpec};
 use tokio::time::{Duration, sleep};
 
 #[tokio::main]

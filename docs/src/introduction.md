@@ -12,9 +12,9 @@ trying to recover every failure in place.
 ## The crates
 
 Most applications depend only on `kokage`. Its prelude contains the common
-actor and tree surface; advanced configuration remains at the crate root,
-low-level hosting lives under `kokage::host`, and observation types live
-under `kokage::observe`.
+actor, task, tree, and supervision-policy surface. Less common errors and
+control types remain at the crate root, raw actor execution lives under
+`kokage::raw`, and observation types live under `kokage::observe`.
 
 | Crate | Role |
 |---|---|
@@ -28,7 +28,7 @@ If you know Erlang/OTP or Elixir, the concepts map directly:
 
 | OTP concept | kokage equivalent |
 |---|---|
-| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `host::TaskSpec` |
+| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `TaskSpec` |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `Restart::always()` / `Restart::on_failure()` / `Restart::never()` |
 | Restart intensity (`MaxR`/`MaxT`) | `Restart::on_failure().limit(max_restarts, within)` (or `.limit(...)` on either other mode) |

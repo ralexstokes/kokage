@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `kokage::host`
+ --> tests/ui/public-api/removed_host_module.rs:3:5
+  |
+3 | use kokage::host;
+  |     ^^^^^^^^^^^^ no `host` in the root

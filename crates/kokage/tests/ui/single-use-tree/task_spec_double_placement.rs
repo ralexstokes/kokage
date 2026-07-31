@@ -1,4 +1,4 @@
-use kokage::{OrderedTree, host::TaskSpec};
+use kokage::{OrderedTree, TaskSpec};
 
 fn main() {
     let spec = TaskSpec::new("task", |_| async { Ok(()) });

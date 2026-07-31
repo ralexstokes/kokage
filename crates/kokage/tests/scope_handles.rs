@@ -11,9 +11,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSpec, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
-    OrderedTree, Restart, ScopeRef, StopContext, Strategy,
-    host::{BoxError, TaskSpec},
+    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
+    OrderedTree, Restart, ScopeRef, StopContext, Strategy, TaskSpec,
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};

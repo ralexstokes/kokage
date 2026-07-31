@@ -10,7 +10,7 @@ tree, inserted into a dynamic scope, or converted for a direct host.
 For acyclic dependencies, obtain a ref from a spec before moving it:
 
 ```rust
-# use kokage::{ActorSpec, OrderedTree};
+# use kokage::prelude::*;
 # struct Press;
 # struct FrontDesk(kokage::ActorRef<()>);
 # impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
@@ -40,7 +40,7 @@ first. `define` consumes a slot and returns its `ActorSpec`, making a
 partially defined declaration structurally impossible:
 
 ```rust
-# use kokage::{ActorSlot, OrderedTree};
+# use kokage::{ActorSlot, prelude::*};
 # struct Left(kokage::ActorRef<()>);
 # struct Right(kokage::ActorRef<()>);
 # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
@@ -100,7 +100,7 @@ failure participates in supervision and readiness.
 Configure an individual declaration before placement:
 
 ```rust
-# use kokage::{ActorSpec, MailboxMode, Restart};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
@@ -127,7 +127,7 @@ directional request flow.
 
 ## Direct hosting
 
-`ActorSpec::into_runnable` materializes one `host::RunnableActor` for tests or
+`ActorSpec::into_runnable` materializes one `raw::RunnableActor` for tests or
 hosts with their own supervision story without applying supervisor-placement
 validation. Tree placement and dynamic insertion reject an explicit zero
 mailbox capacity through their ordinary error types; direct hosts are

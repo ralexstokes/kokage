@@ -7,7 +7,7 @@ use std::{future::pending, sync::Arc, time::Duration};
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitReason, ExitResult, Guard,
     MonitorEvent, Restart, Shutdown,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},

@@ -11,8 +11,7 @@ use std::{
 };
 
 use kokage::{
-    DynamicTree, OrderedTree, Restart, Strategy,
-    host::{BoxError, TaskSpec},
+    BoxError, DynamicTree, OrderedTree, Restart, Strategy, TaskSpec,
     observe::{LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{

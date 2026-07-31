@@ -12,9 +12,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, Context, ExitResult, Guard, OrderedTree,
-    Strategy, TimerKey,
-    host::{BoxError, RawActor, RawContext},
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ExitResult, Guard,
+    OrderedTree, Strategy, TimerKey,
+    raw::{RawActor, RawContext},
 };
 use tokio::{
     sync::{Notify, mpsc},

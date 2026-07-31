@@ -288,7 +288,7 @@ impl RunnableActor {
     /// policy that left the binding waiting to rebind.
     ///
     /// Actors run through this unsupervised entry point receive a terminal
-    /// [`ScopeRef`] from [`RawContext::scope`](crate::host::RawContext::scope):
+    /// [`ScopeRef`] from [`RawContext::scope`](crate::raw::RawContext::scope):
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed.
     pub async fn run_until<F>(

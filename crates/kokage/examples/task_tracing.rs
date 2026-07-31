@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{Backoff, OrderedTree, Restart, host::TaskSpec};
+use kokage::{Backoff, OrderedTree, Restart, TaskSpec};
 use tokio::time::{Duration, sleep};
 use tracing_subscriber::fmt::format::FmtSpan;
 

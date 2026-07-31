@@ -7,7 +7,7 @@ lifecycle events, and statistics.
 ```rust
 # use std::time::Duration;
 
-# use kokage::{ActorSpec, OrderedTree, Restart, Shutdown};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # #[tokio::main]
@@ -39,7 +39,6 @@ use std::{
     time::Duration,
 };
 
-use kokage::{ActorSpec, OrderedTree, Restart, host::BoxError};
 use kokage::prelude::*;
 
 struct FrontDesk(ActorRef<String>);
@@ -68,7 +67,7 @@ impl Actor for Press {
 
     async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.run == 0 && order.contains("origami") {
-            return Err::<_, BoxError>(Box::new(io::Error::other("paper jam")));
+            return Err(io::Error::other("paper jam").into());
         }
         println!("printed {order}");
         Ok(())
@@ -121,7 +120,7 @@ lost-wakeup window.
 restart boundaries:
 
 ```rust
-# use kokage::{ActorSpec, OrderedTree, Strategy};
+# use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let venues = OrderedTree::new()
@@ -152,7 +151,7 @@ for a successful terminal exit with no pending restart.
 obtain the scope before spawning to avoid racing a fast child, and retain the
 guard.
 
-Use `OrderedTree::task` to mix an arbitrary non-actor `host::TaskSpec` into the
+Use `OrderedTree::task` to mix an arbitrary non-actor `TaskSpec` into the
 same sequence. Policy configured on the child spec is preserved, while unset
 restart and shutdown settings inherit the tree defaults. Task children appear
 in snapshots and lifecycle watches but not actor stats.

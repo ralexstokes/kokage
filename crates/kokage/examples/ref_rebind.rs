@@ -2,7 +2,7 @@ use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
     Actor, ActorSpec, CancellationToken, Context, ExitResult, Restart, Shutdown,
-    host::DEFAULT_SHUTDOWN_BOUND,
+    raw::DEFAULT_SHUTDOWN_BOUND,
 };
 use tokio::sync::mpsc;
 

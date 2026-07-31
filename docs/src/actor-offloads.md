@@ -6,7 +6,7 @@ maps its total result back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::host::RawContext;
+use kokage::raw::RawContext;
 
 enum Msg {
     Loaded(String),
@@ -49,7 +49,7 @@ concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
 # use std::time::Duration;
-# use kokage::{OffloadDeadline, host::RawContext};
+# use kokage::{OffloadDeadline, raw::RawContext};
 enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
@@ -197,6 +197,6 @@ actor remains the outer backstop for slow handlers.
 
 `observe::ActorStats::outstanding_offloads` exposes the current number of owned offloads.
 It falls when the actor loop reaps a completion or observes an abort. The method
-lives on `host::RawContext`: `recv` and `try_recv` merge offload
-completions with mailbox messages for a `host::RawActor`, but a hand-written raw loop
+lives on `raw::RawContext`: `recv` and `try_recv` merge offload
+completions with mailbox messages for a `raw::RawActor`, but a hand-written raw loop
 must still define its own shutdown and drain protocol.

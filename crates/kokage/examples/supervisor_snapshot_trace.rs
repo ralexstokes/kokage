@@ -8,9 +8,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{
-    Actor, ActorRef, ActorSpec, Context, ExitResult, OrderedTree, Restart, host::BoxError,
-};
+use kokage::{Actor, ActorRef, ActorSpec, BoxError, Context, ExitResult, OrderedTree, Restart};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]

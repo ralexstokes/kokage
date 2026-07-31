@@ -12,8 +12,9 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, ExitResult, OrderedTree, Reply, Restart, SendError, Strategy,
-    host::{BoxError, RawActor, RawContext},
+    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, OrderedTree, Reply, Restart, SendError,
+    Strategy,
+    raw::{RawActor, RawContext},
 };
 use tokio::{
     sync::{mpsc, oneshot},

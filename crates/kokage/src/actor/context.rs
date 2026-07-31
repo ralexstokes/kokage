@@ -743,7 +743,7 @@ impl Drop for ActorLifetime {
     }
 }
 
-/// Runtime context passed to a [`RawActor`](crate::host::RawActor) each time the
+/// Runtime context passed to a [`RawActor`](crate::raw::RawActor) each time the
 /// actor is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
@@ -776,7 +776,7 @@ pub struct RawContext<M> {
 }
 
 impl<M: Send + 'static> RawContext<M> {
-    /// Reports that a custom [`RawActor`](crate::host::RawActor) has completed
+    /// Reports that a custom [`RawActor`](crate::raw::RawActor) has completed
     /// initialization.
     ///
     /// This is only needed when `RawActor::readiness_gated` is overridden to
@@ -970,7 +970,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// Awaiting scope or child lifecycle progress can deadlock when that
     /// progress depends on this actor returning from its current work.
     /// Actors run directly through
-    /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until),
+    /// [`RunnableActor::run_until`](crate::raw::RunnableActor::run_until),
     /// outside a supervisor, receive a terminal handle here. Its control
     /// operations return
     /// [`ControlError::Unavailable`](crate::ControlError::Unavailable) and its
@@ -1253,7 +1253,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// without waiting and without consulting the shutdown token.
     ///
     /// This is intended for drain-then-exit loops in hand-written
-    /// [`RawActor::run`](crate::host::RawActor::run) implementations: after
+    /// [`RawActor::run`](crate::raw::RawActor::run) implementations: after
     /// [`recv`](Self::recv) returns `None` because shutdown was requested,
     /// queued messages remain readable here.
     ///
@@ -1289,7 +1289,7 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// The surrounding host's shutdown bound is the backstop for closures that
     /// ignore cancellation: the explicit bound passed to
-    /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until), or the
+    /// [`RunnableActor::run_until`](crate::raw::RunnableActor::run_until), or the
     /// supervised child's [`Shutdown`](crate::Shutdown) grace.
     /// Once that bound aborts the actor task, the blocking thread continues
     /// detached because Tokio blocking tasks cannot be aborted after they start.

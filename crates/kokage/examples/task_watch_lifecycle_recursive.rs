@@ -1,6 +1,5 @@
 use kokage::{
-    OrderedTree,
-    host::TaskSpec,
+    OrderedTree, TaskSpec,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::time::{Duration, sleep};

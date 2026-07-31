@@ -1,29 +1,47 @@
 error[E0432]: unresolved import `kokage::prelude::RawContext`
- --> tests/ui/public-api/prelude_export_tier.rs:6:5
+ --> tests/ui/public-api/prelude_export_tier.rs:8:5
   |
-6 | use kokage::prelude::RawContext;
+8 | use kokage::prelude::RawContext;
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawContext` in `prelude`
   |
 help: a similar name exists in the module
   |
-6 - use kokage::prelude::RawContext;
-6 + use kokage::prelude::Context;
+8 - use kokage::prelude::RawContext;
+8 + use kokage::prelude::Context;
   |
 
 error[E0432]: unresolved import `kokage::prelude::ActorFactory`
- --> tests/ui/public-api/prelude_export_tier.rs:7:5
+ --> tests/ui/public-api/prelude_export_tier.rs:9:5
   |
-7 | use kokage::prelude::ActorFactory;
+9 | use kokage::prelude::ActorFactory;
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorFactory` in `prelude`
 
 error[E0432]: unresolved import `kokage::prelude::BoxError`
- --> tests/ui/public-api/prelude_export_tier.rs:8:5
-  |
-8 | use kokage::prelude::BoxError;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `BoxError` in `prelude`
+  --> tests/ui/public-api/prelude_export_tier.rs:10:5
+   |
+10 | use kokage::prelude::BoxError;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `BoxError` in `prelude`
 
 error[E0432]: unresolved import `kokage::prelude::RawActor`
- --> tests/ui/public-api/prelude_export_tier.rs:9:5
-  |
-9 | use kokage::prelude::RawActor;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawActor` in `prelude`
+  --> tests/ui/public-api/prelude_export_tier.rs:11:5
+   |
+11 | use kokage::prelude::RawActor;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawActor` in `prelude`
+
+error[E0432]: unresolved import `kokage::prelude::TaskContext`
+  --> tests/ui/public-api/prelude_export_tier.rs:12:5
+   |
+12 | use kokage::prelude::TaskContext;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `TaskContext` in `prelude`
+
+error[E0432]: unresolved import `kokage::prelude::ActorSlot`
+  --> tests/ui/public-api/prelude_export_tier.rs:13:5
+   |
+13 | use kokage::prelude::ActorSlot;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorSlot` in `prelude`
+   |
+help: a similar name exists in the module
+   |
+13 - use kokage::prelude::ActorSlot;
+13 + use kokage::prelude::ActorSpec;
+   |

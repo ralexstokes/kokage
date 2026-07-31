@@ -23,7 +23,7 @@ Periodic work uses the self-first `interval(message, period)` and returns a
 ```rust,ignore
 use std::time::Duration;
 
-use kokage::{Guard, TimerKey, prelude::*};
+use kokage::prelude::*;
 
 #[derive(Clone)]
 enum Message {
@@ -93,7 +93,7 @@ expose a second source of truth. Other keys remain independent:
 ```rust,ignore
 use std::time::Duration;
 
-use kokage::{TimerKey, prelude::*};
+use kokage::prelude::*;
 
 enum Message {
     Filled,
@@ -181,7 +181,7 @@ an order deadline can clear the timeout instead of allowing a stale
 ## Cross-actor timers
 
 The cross-actor forms are `send_after_to` and `interval_to` on `Context` and
-`host::RawContext`. Pass the target's `ActorRef`; the context binds the timer
+`raw::RawContext`. Pass the target's `ActorRef`; the context binds the timer
 to the scheduling incarnation internally:
 
 ```rust,ignore
@@ -215,9 +215,9 @@ or generation when the target must reject stale cross-actor work.
 remains private to the context. Dropping a guard cancels its operation, while
 `detach()` deliberately leaves it running.
 
-## `host::RawActor` deadlines
+## `raw::RawActor` deadlines
 
-A `host::RawActor` can use `RawContext::send_after` and
+A `raw::RawActor` can use `RawContext::send_after` and
 `RawContext::interval` for ordinary self-mailbox delivery, plus their `_to`
 forms for other actors. It has no framework-owned keyed timer table because it
 owns its receive loop. For exact loop-local replacement and retraction, use

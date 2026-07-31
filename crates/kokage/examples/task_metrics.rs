@@ -1,5 +1,5 @@
 #[cfg(feature = "metrics")]
-use kokage::{OrderedTree, host::TaskSpec};
+use kokage::{OrderedTree, TaskSpec};
 #[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::PrometheusBuilder;
 #[cfg(feature = "metrics")]

@@ -111,7 +111,7 @@ impl TaskContext {
     ///
     /// The first call for an explicitly readiness-gated task transitions it
     /// from starting to running. Further calls, and calls made by tasks
-    /// without [`TaskSpec::wait_for_ready`](crate::host::TaskSpec::wait_for_ready),
+    /// without [`TaskSpec::wait_for_ready`](crate::TaskSpec::wait_for_ready),
     /// are harmless.
     pub fn mark_ready(&self) {
         if let Some(ready) = &self.ready {

@@ -10,9 +10,9 @@ kokage = { git = "https://github.com/ralexstokes/kokage" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-`kokage::prelude` covers the day-one actor traits, contexts, declarations,
-typed refs, ordered trees, and snapshot types. Import advanced policies from
-the crate root as needed.
+`kokage::prelude` covers the common actor traits, contexts, declarations,
+typed refs, tree types, supervision policies, operations, and snapshot types.
+Import less common errors, control types, and escape hatches explicitly.
 
 ## Your first actor
 

@@ -5,8 +5,7 @@ use support::TreeBuilder;
 use std::time::Duration;
 
 use kokage::{
-    ActorStatus, Restart, Strategy,
-    host::TaskSpec,
+    ActorStatus,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -16,25 +15,24 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSlot, ActorSpec, Context, ExitResult, OrderedTree, Reply,
-            StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
+            Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
+            MonitorEvent, OrderedTree, Reply, Restart, Shutdown, StopContext, Strategy,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, Backoff, BlockingCancelled, BuildError, CallError, CancellationToken,
-            ControlError, DynamicTree, ExitReason, Guard, MailboxMode, MonitorEvent,
-            OffloadDeadline, Restart, RunningTree, ScopeRef, SendError, SendRejection,
-            SendTimeoutError, Shutdown, Strategy, SupervisorError, TimerKey, TreeNode,
+            ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
+            CancellationToken, ControlError, ExitReason, OffloadDeadline, RunningTree, ScopeRef,
+            SendError, SendRejection, SendTimeoutError, SupervisorError, TaskContext, TreeNode,
             TrySendError,
         };
     }
 
-    mod host {
-        use kokage::host::{
-            ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
-            TaskContext, TaskSpec,
+    mod raw {
+        use kokage::raw::{
+            ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
         };
     }
 
@@ -49,29 +47,36 @@ mod coverage_probe {
 }
 
 #[test]
-fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
+fn prelude_constructs_actor_and_task_declarations() {
     let spec = ActorSpec::new("direct", || BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });
-    let slot = ActorSlot::new("cyclic");
+    let task = TaskSpec::new("task", |_| async { Ok(()) });
+
+    let _tree = OrderedTree::new().actor(spec).task(task);
+}
+
+#[test]
+fn root_actor_slot_constructs_a_cyclic_declaration() {
+    let slot = kokage::ActorSlot::new("cyclic");
     let _cyclic_ref = slot.actor_ref();
     let cyclic = slot.define(|| BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });
 
-    let _tree = OrderedTree::new().actor(spec).actor(cyclic);
+    let _tree = OrderedTree::new().actor(cyclic);
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
-async fn named_task(ctx: kokage::host::TaskContext) -> kokage::ExitResult {
+async fn named_task(ctx: kokage::TaskContext) -> kokage::ExitResult {
     ctx.shutdown_token().cancelled().await;
     Ok(())
 }
 
 #[test]
-fn host_task_surface_supports_a_named_factory_from_the_single_crate() {
-    let _child = kokage::host::TaskSpec::new("worker", named_task);
+fn root_task_surface_supports_a_named_factory_from_the_single_crate() {
+    let _child = kokage::TaskSpec::new("worker", named_task);
 }
 
 #[test]

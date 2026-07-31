@@ -28,13 +28,13 @@ such work can delay the result but cannot accept the message past its deadline.
 Payload-bearing send errors implement `std::error::Error` without requiring
 the message to implement `Debug`, `Display`, or `Sync`; their formatting
 deliberately omits the payload. Converting `SendError<M>` itself into
-`host::BoxError` with bare `?` does require `M: Sync`, because `BoxError` is
+`BoxError` with bare `?` does require `M: Sync`, because `BoxError` is
 `Send + Sync`. For a `Send` but non-`Sync` message, discard only the payload
 before propagating the non-generic `SendRejection`:
 
 ```rust,no_run
 use std::cell::Cell;
-use kokage::{ActorRef, SendError, host::BoxError};
+use kokage::{BoxError, SendError, prelude::*};
 
 struct LocalMessage(Cell<u64>); // `Send`, but not `Sync`
 
@@ -61,7 +61,7 @@ timeout so the whole operation is bounded:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::{ActorRef, Reply};
+use kokage::prelude::*;
 
 enum AccountMsg {
     Balance(Reply<u64>),
