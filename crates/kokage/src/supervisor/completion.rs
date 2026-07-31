@@ -175,9 +175,10 @@ impl CompletionWatch {
     /// before the scope starts.
     ///
     /// Awaiting a set that contains the current actor from one of that actor's
-    /// callbacks can deadlock when completion depends on the callback returning.
-    /// Use [`Context::offload`](crate::Context::offload) when the result must
-    /// return to an actor as a later message.
+    /// callbacks cannot return a result to that actor: completion requires the
+    /// actor to exit. Observe that set from outside it instead. A bounded
+    /// [`Context::offload`](crate::Context::offload) is appropriate only when
+    /// every awaited child can complete while the receiving actor remains live.
     pub async fn wait(self) -> Result<CompletionOutcome, CompletionError> {
         self.outcome().await
     }
