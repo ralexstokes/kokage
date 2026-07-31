@@ -79,6 +79,62 @@ async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
+struct ChainedTimeout {
+    ticks: usize,
+    observed: mpsc::UnboundedSender<usize>,
+}
+
+const CHAINED: TimerKey = TimerKey::new("chained");
+
+impl Actor for ChainedTimeout {
+    type Msg = usize;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_timeout(CHAINED, 1, Duration::from_millis(20));
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        if message < self.ticks {
+            ctx.set_timeout(CHAINED, message + 1, Duration::from_millis(20));
+        }
+        Ok(())
+    }
+}
+
+/// Repeated one-shot self scheduling re-arms the same key from inside the
+/// handler the fired timeout delivered to.
+#[tokio::test(start_paused = true)]
+async fn rearming_a_timeout_from_its_own_handler_fires_it_again() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, actor_ref) = build_runtime(move || ChainedTimeout {
+        ticks: 3,
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    for expected in 1..=3 {
+        assert_eq!(
+            timeout(Duration::from_secs(1), observed_rx.recv())
+                .await
+                .expect("chained timeout fired"),
+            Some(expected)
+        );
+    }
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "the chain must stop once the handler stops re-arming"
+    );
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 0);
+    assert_eq!(stats.messages_received, 3);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 struct CancelledTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
