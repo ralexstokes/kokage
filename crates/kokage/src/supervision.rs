@@ -1021,6 +1021,7 @@ pub enum ChildOutline {
 #[cfg(feature = "serde")]
 mod outline_wire {
     use super::{ChildOutline, Restart, ScopeKind, Shutdown, Strategy, SupervisionOutline};
+    use crate::supervisor::RestartWire;
 
     #[derive(serde::Deserialize)]
     pub struct WireOutline {
@@ -1037,17 +1038,17 @@ mod outline_wire {
     enum WireChild {
         Actor {
             id: String,
-            restart: Restart,
+            restart: RestartWire,
             shutdown: Shutdown,
             #[serde(default)]
-            remove_when_done: bool,
+            remove_when_done: Option<bool>,
         },
         Task {
             id: String,
-            restart: Restart,
+            restart: RestartWire,
             shutdown: Shutdown,
             #[serde(default)]
-            remove_when_done: bool,
+            remove_when_done: Option<bool>,
         },
         Scope {
             id: String,
@@ -1076,23 +1077,29 @@ mod outline_wire {
                         restart,
                         shutdown,
                         remove_when_done,
-                    } => ChildOutline::Actor {
-                        id,
-                        restart,
-                        shutdown,
-                        remove_when_done,
-                    },
+                    } => {
+                        let (restart, legacy_remove_when_done) = restart.into_parts();
+                        ChildOutline::Actor {
+                            id,
+                            restart,
+                            shutdown,
+                            remove_when_done: remove_when_done.unwrap_or(legacy_remove_when_done),
+                        }
+                    }
                     WireChild::Task {
                         id,
                         restart,
                         shutdown,
                         remove_when_done,
-                    } => ChildOutline::Task {
-                        id,
-                        restart,
-                        shutdown,
-                        remove_when_done,
-                    },
+                    } => {
+                        let (restart, legacy_remove_when_done) = restart.into_parts();
+                        ChildOutline::Task {
+                            id,
+                            restart,
+                            shutdown,
+                            remove_when_done: remove_when_done.unwrap_or(legacy_remove_when_done),
+                        }
+                    }
                     WireChild::Scope {
                         id,
                         restart,

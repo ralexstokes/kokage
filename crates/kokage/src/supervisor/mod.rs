@@ -75,6 +75,8 @@ pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
+#[cfg(feature = "serde")]
+pub(crate) use restart::RestartWire;
 pub use restart::{Backoff, Restart};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::Shutdown;
