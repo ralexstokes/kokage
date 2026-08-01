@@ -10,7 +10,8 @@ use std::{
 
 use kokage::{
     Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-    ExitResult, RestartPolicy, ScopeRef, StopContext, Strategy, TaskSpec, Tree,
+    ExitResult, RestartPolicy, ScopeRef, StopContext, Strategy, SubtreeSpec, SupervisorError,
+    TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -283,6 +284,63 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
         .shutdown_and_wait()
         .await
         .expect("pre-spawn handle stops the spawned scope");
+}
+
+#[tokio::test]
+async fn nested_scope_wait_stopped_joins_after_shutdown_completed_elsewhere() {
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree("nested", Tree::new());
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    nested.wait_started().await.expect("nested scope starts");
+    let snapshots = nested.subscribe_snapshots();
+
+    assert!(
+        timeout(Duration::from_millis(20), nested.wait_stopped())
+            .await
+            .is_err(),
+        "waiting alone must not request shutdown"
+    );
+    nested.request_shutdown();
+    assert_snapshot_receiver_closes(snapshots).await;
+
+    nested
+        .wait_stopped()
+        .await
+        .expect("stopped nested scope retains its completion result");
+    nested
+        .shutdown_and_wait()
+        .await
+        .expect("repeated shutdown and wait is idempotent");
+    running_tree.shutdown().await.expect("root stops");
+}
+
+#[tokio::test]
+async fn nested_scope_late_waiters_receive_the_terminal_error() {
+    let nested_tree =
+        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let mut nested_tree = nested_tree;
+    nested_tree.add_task("worker", |_| async {
+        Err(std::io::Error::other("worker failed").into())
+    });
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree(
+        "nested",
+        SubtreeSpec::from(nested_tree).restart(RestartPolicy::never()),
+    );
+    let snapshots = nested.subscribe_snapshots();
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+
+    assert_snapshot_receiver_closes(snapshots).await;
+    assert_eq!(
+        nested.wait_stopped().await,
+        Err(SupervisorError::RestartIntensityExceeded)
+    );
+    assert_eq!(
+        nested.wait_stopped().await,
+        Err(SupervisorError::RestartIntensityExceeded),
+        "subsequent waiters receive the same terminal result"
+    );
+    running_tree.shutdown().await.expect("root stops");
 }
 
 #[tokio::test]

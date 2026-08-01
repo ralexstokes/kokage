@@ -137,6 +137,13 @@ struct SnapshotSlot {
 
 struct StableBindingState {
     current: Option<IncarnationBinding>,
+    /// Completion channel for the most recently retired incarnation.
+    ///
+    /// Nested identities drop their current binding before the parent marks
+    /// them terminal. Retaining the receiver lets a handle that starts
+    /// waiting after terminalization recover the same completion result as a
+    /// waiter that was already armed.
+    last_done_rx: Option<DoneReceiver>,
     /// Monotonic identity for bindings to these stable channels. Child
     /// generations can repeat when an ancestor reincarnates, so they cannot
     /// distinguish an old guard from its replacement.
@@ -163,8 +170,9 @@ enum WaitTarget {
     NeverBound,
     /// A previous incarnation ended and no replacement has bound yet.
     BetweenIncarnations,
-    /// No incarnation can ever run again.
-    Terminal,
+    /// No incarnation can ever run again. A previously bound identity retains
+    /// its final completion channel for late waiters.
+    Terminal(Option<DoneReceiver>),
 }
 
 pub(crate) struct PendingSupervisorChild {
@@ -251,6 +259,7 @@ impl StableSupervisorChannels {
         Arc::new(Self {
             binding: Mutex::new(StableBindingState {
                 current: None,
+                last_done_rx: None,
                 next_binding_epoch: 0,
                 bound_once: false,
                 terminal: false,
@@ -634,7 +643,7 @@ impl StableSupervisorChannels {
     fn wait_target(&self) -> WaitTarget {
         let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
-            WaitTarget::Terminal
+            WaitTarget::Terminal(binding.last_done_rx.clone())
         } else if let Some(current) = binding.current.as_ref() {
             WaitTarget::Bound(current.done_rx.clone())
         } else if binding.bound_once {
@@ -740,7 +749,11 @@ impl StableSupervisorChannels {
         let active = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             binding.terminal = true;
-            binding.current.take()
+            let active = binding.current.take();
+            if let Some(active) = &active {
+                binding.last_done_rx = Some(active.done_rx.clone());
+            }
+            active
         };
         if let Some(active) = active {
             let _ = active.shutdown_tx.send(true);
@@ -1314,9 +1327,10 @@ impl Drop for StableBindingGuard {
             .current
             .as_ref()
             .is_some_and(|binding| binding.binding_epoch == self.binding_epoch)
-            && let Some(binding) = binding.current.take()
+            && let Some(current) = binding.current.take()
         {
-            let _ = binding.shutdown_tx.send(true);
+            let _ = current.shutdown_tx.send(true);
+            binding.last_done_rx = Some(current.done_rx);
             // A revivable stable identity can remain observable between
             // incarnations. Invalidate the old incarnation's attachments now
             // so an ancestor rebinding cannot traverse stale descendants
@@ -1654,7 +1668,8 @@ impl SupervisorHandle {
                             "supervisor incarnation is unavailable".to_owned(),
                         ));
                     }
-                    WaitTarget::Terminal => {
+                    WaitTarget::Terminal(Some(done_rx)) => break (done_rx, None),
+                    WaitTarget::Terminal(None) => {
                         return Err(SupervisorError::Internal(
                             "supervisor identity is terminal and cannot run again".to_owned(),
                         ));
