@@ -722,7 +722,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("temporary actor added");
@@ -784,7 +784,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("transient actor added");
@@ -960,7 +960,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("transient actor added");
@@ -1022,7 +1022,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
 }
 
 #[tokio::test]
-async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
+async fn remove_on_terminal_exit_does_not_remove_an_actor_that_restarts() {
     let running_tree = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -1036,7 +1036,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("restartable actor added");
@@ -1066,7 +1066,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
             .snapshot()
             .child("restart-once")
             .expect("restarting actor keeps its membership")
-            .remove_when_done,
+            .remove_on_terminal_exit,
         "a live snapshot reports the spec-level retention declaration"
     );
 

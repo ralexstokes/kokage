@@ -88,7 +88,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
             })
             .shutdown(Shutdown::abort())
             .manual_readiness(WAIT)
-            .retain_when_done(),
+            .retain_on_terminal_exit(),
         )
         .await
         .expect("configured one-shot task is inserted");
@@ -105,7 +105,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     );
     let snapshot = task.snapshot().expect("terminal membership is retained");
     assert_eq!(snapshot.restart_policy, RestartPolicy::never());
-    assert!(!snapshot.remove_when_done);
+    assert!(!snapshot.remove_on_terminal_exit);
 
     assert!(matches!(
         scope.spawn_once("configured-job", |_| async { Ok(()) }).await,

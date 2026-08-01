@@ -135,7 +135,7 @@ struct DynamicChildOptions {
     restart: RestartPolicy,
     shutdown: Shutdown,
     mailbox_shutdown: MailboxShutdown,
-    remove_when_done: bool,
+    remove_on_terminal_exit: bool,
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
@@ -1057,7 +1057,7 @@ impl DynamicScopeRef {
         self.add_task_spec(TaskSpec::new(id, task)).await
     }
 
-    /// Spawns finite one-shot work and removes its membership after completion.
+    /// Spawns finite one-shot work and removes its membership after terminal exit.
     ///
     /// This is the concise one-shot counterpart to [`add_task`](Self::add_task).
     /// The factory is `FnOnce`, so the task can consume owned inputs. The task
@@ -1165,7 +1165,7 @@ impl DynamicScopeRef {
             mailbox_shutdown: spec
                 .mailbox_shutdown
                 .unwrap_or(default_actor_mailbox_shutdown),
-            remove_when_done: spec.remove_when_done,
+            remove_on_terminal_exit: spec.remove_on_terminal_exit,
         };
         let actor = self.actors.make_actor(spec);
         self.add_constructed_actor(
@@ -1194,7 +1194,7 @@ impl DynamicScopeRef {
                 options.restart,
                 options.shutdown,
                 options.mailbox_shutdown,
-                options.remove_when_done,
+                options.remove_on_terminal_exit,
             ),
         );
         dynamic.add_child_spec(child).await?;
@@ -1351,7 +1351,7 @@ pub(crate) struct ActorChildOptions {
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: Shutdown,
     pub(crate) mailbox_shutdown: MailboxShutdown,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
 }
 
 impl ActorChildOptions {
@@ -1359,13 +1359,13 @@ impl ActorChildOptions {
         restart: RestartPolicy,
         shutdown: Shutdown,
         mailbox_shutdown: MailboxShutdown,
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     ) -> Self {
         Self {
             restart,
             shutdown,
             mailbox_shutdown,
-            remove_when_done,
+            remove_on_terminal_exit,
         }
     }
 }
@@ -1379,7 +1379,7 @@ pub(crate) fn actor_child_spec(
         restart,
         shutdown,
         mailbox_shutdown,
-        remove_when_done,
+        remove_on_terminal_exit,
     } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
@@ -1414,8 +1414,8 @@ pub(crate) fn actor_child_spec(
     .automatic_readiness()
     .restart(restart)
     .shutdown(shutdown);
-    if remove_when_done {
-        child.remove_when_done()
+    if remove_on_terminal_exit {
+        child.remove_on_terminal_exit()
     } else {
         child
     }
@@ -1533,7 +1533,7 @@ mod tests {
             .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
                     .restart(RestartPolicy::never())
-                    .remove_when_done(),
+                    .remove_on_terminal_exit(),
             )
             .await
             .expect("dynamic actor is inserted");

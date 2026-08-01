@@ -50,7 +50,7 @@ they belong to ordered scopes. Membership is managed through the
 - `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
 - `scope.add_task(id, task).await?` — supervised tasks work too.
 - `scope.spawn_once(id, task).await?` — finite, non-restarting work that removes
-  its membership on completion.
+  its membership on terminal exit.
 - `scope.add_subtree(id, tree).await?` — insert a whole *ordered or dynamic*
   subtree, and get back the new scope's `ScopeRef`.
 - `scope.remove(&child).await?` — stop and remove the exact actor, task, or
@@ -118,12 +118,12 @@ actor holding the `sessions` scope (it is cheaply cloneable) can spawn a
 session actor per request, hand out its `ActorRef`, and remove it when the
 client leaves.
 
-## One-shot work: run to completion, then clean up
+## One-shot work: run once, then clean up
 
-`spawn_once` gives dynamic trees straightforward batch semantics. Finished
-work leaves the scope; the returned `TaskRef` remains tied to that exact
-membership and preserves its completion even when the task exits quickly. Its
-factory is `FnOnce`, so it can consume owned inputs:
+`spawn_once` gives dynamic trees straightforward batch semantics. Terminal
+work leaves the scope whether it completed or failed; the returned `TaskRef`
+remains tied to that exact membership and preserves its outcome even when the
+task exits quickly. Its factory is `FnOnce`, so it can consume owned inputs:
 
 ```rust
 # use kokage::prelude::*;
@@ -148,7 +148,7 @@ running_tree.wait().await?;
 Use `scope.spawn_once_spec(OneShotTaskSpec::new(...))` when the same consuming
 factory needs a custom shutdown policy, readiness gate, or retained terminal
 membership. Restart settings are deliberately unavailable because the factory
-cannot create a second incarnation. Select `.retain_when_done()` when
+cannot create a second incarnation. Select `.retain_on_terminal_exit()` when
 scope-level snapshot observers must discover the terminal state without an
 existing `TaskRef`. A retained membership keeps its child id occupied until
 `scope.remove(&job).await?` removes it or the scope shuts down; the

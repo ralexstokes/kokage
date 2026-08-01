@@ -53,7 +53,8 @@ impl RawActor for Parked {
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = Tree::new();
-    let ingest = builder.add_actor_spec(ActorSpec::new("ingest", || Worker).remove_when_done());
+    let ingest =
+        builder.add_actor_spec(ActorSpec::new("ingest", || Worker).remove_on_terminal_exit());
     let parse = builder.add_actor_spec(ActorSpec::new("parse", || Worker));
     (builder, ingest, parse)
 }
@@ -443,10 +444,10 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
 }
 
 #[tokio::test]
-async fn static_tree_actor_can_remove_itself_when_done() {
+async fn static_tree_actor_can_remove_itself_on_terminal_exit() {
     let spec = ActorSpec::new("finite", || Finite)
         .restart(RestartPolicy::never())
-        .remove_when_done();
+        .remove_on_terminal_exit();
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -455,7 +456,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
             .snapshot()
             .child("finite")
             .expect("finite actor is projected")
-            .remove_when_done
+            .remove_on_terminal_exit
     );
     let mut snapshots = tree.scope().subscribe_snapshots();
     let running_tree = tree.spawn().expect("tree builds");
@@ -626,9 +627,11 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
             .default_child_restart(RestartPolicy::never())
             .default_child_shutdown(Shutdown::abort()),
     );
-    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
+    assert!(json.contains("\"remove_on_terminal_exit\""));
+    assert!(!json.contains("\"remove_when_done\""));
     for key in [
         "default_child_restart",
         "default_child_shutdown",
@@ -668,7 +671,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     assert!(matches!(
         decoded.child("clock"),
         Some(ChildOutline::Task {
-            remove_when_done: true,
+            remove_on_terminal_exit: true,
             ..
         })
     ));
@@ -676,7 +679,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         decoded.child("ingest"),
         Some(ChildOutline::Actor {
             mailbox_shutdown: MailboxShutdown::Discard,
-            remove_when_done: true,
+            remove_on_terminal_exit: true,
             ..
         })
     ));
@@ -703,6 +706,36 @@ fn an_outline_rejects_retired_scope_default_keys() {
 
 #[cfg(feature = "serde")]
 #[test]
+fn an_outline_rejects_the_retired_terminal_membership_key() {
+    let (mut graph, _ingest, _parse) = two_actor_tree();
+    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
+    let outline = serde_json::to_value(graph.outline()).expect("outline serializes");
+
+    for variant in ["Actor", "Task"] {
+        let mut retired = outline.clone();
+        let fields = retired["children"]
+            .as_array_mut()
+            .expect("children serialize as an array")
+            .iter_mut()
+            .find_map(|child| child.get_mut(variant))
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap_or_else(|| panic!("outline contains a {variant} child"));
+        let policy = fields
+            .remove("remove_on_terminal_exit")
+            .expect("current terminal membership key is serialized");
+        fields.insert("remove_when_done".to_owned(), policy);
+
+        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(retired)
+            .expect_err("retired terminal membership key must not deserialize");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected error for {variant}: {error}"
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(RestartPolicy::on_failure()).expect("restart serializes");
     assert_eq!(restart["condition"], "OnFailure");
@@ -713,7 +746,7 @@ fn policy_enums_use_their_direct_wire_shape() {
             .expect("restart policy deserializes"),
         RestartPolicy::on_failure()
     );
-    assert!(restart.get("remove_when_done").is_none());
+    assert!(restart.get("remove_on_terminal_exit").is_none());
     assert_eq!(
         serde_json::to_value(RestartPolicy::never()).expect("never serializes"),
         serde_json::json!({ "condition": "Never" })

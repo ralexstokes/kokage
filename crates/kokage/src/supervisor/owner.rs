@@ -537,7 +537,7 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
                 membership: ChildMembershipView::Active,
                 restart_count: 0,
                 restart_policy: child.restart,
-                remove_when_done: child.remove_when_done,
+                remove_on_terminal_exit: child.remove_on_terminal_exit,
                 next_restart_in: None,
                 supervisor: None,
             })

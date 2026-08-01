@@ -29,7 +29,7 @@ pub(crate) struct ChildDefinition {
     restart_is_default: bool,
     pub(crate) shutdown_policy: Shutdown,
     shutdown_is_default: bool,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) kind: ChildKind,
@@ -155,7 +155,7 @@ impl TaskSpec {
                     restart_is_default: true,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
-                    remove_when_done: false,
+                    remove_on_terminal_exit: false,
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(make_child_factory(f)),
@@ -186,9 +186,9 @@ impl TaskSpec {
     /// By default a terminal child remains visible as an inactive membership.
     /// This setting is independent of the selected [`RestartPolicy`].
     #[must_use]
-    pub fn remove_when_done(self) -> Self {
+    pub fn remove_on_terminal_exit(self) -> Self {
         Self {
-            spec: self.spec.remove_when_done(),
+            spec: self.spec.remove_on_terminal_exit(),
         }
     }
 
@@ -229,16 +229,17 @@ impl TaskSpec {
             .resolved_policies(default_child_restart, default_child_shutdown)
     }
 
-    pub(crate) fn removes_when_done(&self) -> bool {
-        self.spec.inner.remove_when_done
+    pub(crate) fn removes_on_terminal_exit(&self) -> bool {
+        self.spec.inner.remove_on_terminal_exit
     }
 }
 
 impl OneShotTaskSpec {
     /// Creates finite work whose consuming factory runs at most once.
     ///
-    /// The task never restarts and its membership is removed after completion
-    /// unless [`retain_when_done`](Self::retain_when_done) is selected.
+    /// The task never restarts and its membership is removed after its terminal
+    /// exit unless
+    /// [`retain_on_terminal_exit`](Self::retain_on_terminal_exit) is selected.
     pub fn new<F, Fut>(id: impl Into<String>, f: F) -> Self
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
@@ -252,7 +253,7 @@ impl OneShotTaskSpec {
                     restart_is_default: false,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
-                    remove_when_done: true,
+                    remove_on_terminal_exit: true,
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(Arc::new(OneShotFactory {
@@ -279,12 +280,12 @@ impl OneShotTaskSpec {
     /// The retained membership continues to occupy its child id until it is
     /// passed to [`DynamicScopeRef::remove`](crate::DynamicScopeRef::remove)
     /// or the scope shuts down. The default removes the membership after
-    /// completion; the returned `TaskRef` retains the terminal outcome either
-    /// way.
+    /// terminal exit; the returned `TaskRef` retains the terminal outcome
+    /// either way.
     #[must_use]
-    pub fn retain_when_done(self) -> Self {
+    pub fn retain_on_terminal_exit(self) -> Self {
         Self {
-            spec: self.spec.retain_when_done(),
+            spec: self.spec.retain_on_terminal_exit(),
         }
     }
 
@@ -329,7 +330,7 @@ impl ChildSpec {
                 restart_is_default: true,
                 shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
-                remove_when_done: false,
+                remove_on_terminal_exit: false,
                 readiness: ChildReadiness::Automatic,
                 attachment: None,
                 kind: ChildKind::Supervisor(supervisor),
@@ -358,13 +359,13 @@ impl ChildSpec {
     }
 
     #[must_use]
-    pub(crate) fn remove_when_done(self) -> Self {
-        self.map_inner(|inner| inner.remove_when_done = true)
+    pub(crate) fn remove_on_terminal_exit(self) -> Self {
+        self.map_inner(|inner| inner.remove_on_terminal_exit = true)
     }
 
     #[must_use]
-    pub(crate) fn retain_when_done(self) -> Self {
-        self.map_inner(|inner| inner.remove_when_done = false)
+    pub(crate) fn retain_on_terminal_exit(self) -> Self {
+        self.map_inner(|inner| inner.remove_on_terminal_exit = false)
     }
 
     /// Attaches process-local metadata to this supervised child.

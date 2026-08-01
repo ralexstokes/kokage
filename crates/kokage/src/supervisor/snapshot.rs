@@ -177,6 +177,7 @@ pub struct SupervisorSnapshot {
 /// Point-in-time snapshot of a single child.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub struct ChildSnapshot {
     /// The child's unique identifier.
@@ -197,7 +198,7 @@ pub struct ChildSnapshot {
     pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub remove_when_done: bool,
+    pub remove_on_terminal_exit: bool,
     /// Time remaining until the next scheduled restart, if a backoff delay is
     /// pending.
     pub next_restart_in: Option<Duration>,
@@ -268,7 +269,7 @@ impl ChildSnapshot {
             membership: ChildMembershipView::Active,
             restart_count: 0,
             restart_policy: RestartPolicy::default(),
-            remove_when_done: false,
+            remove_on_terminal_exit: false,
             next_restart_in: None,
             supervisor: None,
         }
@@ -645,7 +646,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_when_done_round_trips() {
+    fn remove_on_terminal_exit_round_trips_and_rejects_the_retired_key() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -655,11 +656,21 @@ mod tests {
                 previous_exit: None,
             },
         );
-        snapshot.remove_when_done = true;
+        snapshot.remove_on_terminal_exit = true;
         let value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
-        assert_eq!(value["remove_when_done"], true);
+        assert_eq!(value["remove_on_terminal_exit"], true);
         let decoded: ChildSnapshot =
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
-        assert!(decoded.remove_when_done);
+        assert!(decoded.remove_on_terminal_exit);
+
+        let retired = value
+            .to_string()
+            .replacen("remove_on_terminal_exit", "remove_when_done", 1);
+        let error = serde_json::from_str::<ChildSnapshot>(&retired)
+            .expect_err("retired terminal membership key must not deserialize");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected error: {error}"
+        );
     }
 }

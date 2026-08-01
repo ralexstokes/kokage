@@ -392,7 +392,7 @@ impl StableSupervisorChannels {
                 .into_iter()
                 .enumerate()
                 .map(
-                    |(lineage, (id, restart_policy, remove_when_done))| ChildSnapshot {
+                    |(lineage, (id, restart_policy, remove_on_terminal_exit))| ChildSnapshot {
                         id,
                         lineage: lineage as u64,
                         generation: 0,
@@ -402,7 +402,7 @@ impl StableSupervisorChannels {
                         membership: ChildMembershipView::Active,
                         restart_count: 0,
                         restart_policy,
-                        remove_when_done,
+                        remove_on_terminal_exit,
                         next_restart_in: None,
                         supervisor: None,
                     },

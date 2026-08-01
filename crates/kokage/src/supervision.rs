@@ -753,7 +753,7 @@ impl SupervisionChild {
                 mailbox_shutdown: actor
                     .mailbox_shutdown
                     .unwrap_or(default_actor_mailbox_shutdown),
-                remove_when_done: actor.remove_when_done,
+                remove_on_terminal_exit: actor.remove_on_terminal_exit,
             },
             Self::Task(child) => {
                 let (restart, shutdown) =
@@ -762,7 +762,7 @@ impl SupervisionChild {
                     id: child.id().to_owned(),
                     restart,
                     shutdown,
-                    remove_when_done: child.removes_when_done(),
+                    remove_on_terminal_exit: child.removes_on_terminal_exit(),
                 }
             }
             Self::Scope {
@@ -799,7 +799,7 @@ impl SupervisionChild {
                     restart,
                     shutdown,
                     mailbox_shutdown,
-                    remove_when_done,
+                    remove_on_terminal_exit,
                 } = actors.materialize_actor_node(actor);
                 builder.child_spec(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
@@ -808,7 +808,7 @@ impl SupervisionChild {
                         restart.unwrap_or(default_child_restart),
                         shutdown.unwrap_or(default_child_shutdown),
                         mailbox_shutdown.unwrap_or(default_actor_mailbox_shutdown),
-                        remove_when_done,
+                        remove_on_terminal_exit,
                     ),
                 ))
             }
@@ -885,10 +885,10 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             ScopeNode::Ordered { children, .. } => children
                 .iter()
                 .map(|child| {
-                    let (restart, remove_when_done) = match child {
+                    let (restart, remove_on_terminal_exit) = match child {
                         SupervisionChild::Actor(actor) => (
                             actor.restart.unwrap_or(config.default_child_restart),
-                            actor.remove_when_done,
+                            actor.remove_on_terminal_exit,
                         ),
                         SupervisionChild::Task(child) => (
                             child
@@ -897,13 +897,17 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                                     config.default_child_shutdown,
                                 )
                                 .0,
-                            child.removes_when_done(),
+                            child.removes_on_terminal_exit(),
                         ),
                         SupervisionChild::Scope { restart, .. } => {
                             (restart.unwrap_or(config.default_child_restart), false)
                         }
                     };
-                    (child.declared_id().to_owned(), restart, remove_when_done)
+                    (
+                        child.declared_id().to_owned(),
+                        restart,
+                        remove_on_terminal_exit,
+                    )
                 })
                 .collect(),
             ScopeNode::Dynamic { .. } => Vec::new(),
@@ -1103,7 +1107,7 @@ impl std::fmt::Debug for DebugChild<'_> {
                         .mailbox_shutdown
                         .unwrap_or(self.config.default_actor_mailbox_shutdown),
                 )
-                .field("remove_when_done", &actor.remove_when_done)
+                .field("remove_on_terminal_exit", &actor.remove_on_terminal_exit)
                 .finish(),
             SupervisionChild::Task(task) => {
                 let (restart, shutdown) = task.resolved_policies(
@@ -1114,7 +1118,7 @@ impl std::fmt::Debug for DebugChild<'_> {
                     .field("id", &task.id())
                     .field("restart", &restart)
                     .field("shutdown", &shutdown)
-                    .field("remove_when_done", &task.removes_when_done())
+                    .field("remove_on_terminal_exit", &task.removes_on_terminal_exit())
                     .finish()
             }
             SupervisionChild::Scope {
@@ -1165,6 +1169,7 @@ pub struct SupervisionOutline {
 /// One payload-free child declaration.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.
@@ -1180,7 +1185,7 @@ pub enum ChildOutline {
         mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
         #[serde(default)]
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     },
     /// An arbitrary task child.
     Task {
@@ -1192,7 +1197,7 @@ pub enum ChildOutline {
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
         #[serde(default)]
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     },
     /// A nested ordered or dynamic scope.
     Scope {
