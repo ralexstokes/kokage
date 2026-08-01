@@ -133,6 +133,40 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     running_tree.shutdown().await.expect("tree stops");
 }
 
+#[tokio::test(start_paused = true)]
+async fn one_shot_manual_readiness_timeout_is_failed_and_removed() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let task = running_tree
+        .scope()
+        .spawn_once_spec(
+            OneShotTaskSpec::new("bounded-job", |_| async {
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+            .manual_readiness(Duration::from_millis(10)),
+        )
+        .await
+        .expect("one-shot task is inserted");
+
+    assert_eq!(
+        task.wait_started().await,
+        Err(TaskError::StoppedBeforeReady {
+            task_id: "bounded-job".to_owned(),
+        })
+    );
+    let exit = task
+        .wait()
+        .await
+        .expect("terminal timeout remains observable");
+    assert!(
+        exit.failure_message()
+            .is_some_and(|message| message.contains("did not report readiness"))
+    );
+    assert!(task.snapshot().is_none());
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
 #[tokio::test]
 async fn one_shot_ref_retains_exit_after_sibling_churn() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");

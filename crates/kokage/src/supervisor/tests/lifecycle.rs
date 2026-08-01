@@ -468,6 +468,41 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
 
+#[tokio::test(start_paused = true)]
+async fn manual_readiness_timeout_emits_a_failed_exit_without_started() {
+    let builder = Supervisor::ordered().child(
+        TaskSpec::new("worker", |_| async {
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+        .restart(RestartPolicy::never())
+        .manual_readiness(Duration::from_millis(10)),
+    );
+    let handle = builder.handle();
+    let mut watch = handle.watch_lifecycle().direct_children();
+    let running = builder.build().expect("supervisor builds").spawn();
+
+    let added = next_matching(&mut watch, |event| {
+        child_added(event) && child_id_is(event, "worker")
+    })
+    .await;
+    let exited = next_matching(&mut watch, |event| {
+        child_exited(event) && child_id_is(event, "worker")
+    })
+    .await;
+    assert!(matches!(
+        child_kind(&exited),
+        Some(ChildEventKind::Exited { exit, .. })
+            if !exit.cancelled()
+                && exit
+                    .failure_message()
+                    .is_some_and(|message| message.contains("did not report readiness"))
+    ));
+    assert_eq!(exited.seq(), added.seq().map(|seq| seq + 1));
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 #[tokio::test]
 async fn cooperative_remove_publishes_removed_before_the_command_reply() {
     let running = Supervisor::dynamic()

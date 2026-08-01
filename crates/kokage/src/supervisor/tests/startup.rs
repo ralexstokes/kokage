@@ -132,6 +132,64 @@ async fn terminal_manual_readiness_timeout_aborts_startup() {
         .unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn manual_readiness_reported_at_the_deadline_wins_over_timeout() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let timeout = Duration::from_millis(10);
+    let task = TaskSpec::new("boundary", {
+        let attempts = Arc::clone(&attempts);
+        move |ctx| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(timeout).await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .manual_readiness(timeout);
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    common::wait_started(&handle, "deadline readiness")
+        .await
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    common::shutdown_and_wait(&handle, "deadline readiness shutdown")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_cancels_far_future_manual_readiness_without_timeout_failure() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let task = TaskSpec::new("far-future", move |ctx| {
+        let started_tx = started_tx.clone();
+        async move {
+            let _ = started_tx.send(());
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .manual_readiness(Duration::MAX);
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    started_rx.recv().await.expect("task begins waiting");
+    common::shutdown_and_wait(&handle, "far-future readiness shutdown")
+        .await
+        .unwrap();
+
+    let snapshot = handle.snapshot();
+    let exit = snapshot
+        .child("far-future")
+        .and_then(|child| child.state.last_exit())
+        .expect("shutdown records the pre-ready exit");
+    assert!(matches!(exit, ExitStatus::Completed { cancelled: true }));
+}
+
 #[tokio::test]
 async fn one_for_all_restart_preserves_sequential_readiness_order() {
     let order = Arc::new(Mutex::new(Vec::new()));

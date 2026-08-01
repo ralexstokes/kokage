@@ -1693,18 +1693,21 @@ impl SupervisorHandle {
 
     /// Waits until every current child generation has completed startup.
     ///
-    /// Explicitly gated children complete startup when they call
-    /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready); ordinary
-    /// children are ready as soon as they are spawned. Readiness remains
-    /// latched after a child exits, and resets when that child restarts. Nested
-    /// supervisors report ready only after their own children are ready. An
-    /// empty supervisor is ready immediately only after it has bound; a
+    /// Manually gated children complete startup when they call
+    /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
+    /// before the deadline configured by
+    /// [`TaskSpec::manual_readiness`](crate::supervisor::TaskSpec::manual_readiness);
+    /// ordinary children are ready as soon as they are spawned. Readiness
+    /// remains latched after a child exits, and resets when that child restarts.
+    /// Nested supervisors report ready only after their own children are ready.
+    /// An empty supervisor is ready immediately only after it has bound; a
     /// pre-bind empty supervisor waits for its first incarnation to bind.
     ///
     /// # Errors
     ///
-    /// Returns [`SupervisorError::StartupAborted`] if a gated child exits or
-    /// the supervisor stops before readiness is reported.
+    /// Returns [`SupervisorError::StartupAborted`] if a gated child exits,
+    /// misses its readiness deadline without a permitted restart, or the
+    /// supervisor stops before readiness is reported.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         let mut snapshots = self.snapshots_rx();
         let mut binding_revision = self.channels.binding_revision_rx();

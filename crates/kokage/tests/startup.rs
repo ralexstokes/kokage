@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "host")]
+use kokage::raw::ActorRunError;
 use kokage::{
     ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
     SupervisorError, TaskSpec,
@@ -654,6 +656,32 @@ async fn raw_manual_readiness_timeout_restarts_then_accepts_mark_ready() {
             .is_some_and(|message| message.contains("did not report readiness"))
     );
     handle.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+#[cfg(feature = "host")]
+async fn directly_hosted_raw_manual_readiness_timeout_is_typed() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let host = ActorSpec::new("BoundedRawReadiness", {
+        let attempts = Arc::clone(&attempts);
+        move || BoundedRawReadiness {
+            attempts: Arc::clone(&attempts),
+        }
+    })
+    .into_host();
+
+    let error = host
+        .run_once(std::future::pending::<()>(), Shutdown::abort())
+        .await
+        .expect_err("manual readiness expires");
+    assert!(matches!(
+        error,
+        ActorRunError::ReadinessTimedOut {
+            actor_id, timeout, ..
+        }
+            if actor_id == "BoundedRawReadiness" && timeout == Duration::from_millis(10)
+    ));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 /// Overrides nothing: exercises the [`Actor`] trait's default drain policy.

@@ -344,7 +344,8 @@ impl TaskRef {
     ///
     /// Ordinary tasks are ready as soon as their future is spawned. A task
     /// configured with [`TaskSpec::manual_readiness`] becomes ready when it calls
-    /// [`crate::TaskContext::mark_ready`].
+    /// [`crate::TaskContext::mark_ready`]. If it exits or misses its readiness
+    /// deadline first, this returns [`TaskError::StoppedBeforeReady`].
     pub async fn wait_started(&self) -> Result<(), TaskError> {
         self.ensure_tracking();
         let mut state = self.inner.state.subscribe();
