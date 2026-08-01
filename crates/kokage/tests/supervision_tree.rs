@@ -629,6 +629,23 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
+    for key in [
+        "default_child_restart",
+        "default_child_shutdown",
+        "default_actor_mailbox_shutdown",
+    ] {
+        assert!(json.contains(&format!("\"{key}\"")), "missing {key}");
+    }
+    for key in [
+        "default_restart",
+        "default_shutdown",
+        "default_mailbox_shutdown",
+    ] {
+        assert!(
+            !json.contains(&format!("\"{key}\"")),
+            "retired key {key} was serialized"
+        );
+    }
     assert!(
         json.contains("\"Task\""),
         "task outline uses its public tag"
@@ -663,6 +680,25 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
             ..
         })
     ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_outline_rejects_retired_scope_default_keys() {
+    let json = serde_json::to_string(&Tree::new().outline()).expect("outline serializes");
+    for (current, retired) in [
+        ("default_child_restart", "default_restart"),
+        ("default_child_shutdown", "default_shutdown"),
+        ("default_actor_mailbox_shutdown", "default_mailbox_shutdown"),
+    ] {
+        let retired_json = json.replacen(current, retired, 1);
+        let error = serde_json::from_str::<kokage::observe::SupervisionOutline>(&retired_json)
+            .expect_err("retired scope default keys must not deserialize");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected error for {retired}: {error}"
+        );
+    }
 }
 
 #[cfg(feature = "serde")]

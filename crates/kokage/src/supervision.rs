@@ -1142,6 +1142,7 @@ impl std::fmt::Debug for DebugChild<'_> {
 /// Serializable, payload-free declaration tree for persisted comparison.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SupervisionOutline {
     /// Immutable scope kind.
