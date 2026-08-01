@@ -289,7 +289,9 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
 async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     let mut tree = Tree::new();
     let ordered = tree.add_subtree("ordered", Tree::new());
-    let dynamic = tree.add_dynamic_subtree("dynamic", DynamicTree::new());
+    let dynamic_tree = DynamicTree::new();
+    let dynamic = dynamic_tree.scope();
+    tree.add_subtree("dynamic", dynamic_tree);
     let running_tree = tree.spawn().expect("mixed tree builds");
     let root = running_tree.scope();
 
@@ -320,7 +322,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     assert!(post_spawn.snapshot().child("worker").is_some());
     assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
     post_spawn
-        .remove_child_named("worker")
+        .remove_named("worker")
         .await
         .expect("post-spawn capability reaches the same membership");
     assert!(pre_spawn.snapshot().child("worker").is_none());
@@ -339,7 +341,7 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .await
         .expect("first actor added");
     scope
-        .remove_actor(&first_actor)
+        .remove(&first_actor)
         .await
         .expect("first actor removed");
     let replacement_actor = scope
@@ -347,12 +349,12 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .await
         .expect("replacement actor added");
     assert!(matches!(
-        scope.remove_actor(&first_actor).await,
+        scope.remove(&first_actor).await,
         Err(ControlError::UnknownChildId(id)) if id == "worker"
     ));
     assert!(scope.snapshot().child("worker").is_some());
     scope
-        .remove_actor(&replacement_actor)
+        .remove(&replacement_actor)
         .await
         .expect("replacement actor removed");
 
@@ -364,21 +366,18 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .add_task("worker", task_factory)
         .await
         .expect("first task added");
-    scope
-        .remove_task(&first_task)
-        .await
-        .expect("first task removed");
+    scope.remove(&first_task).await.expect("first task removed");
     let replacement_task = scope
         .add_task("worker", task_factory)
         .await
         .expect("replacement task added");
     assert!(matches!(
-        scope.remove_task(&first_task).await,
+        scope.remove(&first_task).await,
         Err(ControlError::UnknownChildId(id)) if id == "worker"
     ));
     assert!(scope.snapshot().child("worker").is_some());
     scope
-        .remove_task(&replacement_task)
+        .remove(&replacement_task)
         .await
         .expect("replacement task removed");
 
@@ -387,7 +386,7 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .await
         .expect("first subtree added");
     scope
-        .remove_subtree(&first_subtree)
+        .remove(&first_subtree)
         .await
         .expect("first subtree removed");
     let replacement_subtree = scope
@@ -395,12 +394,12 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .await
         .expect("replacement subtree added");
     assert!(matches!(
-        scope.remove_subtree(&first_subtree).await,
+        scope.remove(&first_subtree).await,
         Err(ControlError::UnknownChildId(id)) if id == "worker"
     ));
     assert!(scope.snapshot().child("worker").is_some());
     scope
-        .remove_subtree(&replacement_subtree)
+        .remove(&replacement_subtree)
         .await
         .expect("replacement subtree removed");
 
@@ -424,17 +423,17 @@ async fn subtree_removal_rejects_a_foreign_parent_membership() {
         .expect("second subtree added");
 
     assert!(matches!(
-        second.remove_subtree(&first_subtree).await,
+        second.remove(&first_subtree).await,
         Err(ControlError::UnknownChildId(id)) if id == "workers"
     ));
     assert!(second.snapshot().child("workers").is_some());
 
     first
-        .remove_subtree(&first_subtree)
+        .remove(&first_subtree)
         .await
         .expect("first subtree removed by its parent");
     second
-        .remove_subtree(&second_subtree)
+        .remove(&second_subtree)
         .await
         .expect("second subtree removed by its parent");
     first_tree.shutdown().await.expect("first root stops");
@@ -476,18 +475,18 @@ async fn task_removal_rejects_a_same_id_and_lineage_from_another_scope() {
             .lineage
     );
     assert!(matches!(
-        second.remove_task(&first_task).await,
+        second.remove(&first_task).await,
         Err(ControlError::UnknownChildId(id)) if id == "worker"
     ));
     assert!(first.snapshot().child("worker").is_some());
     assert!(second.snapshot().child("worker").is_some());
 
     first
-        .remove_task(&first_task)
+        .remove(&first_task)
         .await
         .expect("first task removed by its scope");
     second
-        .remove_task(&second_task)
+        .remove(&second_task)
         .await
         .expect("second task removed by its scope");
     first_tree.shutdown().await.expect("first root stops");
@@ -505,33 +504,32 @@ async fn actor_removal_reports_an_unavailable_stopped_scope() {
 
     running_tree.shutdown().await.expect("dynamic root stops");
 
-    assert_eq!(
-        scope.remove_actor(&actor).await,
-        Err(ControlError::Unavailable)
-    );
+    assert_eq!(scope.remove(&actor).await, Err(ControlError::Unavailable));
 }
 
 #[tokio::test]
 async fn actor_removal_reports_an_unavailable_detached_scope() {
     let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
     let root = running_tree.scope();
-    let nested = root
-        .add_dynamic_subtree("nested", DynamicTree::new())
+    let nested_tree = DynamicTree::new();
+    let nested = nested_tree.scope();
+    let nested_membership = root
+        .add_subtree("nested", nested_tree)
         .await
         .expect("nested dynamic scope added");
+    let nested_child = nested_membership
+        .dynamic()
+        .expect("inserted dynamic subtree keeps its capability");
     let actor = nested
         .add_actor("worker", || Idle)
         .await
         .expect("nested actor added");
 
-    root.remove_subtree(&nested)
+    root.remove(&nested_child)
         .await
         .expect("nested scope removed");
 
-    assert_eq!(
-        nested.remove_actor(&actor).await,
-        Err(ControlError::Unavailable)
-    );
+    assert_eq!(nested.remove(&actor).await, Err(ControlError::Unavailable));
     running_tree.shutdown().await.expect("dynamic root stops");
 }
 
@@ -805,7 +803,7 @@ async fn trees_terminalize_handles_when_dropped() {
     let handle = builder.scope();
     let snapshots = handle.snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
-    let _: ScopeRef = handle.clone().into_scope();
+    let _: ScopeRef = handle.clone().into();
     drop(builder);
     assert_snapshot_receiver_closes(snapshots).await;
 

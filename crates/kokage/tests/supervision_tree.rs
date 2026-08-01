@@ -248,7 +248,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
     assert_eq!(inserted.restart_policy, RestartPolicy::never());
     timeout(
         Duration::from_millis(250),
-        dynamic.scope().remove_child_named("inserted"),
+        dynamic.scope().remove_named("inserted"),
     )
     .await
     .expect("subtree abort policy bounds dynamic removal")

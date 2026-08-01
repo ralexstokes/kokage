@@ -7,8 +7,9 @@ down.
 
 ## The owner and the references
 
-`Tree::spawn` returns a [`RunningTree`], while `DynamicTree::spawn` returns a
-[`RunningDynamicTree`] — the unique **owner** of the whole supervision tree.
+Both `Tree::spawn` and `DynamicTree::spawn` return a [`RunningTree`] — the
+unique **owner** of the whole supervision tree. The inferred root-scope type is
+`ScopeRef` for an ordered tree and `DynamicScopeRef` for a dynamic tree.
 Ownership here is literal Rust ownership:
 
 - Keep it alive for as long as the application should run.
@@ -163,7 +164,6 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 `RunningTree` remains the single authority over the actor tree itself.
 
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
-[`RunningDynamicTree`]: https://stokes.io/kokage/api/kokage/struct.RunningDynamicTree.html
 [`SupervisorError`]: https://stokes.io/kokage/api/kokage/enum.SupervisorError.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`DynamicScopeRef`]: https://stokes.io/kokage/api/kokage/struct.DynamicScopeRef.html

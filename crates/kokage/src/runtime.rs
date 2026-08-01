@@ -487,33 +487,96 @@ fn task_is_revivable_by_group(snapshot: &SupervisorSnapshot, child: &ChildSnapsh
 /// Owns a spawned supervision tree.
 ///
 /// Use [`scope`](Self::scope) for observation and control through a cheaply
-/// cloneable, non-owning [`ScopeRef`]. Dropping a `ScopeRef` is inert and does
-/// not keep this owner alive; dropping this owner requests graceful shutdown.
+/// cloneable, non-owning scope reference. Ordered trees use the default
+/// [`ScopeRef`] parameter, while dynamic trees use [`DynamicScopeRef`].
+/// Dropping a scope reference is inert and does not keep this owner alive;
+/// dropping this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
-pub struct RunningTree {
+pub struct RunningTree<S = ScopeRef> {
     supervisor: RunningSupervisor,
-    scope: ScopeRef,
+    scope: S,
 }
 
-/// Owns a spawned dynamic supervision tree.
-///
-/// This is the dynamic counterpart to [`RunningTree`]. Its root
-/// [`scope`](Self::scope) carries the dynamic-membership capability directly,
-/// while dropping the owner still requests graceful shutdown.
-#[must_use = "dropping the running tree requests graceful shutdown"]
-pub struct RunningDynamicTree {
-    inner: RunningTree,
-}
+mod sealed {
+    use super::{ActorRef, ControlError, DynamicScopeRef, ScopeRef, TaskRef};
 
-impl RunningTree {
-    pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
-        let scope = ScopeRef::new(supervisor.handle(), actors);
-        Self { supervisor, scope }
+    pub trait RunningScope: Clone {
+        fn from_scope(scope: ScopeRef) -> Self;
     }
 
-    /// Returns the running tree's non-owning root scope reference.
-    pub fn scope(&self) -> ScopeRef {
-        self.scope.clone()
+    impl RunningScope for ScopeRef {
+        fn from_scope(scope: ScopeRef) -> Self {
+            scope
+        }
+    }
+
+    impl RunningScope for DynamicScopeRef {
+        fn from_scope(scope: ScopeRef) -> Self {
+            DynamicScopeRef::new(scope)
+        }
+    }
+
+    pub trait ChildHandle {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+        ) -> Result<(String, u64), ControlError>;
+    }
+
+    impl<M> ChildHandle for ActorRef<M> {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+        ) -> Result<(String, u64), ControlError> {
+            scope.resolve_actor_membership(self)
+        }
+    }
+
+    impl ChildHandle for TaskRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+        ) -> Result<(String, u64), ControlError> {
+            if !scope.supervisor.same_identity(&self.inner.scope.supervisor) {
+                return Err(ControlError::UnknownChildId(self.id().to_owned()));
+            }
+            Ok((self.id().to_owned(), self.inner.lineage))
+        }
+    }
+
+    impl ChildHandle for ScopeRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+        ) -> Result<(String, u64), ControlError> {
+            let Some(membership) = self.parent_membership.as_ref() else {
+                return Err(ControlError::UnknownChildId("<root>".to_owned()));
+            };
+            if !scope.supervisor.same_identity(&membership.parent) {
+                return Err(ControlError::UnknownChildId(membership.id.to_string()));
+            }
+            Ok((membership.id.to_string(), membership.lineage))
+        }
+    }
+
+    impl ChildHandle for DynamicScopeRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+        ) -> Result<(String, u64), ControlError> {
+            self.scope.resolve_membership(scope)
+        }
+    }
+}
+
+impl<S> RunningTree<S> {
+    pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self
+    where
+        S: sealed::RunningScope,
+    {
+        let scope = ScopeRef::new(supervisor.handle(), actors);
+        let scope = S::from_scope(scope);
+        Self { supervisor, scope }
     }
 
     /// Requests graceful shutdown and waits for completion, consuming the owner.
@@ -527,34 +590,14 @@ impl RunningTree {
     }
 }
 
-impl RunningDynamicTree {
-    pub(crate) fn new(inner: RunningTree) -> Self {
-        Self { inner }
-    }
-
-    /// Returns the dynamic root scope reference.
-    pub fn scope(&self) -> DynamicScopeRef {
-        DynamicScopeRef::new(self.inner.scope())
-    }
-
-    /// Requests graceful shutdown and waits for completion, consuming the owner.
-    pub async fn shutdown(self) -> Result<(), SupervisorError> {
-        self.inner.shutdown().await
-    }
-
-    /// Waits for the tree to stop, consuming the owner.
-    pub async fn wait(self) -> Result<(), SupervisorError> {
-        self.inner.wait().await
+impl<S: Clone> RunningTree<S> {
+    /// Returns the running tree's non-owning root scope reference.
+    pub fn scope(&self) -> S {
+        self.scope.clone()
     }
 }
 
-impl std::fmt::Debug for RunningDynamicTree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunningDynamicTree").finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for RunningTree {
+impl<S> std::fmt::Debug for RunningTree<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunningTree").finish_non_exhaustive()
     }
@@ -671,10 +714,9 @@ impl ScopeRef {
 
     /// Projects this scope to its dynamic-membership capability.
     ///
-    /// Prefer handles returned directly by [`DynamicTree::scope`](crate::DynamicTree::scope),
-    /// [`RunningDynamicTree::scope`], or
-    /// [`DynamicScopeRef::add_dynamic_subtree`]. This projection is the escape
-    /// hatch for scopes discovered through untyped tree traversal.
+    /// Prefer handles returned directly by [`DynamicTree::scope`](crate::DynamicTree::scope)
+    /// or [`RunningTree::scope`]. This projection is the escape hatch for
+    /// dynamic scopes discovered through untyped tree traversal.
     pub fn dynamic(&self) -> Option<DynamicScopeRef> {
         (self.kind() == ScopeKind::Dynamic).then(|| DynamicScopeRef::new(self.clone()))
     }
@@ -801,17 +843,21 @@ impl DynamicScopeRef {
         debug_assert_eq!(scope.kind(), ScopeKind::Dynamic);
         Self { scope }
     }
+}
 
-    /// Returns this capability as an ordinary non-mutating scope reference.
-    pub fn as_scope(&self) -> &ScopeRef {
-        &self.scope
-    }
-
-    /// Converts this capability into an ordinary scope reference.
-    pub fn into_scope(self) -> ScopeRef {
-        self.scope
+impl From<DynamicScopeRef> for ScopeRef {
+    fn from(scope: DynamicScopeRef) -> Self {
+        scope.scope
     }
 }
+
+/// A stable handle that identifies one exact dynamic child membership.
+///
+/// This sealed trait is implemented by [`ActorRef`], [`TaskRef`], [`ScopeRef`],
+/// and [`DynamicScopeRef`]. It cannot be implemented outside Kokage.
+pub trait ChildHandle: sealed::ChildHandle {}
+
+impl<T: sealed::ChildHandle + ?Sized> ChildHandle for T {}
 
 impl Deref for DynamicScopeRef {
     type Target = ScopeRef;
@@ -861,9 +907,9 @@ impl DynamicScopeRef {
     /// Builds and adds an actor-aware runtime subtree.
     ///
     /// The returned handle observes and controls the new subtree, and recursive
-    /// [`ScopeRef::actor_stats`] include it. Use
-    /// [`add_dynamic_subtree`](Self::add_dynamic_subtree) when the supplied tree
-    /// is dynamic and its mutation capability should be retained directly.
+    /// [`ScopeRef::actor_stats`] include it. When the supplied tree is dynamic,
+    /// obtain its [`DynamicScopeRef`] before moving it into this method if its
+    /// mutation capability should be retained directly.
     /// Removing the child detaches its actor metadata with the supervisor
     /// membership; retained subtree handles then report
     /// [`ControlError::Unavailable`] from dynamic control operations.
@@ -923,17 +969,6 @@ impl DynamicScopeRef {
             Some(lineage),
         )
         .ok_or(ControlError::Unavailable)
-    }
-
-    /// Builds and adds a dynamic runtime subtree, retaining its mutation capability.
-    pub async fn add_dynamic_subtree(
-        &self,
-        id: impl Into<String>,
-        tree: crate::DynamicTree,
-    ) -> Result<DynamicScopeRef, ControlError> {
-        self.add_subtree(id, tree)
-            .await
-            .and_then(|scope| scope.dynamic().ok_or(ControlError::Unavailable))
     }
 
     /// Adds a supervised task child with default configuration to this scope.
@@ -1025,7 +1060,7 @@ impl DynamicScopeRef {
     /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The returned ref identifies the exact membership and can be passed to
-    /// [`DynamicScopeRef::remove_actor`]. See [`crate::ActorFactory`] for the
+    /// [`DynamicScopeRef::remove`]. See [`crate::ActorFactory`] for the
     /// incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
@@ -1092,16 +1127,42 @@ impl DynamicScopeRef {
         Ok(actor_ref)
     }
 
-    /// Removes the exact actor membership identified by `actor`.
+    fn resolve_actor_membership<M>(
+        &self,
+        actor: &ActorRef<M>,
+    ) -> Result<(String, u64), ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                let attachment = attached.attachment();
+                if !attachment.belongs_to(&self.actors) {
+                    return None;
+                }
+                let RuntimeAttachmentKind::Actor(member) = &attachment.kind else {
+                    return None;
+                };
+                Arc::ptr_eq(member.identity(), actor.identity())
+                    .then(|| (identity.id.clone(), identity.lineage))
+            })
+            .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))
+    }
+
+    /// Removes the exact child membership identified by `child`.
     ///
-    /// A stale ref never removes a same-id replacement. Use
-    /// [`remove_child_named`](Self::remove_child_named) when only the id is
+    /// A stale handle never removes a same-id replacement. Actor handles are
+    /// resolved against the scope's current runtime attachments; task and
+    /// subtree handles carry their membership identity directly. Use
+    /// [`remove_named`](Self::remove_named) when only the id is
     /// available and targeting whichever membership currently owns it is
     /// intentional.
     ///
     /// Removal marks the membership as removing and starts its configured
-    /// shutdown. When cooperative shutdown completes within its grace period,
-    /// an [`Actor`](crate::Actor) stops its normal receive loop, closes external
+    /// shutdown. For an actor whose cooperative shutdown completes within its
+    /// grace period, the [`Actor`](crate::Actor) stops its normal receive loop, closes external
     /// intake, applies its [`Shutdown`](crate::Shutdown), runs `on_stop`,
     /// makes the mailbox binding terminal, and is then detached. Immediate
     /// abort, or expiry of the cooperative grace period, can skip any remaining
@@ -1129,74 +1190,23 @@ impl DynamicScopeRef {
     ///
     /// # Errors
     ///
-    /// A stopped scope returns [`ControlError::Unavailable`], and
-    /// operation failures are reported through the remaining variants.
-    pub async fn remove_actor<M>(&self, actor: &ActorRef<M>) -> Result<(), ControlError> {
+    /// A stopped scope returns [`ControlError::Unavailable`]. A stale or foreign
+    /// handle returns [`ControlError::UnknownChildId`]; other operation failures
+    /// are reported through the remaining variants.
+    pub async fn remove(&self, child: &impl ChildHandle) -> Result<(), ControlError> {
+        let membership = sealed::ChildHandle::resolve_membership(child, self)?;
         let dynamic = self.dynamic_supervisor()?;
-        let membership = __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
-            .into_iter()
-            .find_map(|attached| {
-                let [identity] = attached.path() else {
-                    return None;
-                };
-                let attachment = attached.attachment();
-                if !attachment.belongs_to(&self.actors) {
-                    return None;
-                }
-                let RuntimeAttachmentKind::Actor(member) = &attachment.kind else {
-                    return None;
-                };
-                Arc::ptr_eq(member.identity(), actor.identity())
-                    .then(|| (identity.id.clone(), identity.lineage))
-            })
-            .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))?;
         dynamic
             .remove_child_membership(membership.0, membership.1)
             .await
     }
 
-    /// Removes the exact task membership identified by `task`.
-    ///
-    /// A stale ref never removes a same-id replacement.
-    pub async fn remove_task(&self, task: &TaskRef) -> Result<(), ControlError> {
-        if !self.supervisor.same_identity(&task.inner.scope.supervisor) {
-            return Err(ControlError::UnknownChildId(task.id().to_owned()));
-        }
-        self.dynamic_supervisor()?
-            .remove_child_membership(task.id(), task.inner.lineage)
-            .await
-    }
-
-    /// Removes the exact direct subtree membership identified by `subtree`.
-    ///
-    /// A stale or foreign scope handle never removes a same-id replacement.
-    ///
-    /// # Errors
-    ///
-    /// A stopped parent returns [`ControlError::Unavailable`]. A handle that
-    /// does not identify a current direct child of this scope returns
-    /// [`ControlError::UnknownChildId`].
-    pub async fn remove_subtree(&self, subtree: &ScopeRef) -> Result<(), ControlError> {
-        let dynamic = self.dynamic_supervisor()?;
-        let Some(membership) = subtree.parent_membership.as_ref() else {
-            return Err(ControlError::UnknownChildId("<root>".to_owned()));
-        };
-        if !self.supervisor.same_identity(&membership.parent) {
-            return Err(ControlError::UnknownChildId(membership.id.to_string()));
-        }
-        dynamic
-            .remove_child_membership(membership.id.to_string(), membership.lineage)
-            .await
-    }
-
     /// Removes whichever current child membership owns `id`.
     ///
-    /// Prefer [`remove_actor`](Self::remove_actor),
-    /// [`remove_task`](Self::remove_task), or
-    /// [`remove_subtree`](Self::remove_subtree) when the insertion handle is
-    /// available. This name-based operation is the escape hatch for external
+    /// Prefer [`remove`](Self::remove) when the insertion handle is available.
+    /// This name-based operation is the escape hatch for external
     /// registries and operator input.
-    pub async fn remove_child_named(&self, id: impl Into<String>) -> Result<(), ControlError> {
+    pub async fn remove_named(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.remove_child(id).await
     }
 }
@@ -1321,14 +1331,14 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 mod tests {
     use crate::{
         Actor, ActorSpec, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-        ExitResult, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef, Tree,
+        ExitResult, RestartPolicy, RunningTree, ScopeRef, Tree,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
         let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
         let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
-        let dynamic_spawn: fn(DynamicTree) -> Result<RunningDynamicTree, BuildError> =
+        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree<DynamicScopeRef>, BuildError> =
             DynamicTree::spawn;
         let dynamic_scope: fn(&DynamicTree) -> DynamicScopeRef = DynamicTree::scope;
 
@@ -1459,7 +1469,7 @@ mod tests {
             .lineage;
 
         dynamic
-            .remove_child_named("workers")
+            .remove_named("workers")
             .await
             .expect("first subtree removed");
         dynamic

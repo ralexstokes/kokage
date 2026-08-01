@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, DynamicScopeRef, RunningDynamicTree, Tree, raw::RawActor,
+    ActorFactory, ActorRef, ActorSlot, DynamicScopeRef, RunningTree, Tree, raw::RawActor,
 };
 #[cfg(feature = "host")]
 use kokage::{ActorSpec, raw::ActorHost};
 
-pub(crate) fn dynamic_root(running_tree: &RunningDynamicTree) -> DynamicScopeRef {
+pub(crate) fn dynamic_root(running_tree: &RunningTree<DynamicScopeRef>) -> DynamicScopeRef {
     running_tree.scope()
 }
 

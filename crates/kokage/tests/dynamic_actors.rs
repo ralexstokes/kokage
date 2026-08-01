@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-    MonitorEventKind, RestartPolicy, RunningDynamicTree, ScopeRef, SendError, SendErrorKind,
-    Shutdown, StopContext, SupervisorError, TaskSpec, Tree,
+    MonitorEventKind, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
+    StopContext, SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, ExitStatus, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -184,7 +184,7 @@ async fn wait_for_retained_terminal_child(handle: &DynamicScopeRef, id: &str) {
         .await
         .expect("settling actor added");
     handle
-        .remove_child_named("settle")
+        .remove_named("settle")
         .await
         .expect("settling actor removed");
     wait_for_child(handle, "settle", false).await;
@@ -226,7 +226,7 @@ async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_running_tree(running_tree: RunningDynamicTree, phase: &str) {
+async fn shutdown_running_tree(running_tree: RunningTree<DynamicScopeRef>, phase: &str) {
     timeout(Duration::from_secs(2), running_tree.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -340,7 +340,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert_eq!(sink.stats().actor_id, "sink");
 
     support::dynamic_root(&running_tree)
-        .remove_child_named("sink")
+        .remove_named("sink")
         .await
         .expect("sink removed");
     assert!(matches!(
@@ -516,7 +516,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
 
     let mut snapshots = running_tree.scope().snapshots();
     let remover = support::dynamic_root(&running_tree);
-    let removal = tokio::spawn(async move { remover.remove_child_named("removable").await });
+    let removal = tokio::spawn(async move { remover.remove_named("removable").await });
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
@@ -638,7 +638,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 
     let mut snapshots = running_tree.scope().snapshots();
     let remover = support::dynamic_root(&running_tree);
-    let removal = tokio::spawn(async move { remover.remove_child_named("discarding").await });
+    let removal = tokio::spawn(async move { remover.remove_named("discarding").await });
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
@@ -906,7 +906,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
         .expect("pending actor added");
     timeout(
         Duration::from_millis(100),
-        support::dynamic_root(&running_tree).remove_child_named("inherited-shutdown"),
+        support::dynamic_root(&running_tree).remove_named("inherited-shutdown"),
     )
     .await
     .expect("supplied abort default makes removal immediate")
@@ -1444,7 +1444,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 
     assert!(matches!(
         support::dynamic_root(&running_tree)
-            .remove_child_named("dynamic")
+            .remove_named("dynamic")
             .await,
         Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
             if actor_id == "dynamic"

@@ -269,7 +269,7 @@ impl OneShotTaskSpec {
     /// This is useful when scope-level snapshot observers need to discover the
     /// terminal state without already holding its [`TaskRef`](crate::TaskRef).
     /// The retained membership continues to occupy its child id until it is
-    /// passed to [`DynamicScopeRef::remove_task`](crate::DynamicScopeRef::remove_task)
+    /// passed to [`DynamicScopeRef::remove`](crate::DynamicScopeRef::remove)
     /// or the scope shuts down. The default removes the membership after
     /// completion; the returned `TaskRef` retains the terminal outcome either
     /// way.

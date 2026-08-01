@@ -297,7 +297,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     dynamic_scope
-        .remove_actor(&dynamic)
+        .remove(&dynamic)
         .await
         .expect("nested actor removed through runtime handle");
     assert!(
@@ -309,7 +309,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     raw_members
-        .remove_child_named("raw")
+        .remove_named("raw")
         .await
         .expect("raw supervisor removed");
 
@@ -362,12 +362,16 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 #[tokio::test]
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
-    let middle = support::dynamic_root(&root)
-        .add_dynamic_subtree("middle", DynamicTree::new())
+    let middle_tree = DynamicTree::new();
+    let middle = middle_tree.scope();
+    support::dynamic_root(&root)
+        .add_subtree("middle", middle_tree)
         .await
         .expect("middle subtree added");
-    let leaf = middle
-        .add_dynamic_subtree("leaf", DynamicTree::new())
+    let leaf_tree = DynamicTree::new();
+    let leaf = leaf_tree.scope();
+    middle
+        .add_subtree("leaf", leaf_tree)
         .await
         .expect("leaf subtree added");
     let actor = leaf
@@ -379,7 +383,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     assert_eq!(root.scope().actor_stats().len(), 1);
     assert!(middle.subtree("leaf").is_some());
     support::dynamic_root(&root)
-        .remove_child_named("middle")
+        .remove_named("middle")
         .await
         .expect("middle subtree removed");
     assert!(root.scope().subtree("middle").is_none());
@@ -411,8 +415,10 @@ async fn subtree_validation_phases_report_rejected() {
         ControlError::Rejected(BuildError::DuplicateChildId("duplicate".to_owned()))
     );
 
-    let first = support::dynamic_root(&root)
-        .add_dynamic_subtree("workers", DynamicTree::new())
+    let first_tree = DynamicTree::new();
+    let first = first_tree.scope();
+    support::dynamic_root(&root)
+        .add_subtree("workers", first_tree)
         .await
         .expect("first subtree added");
     first
@@ -505,7 +511,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     });
 
     support::dynamic_root(&handle)
-        .remove_child_named("worker")
+        .remove_named("worker")
         .await
         .expect("tracked actor removed through runtime handle");
     support::dynamic_root(&handle)
@@ -1428,10 +1434,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("runtime-added actor reported in runtime stats");
     assert_eq!(extra_stats.stats.messages_accepted, 1);
 
-    dynamic
-        .remove_child_named("extra")
-        .await
-        .expect("actor removed");
+    dynamic.remove_named("extra").await.expect("actor removed");
     let stats = handle.scope().actor_stats();
     assert!(
         stats.iter().all(|stats| stats.stats.actor_id != "extra"),

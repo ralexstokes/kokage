@@ -113,7 +113,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
             if id == "configured-job"
     ));
     scope
-        .remove_task(&task)
+        .remove(&task)
         .await
         .expect("retained terminal membership is removed explicitly");
     assert!(task.snapshot().is_none());

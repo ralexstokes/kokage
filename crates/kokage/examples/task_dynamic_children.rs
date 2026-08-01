@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    scope.remove_task(&cache_warmer).await?;
+    scope.remove(&cache_warmer).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -58,9 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("cache-warmer removed at runtime");
 
-    let nested = scope
-        .add_dynamic_subtree("nested", DynamicTree::new())
-        .await?;
+    let nested_tree = DynamicTree::new();
+    let nested = nested_tree.scope();
+    scope.add_subtree("nested", nested_tree).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("nested", |child| child.state.is_running()),
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested.remove_task(&nested_cache).await?;
+    nested.remove(&nested_cache).await?;
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),

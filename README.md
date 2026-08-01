@@ -85,7 +85,8 @@ The full runnable version is
 
 `Tree` declares ordered membership up front. `DynamicTree` starts empty and
 exposes runtime membership for actors, tasks, jobs, or subtrees. Their
-`spawn()` methods return `RunningTree` and `RunningDynamicTree`, respectively.
+`spawn()` methods return `RunningTree` and `RunningTree<DynamicScopeRef>`,
+respectively.
 Keep that owner alive for as long as the application should run: dropping it
 requests graceful shutdown, so a discarded `let _ = tree.spawn()?;` shuts down
 immediately.
@@ -95,7 +96,7 @@ an `ActorRef`. `ScopeRef` is the common observation and control surface:
 snapshots, lifecycle observation, subtree traversal, and either non-waiting
 `request_shutdown()` or waiting `shutdown().await`. Dynamic scopes
 return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
-`add_task`, `spawn_once`, exact-handle removal, and the `remove_child_named`
+`add_task`, `spawn_once`, exact-handle `remove`, and the `remove_named`
 escape hatch. A scope found through untyped tree traversal can request that
 capability with `scope.dynamic()`.
 

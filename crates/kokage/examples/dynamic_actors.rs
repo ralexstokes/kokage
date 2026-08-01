@@ -74,8 +74,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(observed, "vip banners x2");
     println!("rush job {observed}");
 
-    scope.remove_actor(&orders).await?;
-    scope.remove_actor(&rush).await?;
+    scope.remove(&orders).await?;
+    scope.remove(&rush).await?;
     running_tree.shutdown().await?;
     Ok(())
 }

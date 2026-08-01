@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartPolicy,
-    RunningDynamicTree, ScopeRef, Tree,
+    Actor, ActorSlot, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, Guard,
+    RestartPolicy, RunningTree, ScopeRef, Tree,
     observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -106,7 +106,7 @@ impl Actor for ScopeSink {
 }
 
 async fn runtime_with_watched_subtree() -> (
-    RunningDynamicTree,
+    RunningTree<DynamicScopeRef>,
     ScopeRef,
     kokage::ActorRef<SinkMsg>,
     kokage::ActorRef<()>,
@@ -336,7 +336,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child_named("watched")
+        .remove_named("watched")
         .await
         .expect("watched subtree removed");
     let (_, final_event) = recv_event(&mut observed).await;
@@ -363,7 +363,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child_named("sink")
+        .remove_named("sink")
         .await
         .expect("target removed");
     timeout(Duration::from_secs(2), guard.finished())

@@ -10,11 +10,11 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
-            DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-            MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
-            SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef,
-            TaskSpec, TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
+            DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown,
+            MonitorEvent, MonitorEventKind, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
+            SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec,
+            TimerKey, Tree,
         };
     }
 

@@ -14,8 +14,8 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, DynamicScopeRef, ExitResult, RunningDynamicTree,
-    RunningTree, ScopeRef, TaskContext, TaskRef,
+    ActorFactory, ActorRef, ActorSpec, DynamicScopeRef, ExitResult, RunningTree, ScopeRef,
+    TaskContext, TaskRef,
     actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -146,7 +146,7 @@ pub struct Tree {
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
 /// [`DynamicScopeRef`] returned by [`scope`](Self::scope) before spawn or by
-/// calling [`RunningDynamicTree::scope`] on the spawned tree.
+/// calling [`RunningTree::scope`] on the spawned tree.
 pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
@@ -391,20 +391,6 @@ impl Tree {
         self.add_subtree_spec(id, tree.into())
     }
 
-    /// Appends a dynamic nested scope and returns its mutation-capable handle.
-    ///
-    /// This is the typed counterpart to [`add_subtree`](Self::add_subtree).
-    /// Use it when the caller will add runtime children to the nested scope.
-    pub fn add_dynamic_subtree(
-        &mut self,
-        id: impl Into<String>,
-        tree: DynamicTree,
-    ) -> DynamicScopeRef {
-        let scope = tree.scope();
-        self.add_subtree(id, tree);
-        scope
-    }
-
     /// Appends an explicitly configured subtree declaration and returns its scope handle.
     pub fn add_subtree_spec(&mut self, id: impl Into<String>, tree: SubtreeSpec) -> ScopeRef {
         let id = id.into();
@@ -420,7 +406,7 @@ impl Tree {
                 scope
             }
             SubtreeKind::Dynamic(tree) => {
-                let scope = tree.scope().into_scope();
+                let scope = ScopeRef::from(tree.scope());
                 self.inner.add_subtree(id, tree.inner, restart, shutdown);
                 scope
             }
@@ -472,10 +458,10 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`RunningDynamicTree`] for as long as the runtime
+    /// Retain the returned [`RunningTree`] for as long as the runtime
     /// should remain alive. Dropping it requests graceful shutdown;
     /// [`DynamicScopeRef`] values are non-owning. Access the root scope after
-    /// spawn with [`RunningDynamicTree::scope`].
+    /// spawn with [`RunningTree::scope`].
     ///
     /// # Errors
     ///
@@ -483,12 +469,9 @@ impl DynamicTree {
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<RunningDynamicTree, BuildError> {
+    pub fn spawn(self) -> Result<RunningTree<DynamicScopeRef>, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RunningDynamicTree::new(RunningTree::new(
-            supervisor.spawn(),
-            actors,
-        )))
+        Ok(RunningTree::new(supervisor.spawn(), actors))
     }
 }
 

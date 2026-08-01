@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with owning [`RunningTree`] and
-//! [`RunningDynamicTree`] values plus non-owning scope references.
+//! async scheduler (Tokio today), with owning [`RunningTree`] values plus
+//! non-owning scope references.
 //!
 //! Add each actor's id and factory directly to a [`Tree`], then spawn it.
 //! Use [`ActorSpec`] when a declaration needs explicit policy overrides:
@@ -54,7 +54,7 @@
 //! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
 //! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
-//! | [`RunningTree`] / [`RunningDynamicTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
+//! | [`RunningTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
 //! | [`ScopeRef`] / [`DynamicScopeRef`] | Cheaply cloneable, non-owning scope references; only the dynamic form carries membership mutation. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`raw::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -253,11 +253,11 @@ pub mod observe {
 /// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
-        DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
-        OneShotTaskSpec, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
-        SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec,
-        TimerKey, Tree,
+        Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
+        DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
+        MonitorEventKind, OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
+        SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey,
+        Tree,
     };
 }
 
@@ -269,7 +269,7 @@ pub use actor::{
     ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeRef, TaskError, TaskRef};
+pub use runtime::{ChildHandle, DynamicScopeRef, RunningTree, ScopeRef, TaskError, TaskRef};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, MailboxShutdown,

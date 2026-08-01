@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningDynamicTree, TaskSpec,
+    Actor, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, RunningTree, TaskSpec,
     observe::ScopedActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
@@ -60,7 +60,11 @@ fn actor_stats() -> Vec<ScopedActorStats> {
 
 async fn spawn_console_with_stats(
     stats: impl Fn() -> Vec<ScopedActorStats> + Send + Sync + 'static,
-) -> (ConsoleHandle, RunningDynamicTree, RunningDynamicTree) {
+) -> (
+    ConsoleHandle,
+    RunningTree<DynamicScopeRef>,
+    RunningTree<DynamicScopeRef>,
+) {
     let snapshots = DynamicTree::new()
         .spawn()
         .expect("test snapshot tree spawns");
@@ -88,7 +92,11 @@ async fn spawn_console_with_stats(
     (handle, snapshots, lifecycle)
 }
 
-async fn spawn_console() -> (ConsoleHandle, RunningDynamicTree, RunningDynamicTree) {
+async fn spawn_console() -> (
+    ConsoleHandle,
+    RunningTree<DynamicScopeRef>,
+    RunningTree<DynamicScopeRef>,
+) {
     spawn_console_with_stats(actor_stats).await
 }
 
