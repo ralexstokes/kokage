@@ -8,7 +8,4 @@ fn derive_ui() {
 
     t.compile_fail("tests/ui/actor-factory/*.rs");
     t.pass("tests/ui/actor-factory-pass/*.rs");
-
-    t.compile_fail("tests/ui/supervision/*.rs");
-    t.pass("tests/ui/supervision-pass/*.rs");
 }

@@ -124,15 +124,12 @@
 //! and lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
 //! operation; retain it or call [`Guard::detach`] to keep the scoped work alive.
 //!
-//! # Static declarations
+//! # Actor factories
 //!
-//! Enable the opt-in `derive` feature to generate static declarations:
-//! `#[derive(ActorFactory)]` produces reusable actor factories, while
-//! `#[derive(Supervision)]` lowers one nested struct declaration into an
-//! ordinary [`Tree`] plus a matching bundle of actor and scope handles.
-//! Derive macros are intentionally not part of [`prelude`]; import
-//! [`ActorFactory`] or [`Supervision`] from the crate root, or use their fully
-//! qualified `kokage` paths.
+//! Enable the opt-in `derive` feature to use `#[derive(ActorFactory)]` for
+//! reusable actor factories. The derive macro is intentionally not part of
+//! [`prelude`]; import [`ActorFactory`] from the crate root, or use its fully
+//! qualified `kokage` path.
 //!
 //! # Cyclic wiring
 //!
@@ -202,7 +199,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | no | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
+//! | `derive` | no | Re-exports `#[derive(ActorFactory)]`. |
 //! | `host` | no | Direct single-actor hosting through `ActorSpec::into_host` and `raw::ActorHost`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 //! | `serde` | no | Serialization support for outlines, actor stats, and view types. |
@@ -251,9 +248,9 @@ pub mod observe {
 /// errors remain at the crate root; snapshots and lifecycle types live in
 /// [`observe`], and raw actor hosting lives in [`raw`].
 ///
-/// With the `derive` feature enabled, derive macros are explicit root imports
-/// rather than prelude members. Import `ActorFactory` or `Supervision` for an
-/// unqualified derive, or use the fully qualified `kokage` path.
+/// With the `derive` feature enabled, `ActorFactory` is an explicit root import
+/// rather than a prelude member. Import it for an unqualified derive, or use
+/// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
@@ -265,7 +262,7 @@ pub mod prelude {
 }
 
 #[cfg(feature = "derive")]
-pub use kokage_derive::{ActorFactory, Supervision};
+pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
@@ -273,8 +270,6 @@ pub use actor::{
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
 pub use runtime::{DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeRef, TaskError, TaskRef};
-#[cfg(feature = "derive")]
-pub use supervision::{DynamicScope, Supervision, SupervisionFactories};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, MailboxShutdown,

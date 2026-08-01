@@ -1,13 +1,11 @@
 # Compile-fail UI tests
 
-`actor-factory/` and `supervision/` hold
-[trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
-`tests/derive_ui.rs`. They cover the `#[derive(ActorFactory)]` and
-`#[derive(Supervision)]` shape and attribute contracts. Each
-`.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
-spans included. The corresponding `*-pass/` directories contain only
-compile-success probes not already exercised by the integration tests:
-cross-module visibility and generated-name hygiene.
+`actor-factory/` holds [trybuild](https://github.com/dtolnay/trybuild)
+compile-fail cases run by `tests/derive_ui.rs`. They cover the
+`#[derive(ActorFactory)]` shape and attribute contract. Each `.rs` case has a
+checked-in `.stderr` snapshot of the exact compiler output, spans included.
+The corresponding `actor-factory-pass/` directory contains compile-success
+probes not already exercised by the integration tests.
 
 ## Updating snapshots on a toolchain bump
 
