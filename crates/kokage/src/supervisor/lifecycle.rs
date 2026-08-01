@@ -933,6 +933,13 @@ mod tests {
         );
         sink.forward_child(reflected);
 
+        // Supervisor-level events remain part of the lower-level direct queue,
+        // but the specialized observation projects child updates only.
+        sink.emit_aligned(
+            LifecycleEvent::local(LifecycleEventKind::SupervisorStopping),
+            || {},
+        );
+
         let fresh = emit_child(&hub, &sink, &snapshots, "fresh");
         assert_eq!(
             observation.next().await,
@@ -967,16 +974,38 @@ mod tests {
         let ChildObservationUpdate::Reset { snapshot, dropped } = reset else {
             panic!("overflow must yield a reset");
         };
-        assert!(dropped > 0);
+        assert_eq!(dropped, 13);
         assert_eq!(snapshot.lifecycle_seq, hub.seq());
         assert_eq!(snapshot.total_restarts, hub.seq());
+
+        // The reflected suffix still occupies 127 slots after the first reset.
+        // Three more transitions deterministically overflow it again: the
+        // first overflow drops two entries to make room for the marker, and
+        // the next push drops one more.
+        for index in 0..3 {
+            emit_child(&hub, &sink, &snapshots, format!("repeat-overflow-{index}"));
+        }
+        let second_reset = observation
+            .next()
+            .await
+            .expect("a second overflow yields another recovery reset");
+        let ChildObservationUpdate::Reset {
+            snapshot: second_snapshot,
+            dropped: second_dropped,
+        } = second_reset
+        else {
+            panic!("repeated overflow must yield a reset");
+        };
+        assert_eq!(second_dropped, 3);
+        assert_eq!(second_snapshot.lifecycle_seq, hub.seq());
+        assert!(second_snapshot.lifecycle_seq > snapshot.lifecycle_seq);
 
         let fresh = emit_child(&hub, &sink, &snapshots, "after-reset");
         let fresh = match fresh.kind {
             LifecycleEventKind::Child(child) => child,
             kind => panic!("expected child transition, got {kind:?}"),
         };
-        assert!(fresh.seq > snapshot.lifecycle_seq);
+        assert!(fresh.seq > second_snapshot.lifecycle_seq);
         assert_eq!(
             observation.next().await,
             Some(ChildObservationUpdate::Transition(fresh))

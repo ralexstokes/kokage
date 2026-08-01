@@ -1,10 +1,10 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::supervisor::{
     ChildEventKind, ChildObservationUpdate, ChildSpec, CompletionError, LifecycleEventKind,
-    RestartPolicy, SnapshotRecvError, Supervisor, TaskSpec,
+    RestartPolicy, Shutdown, SnapshotRecvError, Supervisor, TaskSpec,
 };
-use tokio::time::timeout;
+use tokio::{sync::Notify, time::timeout};
 
 const WAIT: Duration = Duration::from_secs(2);
 
@@ -37,6 +37,91 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
     assert!(added_seq > baseline);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_identity() {
+    let leaf_builder = Supervisor::dynamic();
+    let leaf = leaf_builder.handle();
+    let leaf_supervisor = leaf_builder.build().expect("leaf supervisor builds");
+    let crash_middle = Arc::new(Notify::new());
+    let bomb_crash = Arc::clone(&crash_middle);
+    let middle = Supervisor::ordered()
+        .child_spec(ChildSpec::supervisor("leaf", leaf_supervisor))
+        .child(
+            TaskSpec::new("bomb", move |_| {
+                let crash = Arc::clone(&bomb_crash);
+                async move {
+                    crash.notified().await;
+                    Err(std::io::Error::other("middle boom").into())
+                }
+            })
+            .restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
+            .shutdown(Shutdown::abort()),
+        )
+        .build()
+        .expect("middle supervisor builds");
+    let running = Supervisor::ordered()
+        .child_spec(
+            ChildSpec::supervisor("middle", middle)
+                .restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("root supervisor builds")
+        .spawn();
+    let root = running.handle();
+    root.wait_started().await.expect("initial tree starts");
+
+    let observation = leaf.observe_lifecycle();
+    let baseline = observation.snapshot.lifecycle_seq;
+    let mut updates = observation.events;
+
+    crash_middle.notify_one();
+    timeout(
+        WAIT,
+        root.subscribe_snapshots()
+            .wait_for_child("middle", |child| {
+                child.generation >= 1 && child.state.is_running()
+            }),
+    )
+    .await
+    .expect("middle replacement starts")
+    .expect("root snapshot source remains open");
+
+    let dynamic = leaf.dynamic().expect("leaf retains its dynamic capability");
+    for index in 0..70 {
+        let id = format!("overflow-{index}");
+        dynamic
+            .add_child(TaskSpec::new(id.clone(), |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }))
+            .await
+            .expect("temporary child is added");
+        dynamic
+            .remove_child(&id)
+            .await
+            .expect("temporary child is removed");
+    }
+
+    let reset = timeout(WAIT, async {
+        loop {
+            let update = updates.next().await.expect("leaf observation remains open");
+            if let ChildObservationUpdate::Reset { snapshot, dropped } = update {
+                break (snapshot, dropped);
+            }
+        }
+    })
+    .await
+    .expect("overflow yields a reset after stable identity rebinding");
+    assert!(reset.1 > 0);
+    assert!(reset.0.lifecycle_seq > baseline);
+    assert_eq!(reset.0.lifecycle_seq, leaf.snapshot().lifecycle_seq);
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+    timeout(WAIT, async { while updates.next().await.is_some() {} })
+        .await
+        .expect("stable observation closes with the terminal identity");
 }
 
 #[tokio::test]
