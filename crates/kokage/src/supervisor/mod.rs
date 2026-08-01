@@ -76,8 +76,8 @@ pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{
-    ChildEvent, ChildEventKind, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-    LifecycleWatch,
+    ChildEvent, ChildEventKind, ChildObservationUpdate, ChildObservationWatch, LifecycleEvent,
+    LifecycleEventKind, LifecycleObservation, LifecycleWatch,
 };
 pub use owner::{RunningSupervisor, Supervisor};
 pub use restart::{Backoff, RestartPolicy};

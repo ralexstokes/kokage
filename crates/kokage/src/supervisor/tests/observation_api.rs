@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildEventKind, ChildSpec, CompletionError, LifecycleEventKind, RestartPolicy,
-    SnapshotRecvError, Supervisor, TaskSpec,
+    ChildEventKind, ChildObservationUpdate, ChildSpec, CompletionError, LifecycleEventKind,
+    RestartPolicy, SnapshotRecvError, Supervisor, TaskSpec,
 };
 use tokio::time::timeout;
 
@@ -23,9 +23,8 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
 
     let added_seq = timeout(WAIT, async {
         loop {
-            let event = events.next().await.expect("lifecycle remains open");
-            assert!(event.scope_path.is_empty());
-            if let LifecycleEventKind::Child(child) = event.kind
+            let update = events.next().await.expect("observation remains open");
+            if let ChildObservationUpdate::Transition(child) = update
                 && child.child_id == "worker"
                 && matches!(child.kind, ChildEventKind::Added)
             {

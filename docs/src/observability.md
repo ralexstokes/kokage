@@ -7,7 +7,7 @@ observation contracts:
 
 1. `snapshot()` / `snapshots()` for conflated current state;
 2. `lifecycle_events()` for ordered history, with `observe_children()` as the
-   gap-free direct-child state-and-events primitive;
+   self-recovering direct-child state-and-updates primitive;
 3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
 
 Tracing, actor stats, metrics, and `kokage-console` project those contracts for
@@ -91,11 +91,34 @@ You saw this pattern in [Let It Crash](let-it-crash.md).
 
 Most stateful consumers should use [`snapshot`] or [`snapshots`] and avoid
 maintaining a second copy of runtime state. When a consumer does need its own
-direct-child reducer or lag policy, [`observe_children`] atomically returns an
-aligned snapshot and event stream. Initialize from the snapshot, then apply
-events whose child sequence is greater than `snapshot.lifecycle_seq`. After a
-`Lagged` marker, call `observe_children` again and replace local state with the
-fresh snapshot before continuing from its new stream.
+direct-child reducer, [`observe_children`] returns an aligned snapshot and a
+self-recovering [`ChildObservationWatch`]. Initialize from the snapshot, then
+apply every [`ChildObservationUpdate`] from the watch:
+
+```rust,ignore
+let observation = scope.observe_children();
+state.replace(observation.snapshot);
+let mut updates = observation.events;
+
+while let Some(update) = updates.next().await {
+    match update {
+        ChildObservationUpdate::Transition(child) => state.apply(child),
+        ChildObservationUpdate::Reset { snapshot, dropped } => {
+            tracing::warn!(dropped, "child observation recovered from lag");
+            state.replace(snapshot);
+        }
+        _ => {}
+    }
+}
+```
+
+The watch suppresses transitions already reflected by the initial snapshot.
+If its bounded queue overflows, it reads the latest stable snapshot, advances
+its sequence floor, and yields `Reset`; transitions already reflected by that
+reset are suppressed as the watch continues. Consumers do not need to compare
+sequence numbers, handle `Lagged`, or replace the subscription themselves.
+Call [`ChildObservationWatch::forward_to`] to deliver both transitions and
+resets through an actor's ordinary mailbox.
 
 ## The recursive lifecycle stream: what happened, in order
 
@@ -140,10 +163,11 @@ Delivery is buffered, not conflated. A lower-level consumer that falls far
 behind gets the oldest details collapsed into one `Lagged { dropped }` marker
 — the stream never lies by omission. Recursive streams have per-scope sequence
 spaces, so a custom recursive reducer must resynchronize each affected scope
-from its snapshot. A direct-child reducer can resubscribe through
-`observe_children` after lag. To feed events into an actor instead of a loop,
-choose the desired stream and call [`LifecycleWatch::forward_to`]. It maps
-events into any `ActorRef` and returns a `Guard`.
+from its snapshot. To feed this lower-level history into an actor instead of a
+loop, call [`LifecycleWatch::forward_to`]. It maps child transitions and lag
+markers into any `ActorRef` and returns a `Guard`; recovery policy remains the
+consumer's responsibility. Use `observe_children` and its specialized pump
+when a direct-child reducer should recover automatically.
 
 Note how this differs from a peer [`MonitorEvent`] watch
 ([Watching Peers](watching-peers.md)): monitors give one actor a typed,
@@ -216,6 +240,9 @@ serves a web dashboard over a running tree
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
 [`ChildEvent`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildEvent.html
 [`ChildEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.ChildEventKind.html
+[`ChildObservationUpdate`]: https://stokes.io/kokage/api/kokage/observe/enum.ChildObservationUpdate.html
+[`ChildObservationWatch`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildObservationWatch.html
+[`ChildObservationWatch::forward_to`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildObservationWatch.html#method.forward_to
 [`LifecycleWatch::forward_to`]: https://stokes.io/kokage/api/kokage/observe/struct.LifecycleWatch.html#method.forward_to
 [`MonitorEvent`]: https://stokes.io/kokage/api/kokage/struct.MonitorEvent.html
 [`ActorRef::stats`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.stats

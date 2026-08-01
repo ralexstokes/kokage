@@ -15,12 +15,13 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildSnapshot,
-        ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
-        ExitStatus, Guard, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-        LifecycleWatch, MailboxShutdown, OneShotTaskSpec, RestartPolicy, RunningSupervisor,
-        ScopeKind, ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
-        SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView, TaskSpec,
+        BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
+        ChildObservationWatch, ChildSnapshot, ChildSpec, ChildStateView, CompletionOnDrop,
+        ControlError, DynamicSupervisorHandle, ExitStatus, Guard, LifecycleEvent,
+        LifecycleEventKind, LifecycleObservation, LifecycleWatch, MailboxShutdown, OneShotTaskSpec,
+        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, Strategy,
+        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        SupervisorStateView, TaskSpec,
     },
 };
 
@@ -183,6 +184,47 @@ where
     guard_from_tokens(cancellation, finished)
 }
 
+fn spawn_child_observation_to<M, F>(
+    mut observation: ChildObservationWatch,
+    target: ActorRef<M>,
+    mut map: F,
+) -> Guard
+where
+    M: Send + 'static,
+    F: FnMut(ChildObservationUpdate) -> M + Send + 'static,
+{
+    let cancellation = CancellationToken::new();
+    let (finished, finished_on_drop) = CompletionOnDrop::armed();
+    let task_cancellation = cancellation.clone();
+    let task = tokio::spawn(async move {
+        let _finished_on_drop = finished_on_drop;
+        loop {
+            let Some(update) = (tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => None,
+                () = target.wait_terminated() => None,
+                update = observation.next() => update,
+            }) else {
+                return;
+            };
+
+            tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => return,
+                () = target.wait_terminated() => return,
+                sent = target.send_to_incarnation(map(update)) => {
+                    if sent.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    std::mem::drop(task);
+    guard_from_tokens(cancellation, finished)
+}
+
 impl LifecycleWatch {
     /// Forwards child transitions from this stream into `target` using its
     /// ordinary mailbox policy.
@@ -201,6 +243,24 @@ impl LifecycleWatch {
         F: FnMut(LifecycleEvent) -> M + Send + 'static,
     {
         spawn_lifecycle_watch_to(self, target.clone(), map)
+    }
+}
+
+impl ChildObservationWatch {
+    /// Forwards transitions and recovery resets into `target` using its
+    /// ordinary mailbox policy.
+    ///
+    /// The pump follows the target through ordinary actor restarts, but
+    /// delivery is at-most-once: an update accepted by one incarnation is
+    /// never replayed to its replacement. The pump stops when the returned
+    /// guard is dropped or cancelled, when this stream ends, or when the
+    /// target permanently terminates.
+    pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(ChildObservationUpdate) -> M + Send + 'static,
+    {
+        spawn_child_observation_to(self, target.clone(), map)
     }
 }
 
@@ -762,11 +822,10 @@ impl ScopeRef {
         self.supervisor.wait_started().await
     }
 
-    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    /// Returns a snapshot and self-recovering direct-child update stream.
     ///
-    /// Initialize state from [`LifecycleObservation::snapshot`], then consume
-    /// events whose direct-child sequence exceeds the snapshot's
-    /// [`SupervisorSnapshot::lifecycle_seq`].
+    /// Initialize state from [`LifecycleObservation::snapshot`], then apply
+    /// every transition or complete reset returned by its event stream.
     pub fn observe_children(&self) -> LifecycleObservation {
         self.supervisor.observe_lifecycle()
     }

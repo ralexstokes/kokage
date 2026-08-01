@@ -38,10 +38,10 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot,
-            ChildStateView, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-            LifecycleWatch, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot,
-            SupervisorStateView,
+            ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
+            ChildObservationWatch, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
+            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
+            ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};

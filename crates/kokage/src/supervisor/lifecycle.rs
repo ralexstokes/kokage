@@ -10,7 +10,9 @@ use std::{
 
 use tokio::sync::{Notify, futures::Notified};
 
-use crate::supervisor::{ExitStatus, ScopePathSegment, SupervisorSnapshot};
+use crate::supervisor::{
+    ExitStatus, ScopePathSegment, SupervisorSnapshot, SupervisorSnapshotReceiver,
+};
 
 const LIFECYCLE_BUFFER_CAPACITY: usize = 128;
 
@@ -27,20 +29,94 @@ pub struct LifecycleEvent {
     pub kind: LifecycleEventKind,
 }
 
-/// Gap-free starting point for stateful direct-child lifecycle observation.
+/// Self-recovering starting point for stateful direct-child observation.
 ///
-/// The event subscription is installed before `snapshot` is read. Consumers
-/// can initialize from the snapshot, then discard direct-child events whose
-/// sequence is at most [`SupervisorSnapshot::lifecycle_seq`]. The event stream
-/// is restricted to the observed scope because nested scopes have independent
-/// sequence boundaries.
+/// Initialize a reducer from `snapshot`, then apply every update returned by
+/// [`ChildObservationWatch::next`]. The watch suppresses transitions already
+/// reflected by the initial snapshot. If its bounded queue overflows, it
+/// replaces the missing history with a complete
+/// [`ChildObservationUpdate::Reset`] and continues after that reset's sequence
+/// boundary.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct LifecycleObservation {
-    /// Point-in-time state aligned with the event subscription.
+    /// Initial point-in-time state aligned with the event subscription.
     pub snapshot: SupervisorSnapshot,
-    /// Lifecycle events staged from before the snapshot was read onward.
-    pub events: LifecycleWatch,
+    /// Direct-child transitions and self-contained overflow recovery resets.
+    pub events: ChildObservationWatch,
+}
+
+/// One update from a self-recovering direct-child observation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum ChildObservationUpdate {
+    /// A direct-child transition not already reflected by the latest reset.
+    Transition(ChildEvent),
+    /// Complete replacement state after the bounded event queue overflowed.
+    Reset {
+        /// Latest state of the observed supervisor and all its direct children.
+        snapshot: SupervisorSnapshot,
+        /// Number of lifecycle events discarded by the inner bounded queue.
+        dropped: u64,
+    },
+}
+
+/// Self-recovering update stream returned by
+/// [`ScopeRef::observe_children`](crate::ScopeRef::observe_children).
+///
+/// This stream contains only the observed scope's direct-child transitions.
+/// Transitions whose sequence is already reflected by the initial snapshot or
+/// the latest reset are suppressed. Queue overflow yields a complete
+/// [`ChildObservationUpdate::Reset`] instead of exposing a lag marker.
+pub struct ChildObservationWatch {
+    events: LifecycleWatch,
+    snapshots: SupervisorSnapshotReceiver,
+    minimum_sequence: u64,
+}
+
+impl ChildObservationWatch {
+    pub(crate) fn new(
+        events: LifecycleWatch,
+        snapshots: SupervisorSnapshotReceiver,
+        minimum_sequence: u64,
+    ) -> Self {
+        Self {
+            events,
+            snapshots,
+            minimum_sequence,
+        }
+    }
+
+    /// Returns the next unapplied child transition or recovery reset.
+    ///
+    /// Returns `None` after the watched stable supervisor identity becomes
+    /// terminal and all staged events have been examined.
+    pub async fn next(&mut self) -> Option<ChildObservationUpdate> {
+        loop {
+            let event = self.events.next().await?;
+            match event.kind {
+                LifecycleEventKind::Child(child) if child.seq > self.minimum_sequence => {
+                    return Some(ChildObservationUpdate::Transition(child));
+                }
+                LifecycleEventKind::Lagged { dropped } => {
+                    let snapshot = self.snapshots.latest();
+                    self.minimum_sequence = snapshot.lifecycle_seq;
+                    return Some(ChildObservationUpdate::Reset { snapshot, dropped });
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl fmt::Debug for ChildObservationWatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildObservationWatch")
+            .field("minimum_sequence", &self.minimum_sequence)
+            .field("events", &self.events)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LifecycleEvent {
@@ -782,10 +858,130 @@ mod tests {
         mpsc,
     };
 
+    use tokio::sync::watch;
+
     use super::{
-        ChildEvent, ChildEventKind, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventDraft,
+        ChildEvent, ChildEventKind, ChildLifecycleEventKind, ChildObservationUpdate,
+        ChildObservationWatch, LIFECYCLE_BUFFER_CAPACITY, LifecycleEvent, LifecycleEventDraft,
         LifecycleEventKind, LifecycleHub, LifecycleTreeSink, ScopePathSegment,
     };
+    use crate::supervisor::{
+        Strategy, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
+    };
+
+    fn observation_snapshot(sequence: u64) -> SupervisorSnapshot {
+        let mut snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        snapshot.lifecycle_seq = sequence;
+        snapshot.total_restarts = sequence;
+        snapshot
+    }
+
+    fn emit_child(
+        hub: &Arc<LifecycleHub>,
+        sink: &LifecycleTreeSink,
+        snapshots: &watch::Sender<SupervisorSnapshot>,
+        child_id: impl Into<String>,
+    ) -> LifecycleEvent {
+        let event = hub.emit(
+            LifecycleEventDraft {
+                child_id: child_id.into(),
+                lineage: 0,
+                total_restarts: hub.seq(),
+                child_restart_count: 0,
+                kind: ChildLifecycleEventKind::Added,
+            },
+            || {
+                let sequence = hub.seq();
+                snapshots.send_replace(observation_snapshot(sequence));
+            },
+        );
+        sink.forward_child(event.clone());
+        event
+    }
+
+    #[tokio::test]
+    async fn child_observation_filters_a_transition_already_reflected_by_initial_snapshot() {
+        let hub = LifecycleHub::new();
+        let sink = LifecycleTreeSink::root(Arc::clone(&hub));
+        let (snapshots, snapshots_rx) = watch::channel(observation_snapshot(0));
+
+        // Snapshot publication and queue forwarding are deliberately separate
+        // in the runtime. Reproduce the race where observation registers after
+        // publication but before the already-reflected event is forwarded.
+        let reflected = hub.emit(
+            LifecycleEventDraft {
+                child_id: "reflected".to_owned(),
+                lineage: 0,
+                total_restarts: 0,
+                child_restart_count: 0,
+                kind: ChildLifecycleEventKind::Added,
+            },
+            || {
+                snapshots.send_replace(observation_snapshot(hub.seq()));
+            },
+        );
+        let snapshot_source = SupervisorSnapshotReceiver::new(snapshots_rx);
+        let (snapshot, events) = hub.observe(|| snapshot_source.latest());
+        let mut observation = ChildObservationWatch::new(
+            events.direct_children(),
+            snapshot_source,
+            snapshot.lifecycle_seq,
+        );
+        sink.forward_child(reflected);
+
+        let fresh = emit_child(&hub, &sink, &snapshots, "fresh");
+        assert_eq!(
+            observation.next().await,
+            Some(ChildObservationUpdate::Transition(match fresh.kind {
+                LifecycleEventKind::Child(child) => child,
+                kind => panic!("expected child transition, got {kind:?}"),
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn child_observation_recovers_from_lag_and_filters_the_reflected_suffix() {
+        let hub = LifecycleHub::new();
+        let sink = LifecycleTreeSink::root(Arc::clone(&hub));
+        let (snapshots, snapshots_rx) = watch::channel(observation_snapshot(0));
+        let snapshot_source = SupervisorSnapshotReceiver::new(snapshots_rx);
+        let (snapshot, events) = hub.observe(|| snapshot_source.latest());
+        let mut observation = ChildObservationWatch::new(
+            events.direct_children(),
+            snapshot_source,
+            snapshot.lifecycle_seq,
+        );
+
+        for index in 0..LIFECYCLE_BUFFER_CAPACITY + 12 {
+            emit_child(&hub, &sink, &snapshots, format!("overflow-{index}"));
+        }
+
+        let reset = observation
+            .next()
+            .await
+            .expect("overflow yields a recovery reset");
+        let ChildObservationUpdate::Reset { snapshot, dropped } = reset else {
+            panic!("overflow must yield a reset");
+        };
+        assert!(dropped > 0);
+        assert_eq!(snapshot.lifecycle_seq, hub.seq());
+        assert_eq!(snapshot.total_restarts, hub.seq());
+
+        let fresh = emit_child(&hub, &sink, &snapshots, "after-reset");
+        let fresh = match fresh.kind {
+            LifecycleEventKind::Child(child) => child,
+            kind => panic!("expected child transition, got {kind:?}"),
+        };
+        assert!(fresh.seq > snapshot.lifecycle_seq);
+        assert_eq!(
+            observation.next().await,
+            Some(ChildObservationUpdate::Transition(fresh))
+        );
+    }
 
     /// `emit` sweeps dropped watchers, but an identity that never emits would
     /// otherwise accumulate them: per-connection watches on a quiet tree are a

@@ -17,7 +17,7 @@ use crate::supervisor::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment, TaskSpec},
     error::{ControlError, SupervisorError},
-    lifecycle::{LifecycleHub, LifecycleWatch},
+    lifecycle::{ChildObservationWatch, LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
@@ -1770,14 +1770,20 @@ impl SupervisorHandle {
         }
     }
 
-    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    /// Returns a snapshot and self-recovering direct-child update stream.
     ///
-    /// Child sequences are local to each scope, so the aligned stream is
-    /// intentionally restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
-    /// when a recursive stream without an initial alignment boundary is needed.
+    /// The stream filters transitions already reflected by the initial
+    /// snapshot. If its bounded queue overflows, it yields a complete reset
+    /// snapshot and resumes from that snapshot's sequence boundary. Child
+    /// sequences are local to each scope, so the stream is intentionally
+    /// restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
+    /// for the lower-level recursive history stream and custom recovery policy.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
-        let (snapshot, events) = self.lifecycle_hub().observe(|| self.snapshot());
+        let snapshots = self.subscribe_snapshots();
+        let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());
         let events = events.direct_children();
+        let minimum_sequence = snapshot.lifecycle_seq;
+        let events = ChildObservationWatch::new(events, snapshots, minimum_sequence);
         crate::supervisor::LifecycleObservation { snapshot, events }
     }
 

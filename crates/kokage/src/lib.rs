@@ -115,6 +115,10 @@
 //! alongside membership, restart, and supervisor transitions. The mechanisms
 //! remain separate so each keeps the identity,
 //! ordering, and delivery contract appropriate to its audience.
+//! [`ScopeRef::observe_children`] is the reducer-oriented projection: it
+//! aligns a snapshot with direct-child transitions, suppresses transitions
+//! already represented by that snapshot, and recovers queue overflow with a
+//! complete [`observe::ChildObservationUpdate::Reset`].
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
@@ -232,10 +236,10 @@ pub mod observe {
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
         supervisor::{
-            ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot, ChildStateView,
-            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
-            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
-            SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildEvent, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
+            ChildObservationWatch, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
+            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
+            SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }
