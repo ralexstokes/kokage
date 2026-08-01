@@ -649,10 +649,10 @@ impl<T> fmt::Debug for ReplyReceiver<T> {
     }
 }
 
-/// Stable name for one keyed actor-local timeout slot.
+/// Stable name for one keyed actor-local timer slot.
 ///
 /// Keys are static protocol vocabulary: setting the same key replaces the
-/// existing timeout in that slot, while different keys remain independent.
+/// existing timer in that slot, while different keys remain independent.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct TimerKey(&'static str);
 
@@ -695,6 +695,12 @@ struct TimerEntry<M> {
     key: TimerKey,
     deadline: Instant,
     message: M,
+    repeat: Option<TimerRepeat<M>>,
+}
+
+struct TimerRepeat<M> {
+    period: Duration,
+    clone_message: fn(&M) -> M,
 }
 
 /// Far-future cap for deadlines that would otherwise overflow, mirroring the
@@ -706,6 +712,23 @@ const FAR_FUTURE: Duration = Duration::from_secs(86400 * 365 * 30);
 fn deadline_after(delay: Duration) -> Instant {
     let now = Instant::now();
     now.checked_add(delay).unwrap_or_else(|| now + FAR_FUTURE)
+}
+
+fn next_interval_deadline(deadline: Instant, period: Duration) -> Instant {
+    debug_assert!(!period.is_zero());
+    let now = Instant::now();
+    let elapsed = now.saturating_duration_since(deadline);
+    let periods = elapsed.as_nanos() / period.as_nanos() + 1;
+    let advance = period.as_nanos().saturating_mul(periods);
+    let seconds = u64::try_from(advance / 1_000_000_000).unwrap_or(u64::MAX);
+    let nanoseconds = (advance % 1_000_000_000) as u32;
+    deadline
+        .checked_add(Duration::new(seconds, nanoseconds))
+        .unwrap_or_else(|| deadline_after(FAR_FUTURE))
+}
+
+fn clone_message<M: Clone>(message: &M) -> M {
+    message.clone()
 }
 
 pub(crate) struct TimerTable<M> {
@@ -730,6 +753,35 @@ impl<M> TimerTable<M> {
     }
 
     fn insert(&mut self, key: TimerKey, message: M, delay: Duration) {
+        self.insert_entry(key, message, delay, None);
+    }
+
+    fn insert_interval(&mut self, key: TimerKey, message: M, period: Duration)
+    where
+        M: Clone,
+    {
+        self.clear(key);
+        if period.is_zero() {
+            return;
+        }
+        self.insert_entry(
+            key,
+            message,
+            period,
+            Some(TimerRepeat {
+                period,
+                clone_message: clone_message::<M>,
+            }),
+        );
+    }
+
+    fn insert_entry(
+        &mut self,
+        key: TimerKey,
+        message: M,
+        delay: Duration,
+        repeat: Option<TimerRepeat<M>>,
+    ) {
         if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.swap_remove(index);
         }
@@ -739,6 +791,7 @@ impl<M> TimerTable<M> {
             key,
             deadline: deadline_after(delay),
             message,
+            repeat,
         });
     }
 
@@ -766,7 +819,19 @@ impl<M> TimerTable<M> {
         if self.entries[index].deadline > Instant::now() {
             return None;
         }
-        Some(self.entries.swap_remove(index).message)
+        let entry = self.entries.swap_remove(index);
+        if let Some(repeat) = entry.repeat {
+            let message = (repeat.clone_message)(&entry.message);
+            let id = self.next_id();
+            self.entries.push(TimerEntry {
+                id,
+                key: entry.key,
+                deadline: next_interval_deadline(entry.deadline, repeat.period),
+                message,
+                repeat: Some(repeat),
+            });
+        }
+        Some(entry.message)
     }
 }
 
@@ -1049,8 +1114,8 @@ impl<M: Send + 'static> RawContext<M> {
 
     /// Sends `message` to this actor after `delay` has elapsed.
     ///
-    /// Unlike handler actors' [`Context::set_timeout`] facility, which raw actors
-    /// do not have, this uses ordinary mailbox delivery: mailbox capacity and
+    /// Unlike handler actors' keyed timer facility, which raw actors do not
+    /// have, this uses ordinary mailbox delivery: mailbox capacity and
     /// conflation apply, and successful delivery increments accepted-message
     /// statistics. The timer is independently owned by its returned [`Guard`];
     /// it has no key for exact replacement or retraction.
@@ -1579,8 +1644,8 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Mailbox capacity and conflation do not apply; delivery increments
     /// received-message statistics but not accepted-message statistics. Reusing
     /// `key` exactly replaces the pending entry, and
-    /// [`clear_timeout`](Self::clear_timeout) exactly retracts it until delivery.
-    /// Timeouts at other keys are unchanged.
+    /// [`clear_timer`](Self::clear_timer) exactly retracts it until delivery.
+    /// Timers at other keys are unchanged.
     ///
     /// The timer table belongs to this actor incarnation: a stop or restart
     /// drops every pending entry, and an elapsed timeout is not delivered once
@@ -1589,18 +1654,23 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.timers.insert(key, message, delay);
     }
 
-    /// Clears the timeout at `key`, if one is armed.
-    pub fn clear_timeout(&mut self, key: TimerKey) {
-        self.cx.timers.clear(key);
+    /// Arms a keyed repeating self timer, replacing the timer at the same key.
+    ///
+    /// The timer has the same loop-owned delivery, replacement, statistics,
+    /// and incarnation lifetime semantics as [`set_timeout`](Self::set_timeout).
+    /// It clones `message` while re-arming in the actor's timer table before
+    /// each delivery. Missed ticks are skipped instead of accumulating, and a
+    /// zero period clears `key` without arming a timer.
+    pub fn set_interval(&mut self, key: TimerKey, message: A::Msg, period: Duration)
+    where
+        A::Msg: Clone,
+    {
+        self.cx.timers.insert_interval(key, message, period);
     }
 
-    /// Sends `message` to this actor after `delay`, bound to this incarnation.
-    ///
-    /// Unlike [`set_timeout`](Self::set_timeout), this uses ordinary mailbox
-    /// delivery and is owned by the returned [`Guard`]. See
-    /// [`RawContext::send_after`] for the full contract.
-    pub fn send_after(&self, message: A::Msg, delay: Duration) -> Guard {
-        self.cx.send_after(message, delay)
+    /// Clears the one-shot or repeating timer at `key`, if one is armed.
+    pub fn clear_timer(&mut self, key: TimerKey) {
+        self.cx.timers.clear(key);
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
@@ -1613,16 +1683,6 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         delay: Duration,
     ) -> Guard {
         self.cx.send_after_to(target, message, delay)
-    }
-
-    /// Periodically sends `message` to this actor, bound to this incarnation.
-    ///
-    /// See [`RawContext::interval`] for the full contract.
-    pub fn interval(&self, message: A::Msg, period: Duration) -> Guard
-    where
-        A::Msg: Clone,
-    {
-        self.cx.interval(message, period)
     }
 
     /// Periodically sends `message` to `target`, bound to this incarnation.
