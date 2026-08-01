@@ -343,7 +343,7 @@ impl TaskRef {
     /// Waits until this task reports startup readiness.
     ///
     /// Ordinary tasks are ready as soon as their future is spawned. A task
-    /// configured with [`TaskSpec::wait_for_ready`] becomes ready when it calls
+    /// configured with [`TaskSpec::manual_readiness`] becomes ready when it calls
     /// [`crate::TaskContext::mark_ready`].
     pub async fn wait_started(&self) -> Result<(), TaskError> {
         self.ensure_tracking();
@@ -1396,7 +1396,7 @@ pub(crate) fn actor_child_spec(
     })
     .into_spec()
     .attachment(attachment)
-    .wait_for_ready()
+    .automatic_readiness()
     .restart(restart)
     .shutdown(shutdown);
     if remove_when_done {

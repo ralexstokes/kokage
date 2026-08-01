@@ -443,7 +443,7 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
                 Ok(())
             }
         })
-        .wait_for_ready(),
+        .manual_readiness(WAIT),
     );
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle().direct_children();

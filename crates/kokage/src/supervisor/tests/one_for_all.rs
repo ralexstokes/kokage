@@ -57,7 +57,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
             Ok(())
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let tail_release = Arc::clone(&release_tail);
     let tail = TaskSpec::new("tail", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
@@ -74,7 +74,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
             Ok(())
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)

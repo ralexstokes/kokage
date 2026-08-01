@@ -209,7 +209,7 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
         .child(
             TaskSpec::new("worker", |_| async { Ok(()) })
                 .restart(RestartPolicy::never())
-                .wait_for_ready(),
+                .manual_readiness(Duration::from_secs(5)),
         )
         .build()
         .expect("valid supervisor")

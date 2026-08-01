@@ -103,11 +103,8 @@ pub trait Actor: Send + 'static {
 impl<H: Actor> RawActor for H {
     type Msg = H::Msg;
 
-    fn readiness_gated(&self) -> bool {
-        true
-    }
-
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        ctx.defer_automatic_readiness();
         self.on_start(&mut Context::new(&mut ctx)).await?;
         ctx.mark_ready();
 

@@ -87,7 +87,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
                 Ok(())
             })
             .shutdown(Shutdown::abort())
-            .wait_for_ready()
+            .manual_readiness(WAIT)
             .retain_when_done(),
         )
         .await
@@ -352,7 +352,7 @@ async fn explicit_readiness_failure_is_reported() {
     let mut tree = Tree::new();
     let task = tree.add_task_spec(
         TaskSpec::new("job", |_| async { Ok(()) })
-            .wait_for_ready()
+            .manual_readiness(WAIT)
             .restart(RestartPolicy::never()),
     );
     let running_tree = tree.spawn().expect("tree builds");

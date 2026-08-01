@@ -10,6 +10,8 @@ shutdown timing, and observability as actors.
 ## Declaring a task
 
 ```rust
+use std::time::Duration;
+
 use kokage::prelude::*;
 
 #[tokio::main]
@@ -26,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         })
-        .wait_for_ready(),
+        .manual_readiness(Duration::from_secs(10)),
     );
 
     tree.add_task("api", |ctx| async move {
@@ -87,10 +89,10 @@ aborted exit, not a clean one).
 In an ordered scope, children normally start one after another as soon as
 each future is spawned. When a later child genuinely depends on an earlier
 one having *finished doing something* — the API above needs the cache warm —
-pair [`wait_for_ready`] on the spec with [`mark_ready`] in the task: the
-supervisor holds back the next declared child until the mark. There is no
-built-in timeout on that wait, so make sure a `wait_for_ready` task always
-reaches `mark_ready` (or exits).
+pair [`manual_readiness`] on the spec with [`mark_ready`] in the task: the
+supervisor holds back the next declared child until the mark. The supplied
+deadline bounds startup; missing it is a failure handled by the task's restart
+policy.
 
 ## Supervised service policies
 
@@ -125,5 +127,5 @@ incarnation should do.
 [`shutdown_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.shutdown_token
 [`abort_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.abort_token
 [`CancellationToken`]: https://stokes.io/kokage/api/kokage/struct.CancellationToken.html
-[`wait_for_ready`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html#method.wait_for_ready
+[`manual_readiness`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html#method.manual_readiness
 [`mark_ready`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.mark_ready

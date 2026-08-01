@@ -1,6 +1,12 @@
 mod support;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use kokage::{
     ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
@@ -597,6 +603,55 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
             .state
             .last_exit()
             .is_some_and(|exit| exit.is_completed())
+    );
+    handle.shutdown().await.unwrap();
+}
+
+struct BoundedRawReadiness {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl RawActor for BoundedRawReadiness {
+    type Msg = ();
+
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(Duration::from_millis(10))
+    }
+
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::future::pending::<()>().await;
+        }
+        ctx.mark_ready();
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_manual_readiness_timeout_restarts_then_accepts_mark_ready() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut graph = Tree::new();
+    graph.add_actor_spec(ActorSpec::new("BoundedRawReadiness", {
+        let attempts = Arc::clone(&attempts);
+        move || BoundedRawReadiness {
+            attempts: Arc::clone(&attempts),
+        }
+    }));
+
+    let handle = graph.spawn().unwrap();
+    handle.scope().wait_started().await.unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let snapshot = handle.scope().snapshot();
+    let previous_exit = snapshot
+        .child("BoundedRawReadiness")
+        .and_then(|child| child.state.last_exit())
+        .expect("replacement retains the readiness timeout");
+    assert!(
+        previous_exit
+            .failure_message()
+            .is_some_and(|message| message.contains("did not report readiness"))
     );
     handle.shutdown().await.unwrap();
 }

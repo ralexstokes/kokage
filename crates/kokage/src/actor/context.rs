@@ -3,8 +3,8 @@ use std::{
     fmt,
     future::Future,
     sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, OnceLock, PoisonError,
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -878,23 +878,107 @@ pub struct RawContext<M> {
     pub(crate) timers: TimerTable<M>,
     pub(crate) lifetime: ActorLifetime,
     pub(crate) monitors: ActorMonitorLease,
-    pub(crate) ready: Option<oneshot::Sender<()>>,
+    pub(crate) ready: Option<ActorReadySignal>,
     pub(crate) continuations: VecDeque<M>,
     pub(crate) stop_requested: bool,
     pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
     pub(crate) supervisor: ScopeRef,
 }
 
+#[derive(Clone)]
+pub(crate) struct ActorReadySignal {
+    sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    ready: watch::Sender<bool>,
+    mode: Arc<AtomicU8>,
+}
+
+impl ActorReadySignal {
+    const IMMEDIATE: u8 = 0;
+    const AUTOMATIC_OR_MANUAL: u8 = 1;
+    const READY: u8 = 2;
+
+    pub(crate) fn new(sender: oneshot::Sender<()>, manual: bool) -> Self {
+        let (ready, _) = watch::channel(false);
+        Self {
+            sender: Arc::new(Mutex::new(Some(sender))),
+            ready,
+            mode: Arc::new(AtomicU8::new(if manual {
+                Self::AUTOMATIC_OR_MANUAL
+            } else {
+                Self::IMMEDIATE
+            })),
+        }
+    }
+
+    fn send(&self) {
+        if self.mode.swap(Self::READY, Ordering::AcqRel) == Self::READY {
+            return;
+        }
+        self.complete();
+    }
+
+    fn complete(&self) {
+        if let Some(sender) = self
+            .sender
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            self.ready.send_replace(true);
+            let _ = sender.send(());
+        }
+    }
+
+    pub(crate) fn defer_automatic(&self) {
+        let _ = self.mode.compare_exchange(
+            Self::IMMEDIATE,
+            Self::AUTOMATIC_OR_MANUAL,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn mark_immediate(&self) {
+        if self
+            .mode
+            .compare_exchange(
+                Self::IMMEDIATE,
+                Self::READY,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            self.complete();
+        }
+    }
+
+    pub(crate) async fn wait(&self) {
+        let mut ready = self.ready.subscribe();
+        if *ready.borrow() {
+            return;
+        }
+        let _ = ready.changed().await;
+    }
+}
+
 impl<M: Send + 'static> RawContext<M> {
+    pub(crate) fn defer_automatic_readiness(&self) {
+        if let Some(ready) = &self.ready {
+            ready.defer_automatic();
+        }
+    }
+
     /// Reports that a custom [`RawActor`](crate::raw::RawActor) has completed
     /// initialization.
     ///
-    /// This is only needed when `RawActor::readiness_gated` is overridden to
-    /// return `true`. Handler-style [`Actor`](crate::Actor) implementations
-    /// report readiness automatically after `on_start` succeeds.
+    /// This is only needed when [`RawActor::manual_readiness`](crate::raw::RawActor::manual_readiness)
+    /// returns a deadline. Handler-style [`Actor`](crate::Actor)
+    /// implementations report readiness automatically after `on_start`
+    /// succeeds.
     pub fn mark_ready(&mut self) {
         if let Some(ready) = self.ready.take() {
-            let _ = ready.send(());
+            ready.send();
         }
     }
 

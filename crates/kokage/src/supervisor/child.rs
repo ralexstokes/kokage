@@ -3,6 +3,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use crate::{
@@ -38,7 +39,14 @@ pub(crate) struct ChildDefinition {
 pub(crate) enum ChildReadiness {
     #[default]
     Immediate,
-    Explicit,
+    Manual(Duration),
+    Automatic,
+}
+
+impl ChildReadiness {
+    pub(crate) fn is_gated(self) -> bool {
+        !matches!(self, Self::Immediate)
+    }
 }
 
 pub(crate) enum ChildKind {
@@ -185,21 +193,21 @@ impl TaskSpec {
     }
 
     /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
-    /// before it is considered started.
+    /// within `timeout` before it is considered started.
     ///
     /// An ordered supervisor waits for this signal before starting its next
     /// declared task.
     /// If the task exits before reporting readiness, its ordinary restart
     /// policy applies. The sequence waits through a scheduled restart; if the
     /// exit is terminal, the task is marked startup-aborted and the sequence
-    /// skips it. There is no built-in readiness timeout; use a timeout inside
-    /// the task when initialization must be bounded. Shutdown and control
-    /// commands remain responsive while a supervisor waits for readiness, so a
-    /// task may await a control operation before calling `mark_ready`.
+    /// skips it. Missing the deadline is a startup failure governed by the
+    /// task's ordinary restart policy. Shutdown and control commands remain
+    /// responsive while a supervisor waits for readiness, so a task may await
+    /// a control operation before calling `mark_ready`.
     #[must_use]
-    pub fn wait_for_ready(self) -> Self {
+    pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {
-            spec: self.spec.wait_for_ready(),
+            spec: self.spec.manual_readiness(timeout),
         }
     }
 
@@ -281,16 +289,15 @@ impl OneShotTaskSpec {
     }
 
     /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
-    /// before it is considered started.
+    /// within `timeout` before it is considered started.
     ///
     /// The dynamic membership remains in its starting state until this signal.
-    /// If the task exits first, it is marked startup-aborted and cannot restart.
-    /// There is no built-in readiness timeout; use a timeout inside the task
-    /// when initialization must be bounded.
+    /// If the task exits or misses the deadline first, it is marked
+    /// startup-aborted and cannot restart.
     #[must_use]
-    pub fn wait_for_ready(self) -> Self {
+    pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {
-            spec: self.spec.wait_for_ready(),
+            spec: self.spec.manual_readiness(timeout),
         }
     }
 
@@ -323,7 +330,7 @@ impl ChildSpec {
                 shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
                 remove_when_done: false,
-                readiness: ChildReadiness::Explicit,
+                readiness: ChildReadiness::Automatic,
                 attachment: None,
                 kind: ChildKind::Supervisor(supervisor),
             }),
@@ -373,11 +380,19 @@ impl ChildSpec {
         self.map_inner(|inner| inner.attachment = Some(Arc::new(attachment)))
     }
 
-    /// Requires the child to report readiness before it is considered
-    /// started. See [`TaskSpec::wait_for_ready`] for the full contract.
+    /// Requires a task child to report readiness within `timeout` before it is
+    /// considered started. See [`TaskSpec::manual_readiness`] for the full
+    /// contract.
     #[must_use]
-    pub(crate) fn wait_for_ready(self) -> Self {
-        self.map_inner(|inner| inner.readiness = ChildReadiness::Explicit)
+    pub(crate) fn manual_readiness(self, timeout: Duration) -> Self {
+        self.map_inner(|inner| inner.readiness = ChildReadiness::Manual(timeout))
+    }
+
+    /// Waits for framework-owned readiness, such as an actor host or nested
+    /// supervisor reporting that its own startup protocol has completed.
+    #[must_use]
+    pub(crate) fn automatic_readiness(self) -> Self {
+        self.map_inner(|inner| inner.readiness = ChildReadiness::Automatic)
     }
 
     /// Returns the child's unique identifier.

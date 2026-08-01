@@ -321,7 +321,9 @@ async fn phase_0(app: &App) -> Result<(), AnyError> {
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
-    println!("PHASE 0 OK — RawActor readiness_gated + mark_ready; pre-spawn dynamic subtree mount");
+    println!(
+        "PHASE 0 OK — RawActor manual_readiness + mark_ready; pre-spawn dynamic subtree mount"
+    );
     Ok(())
 }
 

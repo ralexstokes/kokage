@@ -14,7 +14,7 @@ use tracing::{debug, trace};
 
 use crate::supervisor::{
     CancellationToken,
-    child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
+    child::{ChildDefinition, ChildKind, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitKind, RuntimeEvent},
@@ -721,7 +721,7 @@ impl SupervisorRuntime {
         {
             return Ok(());
         }
-        let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
+        let readiness_gated = entry.runtime.definition.readiness.is_gated();
         let (old_generation, new_generation) = self.spawn_child(item.key)?;
         if self.meta.kind == ScopeKind::Ordered && readiness_gated {
             self.start_sequence
@@ -2394,7 +2394,7 @@ mod tests {
                     ctx.shutdown_token().cancelled().await;
                     Ok(())
                 })
-                .wait_for_ready(),
+                .manual_readiness(Duration::from_secs(5)),
             )
             .build()
             .expect("valid supervisor config");

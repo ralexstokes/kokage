@@ -113,8 +113,8 @@ impl Inbound {
 impl RawActor for Inbound {
     type Msg = InboundMsg;
 
-    fn readiness_gated(&self) -> bool {
-        true
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(PHASE_TIMEOUT)
     }
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {

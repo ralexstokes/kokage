@@ -22,6 +22,8 @@ struct SpawnPlan {
     old_generation: Option<u64>,
     kind: ChildKind,
     ctx: TaskContext,
+    readiness: ChildReadiness,
+    ready_signal: Option<ReadySignal>,
     lineage: u64,
     snapshot_state: Option<NestedSnapshotState>,
     nested_channels: Option<Arc<StableSupervisorChannels>>,
@@ -40,6 +42,8 @@ impl SupervisorRuntime {
             old_generation,
             kind,
             ctx,
+            readiness,
+            ready_signal,
             lineage,
             snapshot_state,
             nested_channels,
@@ -89,22 +93,24 @@ impl SupervisorRuntime {
             };
 
             let child_id = entry.id.clone();
+            let readiness = child.definition.readiness;
+            let ready_signal = readiness.is_gated().then(|| {
+                ReadySignal::new(
+                    self.ready_tx.clone(),
+                    ChildReady {
+                        key,
+                        lineage,
+                        generation,
+                    },
+                )
+            });
             let ctx = TaskContext::new(
                 child_id.clone(),
                 generation,
                 child_token,
                 abort_token,
                 self.own_handle.clone(),
-                (child.definition.readiness == ChildReadiness::Explicit).then(|| {
-                    ReadySignal::new(
-                        self.ready_tx.clone(),
-                        ChildReady {
-                            key,
-                            lineage,
-                            generation,
-                        },
-                    )
-                }),
+                ready_signal.clone(),
             );
             let kind = child.definition.kind.clone();
             let nested_channels = entry.nested_channels.clone();
@@ -115,6 +121,8 @@ impl SupervisorRuntime {
                 old_generation,
                 kind,
                 ctx,
+                readiness,
+                ready_signal,
                 lineage,
                 snapshot_state,
                 nested_channels,
@@ -177,10 +185,34 @@ impl SupervisorRuntime {
             generation,
         );
 
+        let timeout_child_id = child_id.clone();
         let abort_handle = self.join_set.spawn(
             async move {
                 let result = match kind {
-                    ChildKind::Task(factory) => factory.make(ctx).await,
+                    ChildKind::Task(factory) => {
+                        let future = factory.make(ctx);
+                        if let ChildReadiness::Manual(timeout) = readiness {
+                            let ready_signal = ready_signal
+                                .expect("manual readiness carries a ready signal");
+                            tokio::pin!(future);
+                            tokio::select! {
+                                biased;
+                                result = &mut future => result,
+                                () = ready_signal.wait() => future.await,
+                                () = tokio::time::sleep(timeout) => {
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::TimedOut,
+                                        format!(
+                                            "task `{timeout_child_id}` did not report readiness within {timeout:?}"
+                                        ),
+                                    )
+                                    .into())
+                                }
+                            }
+                        } else {
+                            future.await
+                        }
+                    }
                     ChildKind::Supervisor(supervisor) => {
                         let (parent_link, channels, child_path_segments) =
                             nested_run.expect("nested run state validated before spawn");
