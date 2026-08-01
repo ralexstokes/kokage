@@ -83,7 +83,7 @@ Enable the opt-in `host` Cargo feature for this integration surface.
 [`raw::ActorHost`] you drive yourself:
 
 ```rust
-use kokage::{CancellationToken, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
+use kokage::{CancellationToken, Shutdown, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
 
 struct Worker;
 

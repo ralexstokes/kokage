@@ -72,7 +72,7 @@ Watch a drain do its job:
 ```rust
 use std::time::Duration;
 
-use kokage::prelude::*;
+use kokage::{MailboxShutdown, Shutdown, prelude::*};
 
 struct Press;
 

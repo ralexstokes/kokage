@@ -100,7 +100,7 @@ Tasks take the same per-child configuration as actors:
 
 ```rust
 # use std::time::Duration;
-# use kokage::prelude::*;
+# use kokage::{RestartPolicy, Shutdown, prelude::*};
 let spec = TaskSpec::new("indexer", |ctx| async move {
     ctx.shutdown_token().cancelled().await;
     Ok(())

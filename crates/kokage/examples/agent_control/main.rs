@@ -132,8 +132,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, ScopeRef, Strategy,
-    Tree, prelude::*,
+    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEventKind,
+    ScopeRef, Strategy, Tree, prelude::*,
 };
 use tokio::time::Instant;
 

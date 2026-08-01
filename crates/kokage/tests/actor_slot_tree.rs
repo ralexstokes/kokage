@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
-use kokage::{ActorSlot, DynamicTree, ScopeRef, SubtreeSpec, observe::ScopeKind, prelude::*};
+use kokage::{
+    ActorSlot, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef, Shutdown, Strategy,
+    SubtreeSpec, observe::ScopeKind, prelude::*,
+};
 
 enum LeftMsg {
     Connected(Reply<bool>),

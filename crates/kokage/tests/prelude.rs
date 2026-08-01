@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
+    Backoff, MailboxShutdown, RestartPolicy, Strategy,
     observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -10,18 +11,18 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
-            DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown,
-            MonitorEvent, MonitorEventKind, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
-            SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec,
-            TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, ChildHandle, Context, DynamicScopeRef, DynamicTree,
+            ExitResult, Guard, Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext,
+            TaskRef, TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
-            OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError, TaskError,
+            ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
+            CancellationToken, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
+            OffloadDeadline, OneShotTaskSpec, ReplyError, ReplyReceiver, RestartPolicy, SendError,
+            SendErrorKind, Shutdown, Strategy, SubtreeSpec, SupervisorError, TaskError,
         };
     }
 

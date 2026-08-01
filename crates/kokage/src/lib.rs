@@ -42,10 +42,11 @@
 //! configure and place the resulting specs in the desired scopes. Actor ids
 //! are local to their containing scope, so sibling scopes may reuse an id.
 //!
-//! The [`prelude`] re-exports the common composition, actor, and task surface plus
-//! snapshot observation. Raw actor execution types live in [`raw`],
-//! lifecycle-history types live in [`observe`], and less common actor and
-//! supervisor types stay at the crate root.
+//! The [`prelude`] re-exports the normal composition, actor, and restarting-task
+//! surface. Raw actor execution types live in [`raw`], lifecycle and topology
+//! observation types live in [`observe`], and policy configuration,
+//! specialized errors, monitors, and one-shot task declarations stay at the
+//! crate root.
 //!
 //! # Core types
 //!
@@ -246,22 +247,24 @@ pub mod observe {
 
 /// Common imports for `kokage` consumers.
 ///
-/// This prelude covers the actor traits and contexts, static and dynamic tree
-/// composition, child declarations, common supervision policies and errors,
-/// and actor-owned operations. Cyclic-wiring declarations and specialized
-/// errors remain at the crate root; snapshots and lifecycle types live in
-/// [`observe`], and raw actor hosting lives in [`raw`].
+/// This prelude covers the actor traits, references, contexts, and protocol
+/// vocabulary; static and dynamic tree composition; ordinary actor and
+/// restarting-task declarations; basic messaging and ownership; and keyed
+/// handler timers.
+///
+/// Policy configuration, concrete errors, peer-monitor event types, one-shot
+/// task declarations, and cyclic-wiring declarations remain explicit imports
+/// from the crate root. Snapshots and lifecycle types live in [`observe`], and
+/// raw actor hosting lives in [`raw`].
 ///
 /// With the `derive` feature enabled, `ActorFactory` is an explicit root import
 /// rather than a prelude member. Import it for an unqualified derive, or use
 /// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
-        DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-        MonitorEventKind, OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
-        SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey,
-        Tree,
+        Actor, ActorRef, ActorSpec, ChildHandle, Context, DynamicScopeRef, DynamicTree, ExitResult,
+        Guard, Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext, TaskRef, TaskSpec,
+        TimerKey, Tree,
     };
 }
 

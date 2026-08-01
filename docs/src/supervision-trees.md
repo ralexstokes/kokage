@@ -10,7 +10,7 @@ the drawing.
 A [`Tree`] can contain actors, tasks, and *other trees*. The shop:
 
 ```rust
-use kokage::prelude::*;
+use kokage::{Strategy, prelude::*};
 
 struct Press {
     name: &'static str,
@@ -109,7 +109,7 @@ defaults for its own children; each child may override; a nested subtree's
 
 ```rust
 # use std::time::Duration;
-# use kokage::{RestartPolicy, SubtreeSpec, prelude::*};
+# use kokage::{RestartPolicy, Shutdown, SubtreeSpec, prelude::*};
 # let press_room = Tree::new();
 // Defaults for children declared in this scope.
 let mut shop = Tree::new()
