@@ -441,6 +441,77 @@ async fn subtree_removal_rejects_a_foreign_parent_membership() {
 }
 
 #[tokio::test]
+async fn pre_insert_dynamic_scope_handles_remove_only_their_exact_membership() {
+    let first_tree = DynamicTree::new().spawn().expect("first root builds");
+    let first = first_tree.scope();
+
+    let child_tree = DynamicTree::new();
+    let child = child_tree.scope();
+    first
+        .add_subtree("workers", child_tree)
+        .await
+        .expect("first dynamic subtree added");
+    let first_lineage = first
+        .snapshot()
+        .child("workers")
+        .expect("first dynamic subtree is visible")
+        .lineage;
+    first
+        .remove(&child)
+        .await
+        .expect("pre-insert dynamic scope handle removes its membership");
+
+    let replacement_tree = DynamicTree::new();
+    let replacement = replacement_tree.scope();
+    first
+        .add_subtree("workers", replacement_tree)
+        .await
+        .expect("replacement dynamic subtree added");
+    let replacement_lineage = first
+        .snapshot()
+        .child("workers")
+        .expect("replacement dynamic subtree is visible")
+        .lineage;
+    assert_ne!(first_lineage, replacement_lineage);
+    assert!(matches!(
+        first.remove(&child).await,
+        Err(ControlError::UnknownChildId(id)) if id == "<root>"
+    ));
+    assert!(first.snapshot().child("workers").is_some());
+
+    let second_tree = DynamicTree::new().spawn().expect("second root builds");
+    let second = second_tree.scope();
+    let foreign_tree = DynamicTree::new();
+    let foreign = foreign_tree.scope();
+    second
+        .add_subtree("workers", foreign_tree)
+        .await
+        .expect("foreign dynamic subtree added");
+
+    assert!(matches!(
+        second.remove(&replacement).await,
+        Err(ControlError::UnknownChildId(id)) if id == "<root>"
+    ));
+    assert!(second.snapshot().child("workers").is_some());
+    assert!(matches!(
+        first.remove(&foreign).await,
+        Err(ControlError::UnknownChildId(id)) if id == "<root>"
+    ));
+    assert!(first.snapshot().child("workers").is_some());
+
+    first
+        .remove(&replacement)
+        .await
+        .expect("replacement removed by its own parent");
+    second
+        .remove(&foreign)
+        .await
+        .expect("foreign subtree removed by its own parent");
+    first_tree.shutdown().await.expect("first root stops");
+    second_tree.shutdown().await.expect("second root stops");
+}
+
+#[tokio::test]
 async fn task_removal_rejects_a_same_id_and_lineage_from_another_scope() {
     let first_tree = DynamicTree::new().spawn().expect("first root builds");
     let first = first_tree.scope();

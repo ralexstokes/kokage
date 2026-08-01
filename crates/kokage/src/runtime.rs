@@ -549,13 +549,14 @@ mod sealed {
             &self,
             scope: &DynamicScopeRef,
         ) -> Result<(String, u64), ControlError> {
-            let Some(membership) = self.parent_membership.as_ref() else {
-                return Err(ControlError::UnknownChildId("<root>".to_owned()));
-            };
-            if !scope.supervisor.same_identity(&membership.parent) {
-                return Err(ControlError::UnknownChildId(membership.id.to_string()));
+            if let Some(membership) = self.parent_membership.as_ref() {
+                if !scope.supervisor.same_identity(&membership.parent) {
+                    return Err(ControlError::UnknownChildId(membership.id.to_string()));
+                }
+                return Ok((membership.id.to_string(), membership.lineage));
             }
-            Ok((membership.id.to_string(), membership.lineage))
+
+            scope.resolve_subtree_membership(self)
         }
     }
 
@@ -1151,14 +1152,41 @@ impl DynamicScopeRef {
             .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))
     }
 
+    fn resolve_subtree_membership(
+        &self,
+        subtree: &ScopeRef,
+    ) -> Result<(String, u64), ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                let attachment = attached.attachment();
+                if !attachment.belongs_to(&self.actors)
+                    || !matches!(attachment.kind, RuntimeAttachmentKind::Subtree(_))
+                    || !attached
+                        .supervisor()
+                        .is_some_and(|member| member.same_identity(&subtree.supervisor))
+                {
+                    return None;
+                }
+                Some((identity.id.clone(), identity.lineage))
+            })
+            .ok_or_else(|| ControlError::UnknownChildId("<root>".to_owned()))
+    }
+
     /// Removes the exact child membership identified by `child`.
     ///
     /// A stale handle never removes a same-id replacement. Actor handles are
-    /// resolved against the scope's current runtime attachments; task and
-    /// subtree handles carry their membership identity directly. Use
-    /// [`remove_named`](Self::remove_named) when only the id is
-    /// available and targeting whichever membership currently owns it is
-    /// intentional.
+    /// resolved against the scope's current runtime attachments, and task
+    /// handles carry their membership identity directly. Subtree handles
+    /// returned by insertion carry that identity; a scope retained before its
+    /// tree was moved into [`add_subtree`](Self::add_subtree) is resolved by its
+    /// stable supervisor identity. Use [`remove_named`](Self::remove_named)
+    /// when only the id is available and targeting whichever membership
+    /// currently owns it is intentional.
     ///
     /// Removal marks the membership as removing and starts its configured
     /// shutdown. For an actor whose cooperative shutdown completes within its
