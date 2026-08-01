@@ -218,7 +218,7 @@ pub struct EventWatch {
 
 pub fn event_watch(handle: &SupervisorHandle) -> EventWatch {
     EventWatch {
-        lifecycle: handle.watch_lifecycle(),
+        lifecycle: handle.subscribe_lifecycle(),
         pending: VecDeque::new(),
     }
 }

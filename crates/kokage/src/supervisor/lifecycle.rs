@@ -278,7 +278,7 @@ impl LifecycleEventKind {
 }
 
 /// Lifecycle stream created by
-/// [`ScopeRef::lifecycle_events`](crate::ScopeRef::lifecycle_events).
+/// [`ScopeRef::subscribe_lifecycle`](crate::ScopeRef::subscribe_lifecycle).
 pub struct LifecycleWatch {
     watcher: Arc<LifecycleWatcher>,
     watcher_count: Option<Arc<AtomicUsize>>,

@@ -3,7 +3,8 @@
 //! A supervisor normally runs until it is told to stop. Pipeline and batch
 //! subtrees invert that: some children have a natural completion point, and the
 //! scope's job is done once they reach it. This module expresses that as a
-//! reduction over [`watch_lifecycle`](crate::supervisor::SupervisorHandle::watch_lifecycle)
+//! reduction over
+//! [`subscribe_lifecycle`](crate::supervisor::SupervisorHandle::subscribe_lifecycle)
 //! rather than as supervisor configuration, so the completion rule lives with
 //! the code that cares about it instead of in the control loop.
 
@@ -57,7 +58,7 @@ impl CompletionOperation {
 
         // Register before taking the snapshot so no transition can fall
         // between the state baseline and the stream.
-        let watch = handle.watch_lifecycle().direct_children();
+        let watch = handle.subscribe_lifecycle().direct_children();
         let snapshot = handle.snapshot();
         let mut set = CompletionSet::new(ids);
         let baseline = set.initialize(&snapshot, allow_future_members)?;

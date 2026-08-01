@@ -287,7 +287,7 @@ async fn build_app() -> Result<App, AnyError> {
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch =
         gateway
-            .lifecycle_events()
+            .subscribe_lifecycle()
             .direct_children()
             .forward_to(&guard, move |event| {
                 if let Some(total) = lifecycle_total_restarts(&event) {

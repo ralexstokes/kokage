@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tree.add_task_spec(metrics);
     let running_tree = tree.spawn()?;
     let scope = running_tree.scope();
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
     let scheduled = timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("warm-cache", |child| child.next_restart_in.is_some()),

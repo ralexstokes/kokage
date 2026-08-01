@@ -725,7 +725,12 @@ impl ScopeRef {
     }
 
     pub(crate) fn task_ref(&self, id: impl Into<Arc<str>>, lineage: u64) -> TaskRef {
-        TaskRef::new(self.clone(), id, lineage, self.supervisor.watch_lifecycle())
+        TaskRef::new(
+            self.clone(),
+            id,
+            lineage,
+            self.supervisor.subscribe_lifecycle(),
+        )
     }
 
     #[cfg(any(feature = "host", test))]
@@ -837,8 +842,8 @@ impl ScopeRef {
     /// direct-child state-plus-stream setup. This lower-level method is useful
     /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
-    pub fn lifecycle_events(&self) -> LifecycleWatch {
-        self.supervisor.watch_lifecycle()
+    pub fn subscribe_lifecycle(&self) -> LifecycleWatch {
+        self.supervisor.subscribe_lifecycle()
     }
 
     /// Returns a clone of the latest supervisor snapshot.
@@ -894,7 +899,7 @@ impl ScopeRef {
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
-    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
         self.supervisor.subscribe_snapshots()
     }
 }
@@ -1087,7 +1092,7 @@ impl DynamicScopeRef {
         let id: Arc<str> = Arc::from(task.id());
         let events = self
             .supervisor
-            .watch_lifecycle()
+            .subscribe_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child(task).await?;
         Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
@@ -1098,7 +1103,7 @@ impl DynamicScopeRef {
         let id: Arc<str> = Arc::from(task.id());
         let events = self
             .supervisor
-            .watch_lifecycle()
+            .subscribe_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child_spec(task).await?;
         Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
@@ -1464,7 +1469,7 @@ mod tests {
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.scope().snapshots();
+        let mut static_snapshots = static_runtime.scope().subscribe_snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
@@ -1492,7 +1497,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.scope().snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.scope().subscribe_snapshots();
         dynamic_ref
             .send(())
             .await
@@ -1528,7 +1533,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = running_tree.scope().snapshots();
+        let mut snapshots = running_tree.scope().subscribe_snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots

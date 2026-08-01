@@ -15,7 +15,7 @@ use kokage::{
 };
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     let child = handle
         .snapshot()
         .child(id)

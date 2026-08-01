@@ -96,7 +96,7 @@ where
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child(id)
@@ -821,7 +821,7 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
     });
 
     let handle = tree.spawn().expect("runtime builds");
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let sender = tokio::spawn(async move {
         worker_ref
             .send("run-path".to_owned())
@@ -869,7 +869,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
     let control = handle.scope();
 
     control
-        .snapshots()
+        .subscribe_snapshots()
         .wait_for(|snapshot| {
             snapshot
                 .children
@@ -878,7 +878,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         })
         .await
         .expect("runtime reported running");
-    let _lifecycle = control.lifecycle_events();
+    let _lifecycle = control.subscribe_lifecycle();
     assert_eq!(control.snapshot().children.len(), 1);
 
     worker_ref
@@ -886,7 +886,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .await
         .expect("message sent through cloned ref");
 
-    let mut snapshots = control.snapshots();
+    let mut snapshots = control.subscribe_snapshots();
     let completed = snapshots
         .wait_for(|snapshot| {
             snapshot
@@ -975,7 +975,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
         .expect("sidecar started");
     timeout(
         Duration::from_secs(1),
-        handle.scope().snapshots().wait_for(|snapshot| {
+        handle.scope().subscribe_snapshots().wait_for(|snapshot| {
             snapshot
                 .child("actor")
                 .is_some_and(|child| child.state.is_running())
@@ -1005,7 +1005,7 @@ async fn snapshot_wait_reports_all_children_running_after_spawn() {
         .spawn()
         .expect("runtime builds");
 
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let all_running = snapshots.wait_for(|snapshot| {
         snapshot.children.len() == 2
             && snapshot
@@ -1051,7 +1051,7 @@ async fn snapshot_child_wait_arms_before_the_future_is_polled() {
         .spawn()
         .expect("runtime builds");
 
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let baseline = handle
         .scope()
         .snapshot()
@@ -1357,7 +1357,7 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
         .default_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
         .spawn()
         .expect("runtime builds");
-    let mut lifecycle = handle.scope().lifecycle_events();
+    let mut lifecycle = handle.scope().subscribe_lifecycle();
     let scope = handle.scope();
 
     timeout(Duration::from_secs(1), started.notified())

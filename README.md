@@ -118,7 +118,7 @@ fire-and-forget work.
 The escape hatches stay next to the concise paths: `Reply::channel()` separates
 request-acceptance and response deadlines beneath `ActorRef::call`;
 `raw::RawActor` provides a custom receive loop beneath `Actor`; and
-`ScopeRef::lifecycle_events` provides ordered lifecycle history, while
+`ScopeRef::subscribe_lifecycle` provides ordered lifecycle history, while
 `observe_children` aligns a current snapshot with direct-child updates and
 automatically replaces missing history with a fresh reset for consumers that
 need to maintain their own reducer.

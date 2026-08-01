@@ -5,8 +5,8 @@ fixed* without anyone noticing. That is only a virtue if, when you do look,
 the system can tell you exactly what has been happening. Kokage exposes three
 observation contracts:
 
-1. `snapshot()` / `snapshots()` for conflated current state;
-2. `lifecycle_events()` for ordered history, with `observe_children()` as the
+1. `snapshot()` / `subscribe_snapshots()` for conflated current state;
+2. `subscribe_lifecycle()` for ordered history, with `observe_children()` as the
    self-recovering direct-child state-and-updates primitive;
 3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
 
@@ -35,7 +35,7 @@ payloads are never formatted into logs.
 ## Snapshots: what is true right now
 
 Any [`ScopeRef`] can answer "what does the tree look like?" —
-[`snapshot`] for one point in time, [`snapshots`] for a
+[`snapshot`] for one point in time, [`subscribe_snapshots`] for a
 conflating, never-lagging feed of changes:
 
 ```rust
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_tree = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = running_tree.scope().snapshots();
+    let mut snapshots = running_tree.scope().subscribe_snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -89,7 +89,7 @@ You saw this pattern in [Let It Crash](let-it-crash.md).
 
 ## Aligning current state with direct-child events
 
-Most stateful consumers should use [`snapshot`] or [`snapshots`] and avoid
+Most stateful consumers should use [`snapshot`] or [`subscribe_snapshots`] and avoid
 maintaining a second copy of runtime state. When a consumer does need its own
 direct-child reducer, [`observe_children`] returns an aligned snapshot and a
 self-recovering [`ChildObservationWatch`]. Initialize from the snapshot, then
@@ -123,7 +123,7 @@ resets through an actor's ordinary mailbox.
 ## The recursive lifecycle stream: what happened, in order
 
 Snapshots tell you *now*; the lifecycle stream tells you *the story*.
-[`lifecycle_events`] on any `ScopeRef` yields every transition in the scope —
+[`subscribe_lifecycle`] on any `ScopeRef` yields every transition in the scope —
 recursively for the whole subtree by default, or `.direct_children()` for
 one level:
 
@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let running_tree = tree.spawn()?;
     let scope = running_tree.scope();
-    let mut events = scope.lifecycle_events();
+    let mut events = scope.subscribe_lifecycle();
 
     scope.request_shutdown();
     while let Some(event) = events.next().await {
@@ -231,12 +231,12 @@ serves a web dashboard over a running tree
 
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`snapshot`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.snapshot
-[`snapshots`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.snapshots
+[`subscribe_snapshots`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.subscribe_snapshots
 [`SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
 [`ChildSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildSnapshot.html
 [`ExitStatus`]: https://stokes.io/kokage/api/kokage/observe/enum.ExitStatus.html
 [`observe_children`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.observe_children
-[`lifecycle_events`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.lifecycle_events
+[`subscribe_lifecycle`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.subscribe_lifecycle
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
 [`ChildEvent`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildEvent.html
 [`ChildEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.ChildEventKind.html

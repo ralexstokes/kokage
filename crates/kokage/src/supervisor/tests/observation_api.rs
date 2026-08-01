@@ -135,8 +135,8 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
         .expect("nested supervisor builds");
     let supervisor = Supervisor::ordered().child_spec(ChildSpec::supervisor("nested", nested));
     let handle = supervisor.handle();
-    let mut recursive = handle.watch_lifecycle();
-    let mut direct = handle.watch_lifecycle().direct_children();
+    let mut recursive = handle.subscribe_lifecycle();
+    let mut direct = handle.subscribe_lifecycle().direct_children();
     let running = supervisor.build().expect("supervisor builds").spawn();
 
     let nested_started = timeout(WAIT, async {

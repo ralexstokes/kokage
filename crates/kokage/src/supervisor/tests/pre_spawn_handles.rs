@@ -53,7 +53,7 @@ async fn retained_builder_handle_preserves_kind_then_binds_to_the_spawned_root()
 async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_events() {
     let builder = Supervisor::ordered();
     let handle = builder.handle();
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.subscribe_lifecycle();
     let builder = builder
         .strategy(Strategy::RestForOne)
         .child(waiting_child("first"))
@@ -84,7 +84,7 @@ async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_eve
 async fn watch_before_spawn_observes_first_added_and_started_after_declared_baseline() {
     let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
-    let mut lifecycle = handle.watch_lifecycle().direct_children();
+    let mut lifecycle = handle.subscribe_lifecycle().direct_children();
     let baseline = handle.snapshot();
     let declared = baseline.child("worker").expect("worker is declared");
     let spawned_owner = builder.build().expect("builder is valid").spawn();
@@ -158,7 +158,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
         let handle = builder.handle();
         let mut snapshots = handle.subscribe_snapshots();
         let mut events = common::event_watch(&handle);
-        let mut lifecycle = handle.watch_lifecycle();
+        let mut lifecycle = handle.subscribe_lifecycle();
 
         match abandonment {
             "builder" => drop(builder),
@@ -205,7 +205,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
     let nested_builder = Supervisor::ordered().child(waiting_child("worker"));
     let nested_handle = nested_builder.handle();
     let mut snapshots = nested_handle.subscribe_snapshots();
-    let mut lifecycle = nested_handle.watch_lifecycle();
+    let mut lifecycle = nested_handle.subscribe_lifecycle();
     let nested = nested_builder.build().expect("nested scope builds");
 
     assert!(matches!(

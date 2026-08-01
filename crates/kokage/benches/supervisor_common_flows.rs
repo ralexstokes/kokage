@@ -108,7 +108,7 @@ async fn spawn_shutdown_flow(children: usize) {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
 
@@ -147,7 +147,7 @@ async fn one_for_one_restart_flow() {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut snapshots = handle.snapshots();
+    let mut snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child("flaky")
@@ -198,7 +198,7 @@ async fn one_for_all_restart_flow() {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
 
@@ -211,7 +211,7 @@ async fn dynamic_add_remove_flow() {
         .spawn()
         .expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
 
     handle
         .add_task_spec(TaskSpec::new("seed", |ctx| async move {

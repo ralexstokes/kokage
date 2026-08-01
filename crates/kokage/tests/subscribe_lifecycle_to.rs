@@ -109,7 +109,7 @@ impl Actor for ScopeSink {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.watch = Some(
             ctx.scope()
-                .lifecycle_events()
+                .subscribe_lifecycle()
                 .direct_children()
                 .forward_to(&ctx.myself(), ScopeSinkMsg::Lifecycle),
         );
@@ -178,7 +178,7 @@ async fn recv_event(
 }
 
 async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
-    let mut snapshots = handle.snapshots();
+    let mut snapshots = handle.subscribe_snapshots();
     timeout(Duration::from_secs(2), async {
         loop {
             if snapshots
@@ -251,7 +251,7 @@ async fn assert_no_buffered_lifecycle(
 async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
 
@@ -303,7 +303,7 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
 async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
@@ -313,7 +313,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     wait_for_generation(&watched, "crasher", 1).await;
 
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     drop(guard);
@@ -324,7 +324,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     wait_for_generation(&watched, "crasher", 2).await;
 
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     let later = crash_and_receive_events(&crasher, &mut observed).await;
@@ -351,7 +351,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
 async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
@@ -378,7 +378,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .await
         .expect("replacement subtree added");
     let guard = replacement
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle

@@ -251,7 +251,7 @@ async fn next_report(reports: &mut mpsc::UnboundedReceiver<&'static str>) -> &'s
 }
 
 async fn assert_snapshot_stream_closes(handle: &ScopeRef) {
-    assert_snapshot_receiver_closes(handle.snapshots()).await;
+    assert_snapshot_receiver_closes(handle.subscribe_snapshots()).await;
 }
 
 async fn assert_snapshot_receiver_closes(mut snapshots: SupervisorSnapshotReceiver) {
@@ -833,7 +833,7 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
         Ok(())
     }));
     let handle = tree.scope();
-    let mut snapshots = handle.snapshots();
+    let mut snapshots = handle.subscribe_snapshots();
     let declared = snapshots
         .latest()
         .child("worker")
@@ -862,7 +862,7 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
 async fn trees_terminalize_handles_when_dropped() {
     let builder = Tree::new();
     let handle = builder.scope();
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Ordered);
     assert_eq!(handle.kind(), ScopeKind::Ordered);
     let builder = builder.strategy(Strategy::RestForOne);
@@ -872,7 +872,7 @@ async fn trees_terminalize_handles_when_dropped() {
 
     let builder = DynamicTree::new();
     let handle = builder.scope();
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
     let _: ScopeRef = handle.clone().into();
     drop(builder);
@@ -880,7 +880,7 @@ async fn trees_terminalize_handles_when_dropped() {
 
     let child = DynamicTree::new();
     let child_handle = child.scope();
-    let child_snapshots = child_handle.snapshots();
+    let child_snapshots = child_handle.subscribe_snapshots();
     let mut parent = Tree::new();
     parent.add_subtree("child", child);
     drop(parent);
@@ -922,14 +922,14 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     tree.add_task_spec(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     tree.add_task_spec(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     let failed_ordered = tree.scope();
-    let failed_ordered_snapshots = failed_ordered.snapshots();
+    let failed_ordered_snapshots = failed_ordered.subscribe_snapshots();
     assert!(tree.spawn().is_err());
     assert_snapshot_receiver_closes(failed_ordered_snapshots).await;
 
     let builder =
         DynamicTree::new().default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO));
     let failed_dynamic = builder.scope();
-    let failed_dynamic_snapshots = failed_dynamic.snapshots();
+    let failed_dynamic_snapshots = failed_dynamic.subscribe_snapshots();
     assert!(builder.spawn().is_err());
     assert_snapshot_receiver_closes(failed_dynamic_snapshots).await;
 
@@ -948,7 +948,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     invalid.add_actor_spec(ActorSpec::new("duplicate-binding", || Idle));
     invalid.add_actor_spec(ActorSpec::new("duplicate-binding", || Idle));
     let rejected = invalid.scope();
-    let rejected_snapshots = rejected.snapshots();
+    let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
         support::dynamic_root(&parent)
             .add_subtree("invalid", invalid)
@@ -965,7 +965,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
         .expect("first subtree inserts");
     let duplicate = DynamicTree::new();
     let rejected = duplicate.scope();
-    let rejected_snapshots = rejected.snapshots();
+    let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
         support::dynamic_root(&parent)
             .add_subtree("occupied", duplicate)

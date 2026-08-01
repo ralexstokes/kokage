@@ -299,7 +299,7 @@ impl Actor for Router {
         // add appears after the baseline as Added and is swept there instead.
         self.mount_watch = Some(
             self.mount
-                .lifecycle_events()
+                .subscribe_lifecycle()
                 .direct_children()
                 .forward_to(&ctx.myself(), RouterMsg::MountLifecycle),
         );

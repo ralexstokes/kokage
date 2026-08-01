@@ -313,7 +313,7 @@ impl StableSupervisorChannels {
     ) {
         self.assert_reconfigurable();
 
-        self.snapshots().send_if_modified(|snapshot| {
+        self.snapshots_tx().send_if_modified(|snapshot| {
             if *snapshot == initial_snapshot {
                 false
             } else {
@@ -369,7 +369,7 @@ impl StableSupervisorChannels {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
         // makes the documented `(child_id, lineage)` upsert on
-        // `watch_lifecycle` idempotent across the pre-spawn baseline — only
+        // `subscribe_lifecycle` idempotent across the pre-spawn baseline — only
         // because a reserved identity has not minted any lineage yet, so the
         // hub allocates 0, 1, 2, ... in the same declaration order.
         debug_assert_eq!(
@@ -377,7 +377,7 @@ impl StableSupervisorChannels {
             0,
             "declared projection assumes an identity that has not minted lineages yet"
         );
-        let snapshots = self.snapshots();
+        let snapshots = self.snapshots_tx();
         snapshots.send_if_modified(|snapshot| {
             let children = children
                 .into_iter()
@@ -489,7 +489,7 @@ impl StableSupervisorChannels {
         // incarnation is acquired inside the same lifecycle boundary, so
         // `run_as_child` never has to reopen the terminalization race after
         // binding.
-        let snapshots = self.snapshots();
+        let snapshots = self.snapshots_tx();
         let lifecycle = self.lifecycle();
         // Lineages belong to the stable supervisor identity, not an
         // individual incarnation. Assign the new static memberships before
@@ -620,7 +620,7 @@ impl StableSupervisorChannels {
         {
             return;
         }
-        self.snapshots().send_if_modified(|current| {
+        self.snapshots_tx().send_if_modified(|current| {
             if current == snapshot {
                 return false;
             }
@@ -700,7 +700,7 @@ impl StableSupervisorChannels {
         self.binding_revision.subscribe()
     }
 
-    pub(crate) fn snapshots(&self) -> watch::Sender<SupervisorSnapshot> {
+    pub(crate) fn snapshots_tx(&self) -> watch::Sender<SupervisorSnapshot> {
         let slot = self
             .snapshots
             .lock()
@@ -1377,7 +1377,7 @@ pub(crate) enum SupervisorCommand {
 ///   obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`snapshot`](Self::snapshot) /
 ///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
-///   and [`watch_lifecycle`](Self::watch_lifecycle) for the whole tree.
+///   and [`subscribe_lifecycle`](Self::subscribe_lifecycle) for the whole tree.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// Handles never own a supervisor's lifecycle. Dropping a root or nested
@@ -1779,7 +1779,7 @@ impl SupervisorHandle {
     /// snapshot. If its bounded queue overflows, it yields a complete reset
     /// snapshot and resumes from that snapshot's sequence boundary. Child
     /// sequences are local to each scope, so the stream is intentionally
-    /// restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
+    /// restricted to this scope. Use [`subscribe_lifecycle`](Self::subscribe_lifecycle)
     /// for the lower-level recursive history stream and custom recovery policy.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
         let snapshots = self.subscribe_snapshots();
@@ -1807,7 +1807,7 @@ impl SupervisorHandle {
     /// buffer for the whole tree; sustained overflow is a tree-wide
     /// [`LifecycleEventKind::Lagged`](crate::supervisor::LifecycleEventKind::Lagged)
     /// marker with an empty path.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn subscribe_lifecycle(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch()
     }
 
