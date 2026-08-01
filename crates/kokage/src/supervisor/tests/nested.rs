@@ -549,7 +549,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", {
             let attempts = attempts.clone();
             let fail_first = fail_first.clone();
@@ -684,7 +684,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", {
             let fail = fail.clone();
             let attempts = attempts.clone();
@@ -775,7 +775,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("valid grandchild supervisor");
 
     let mid = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(
             TaskSpec::new("fuse", {
                 let fail = fail.clone();

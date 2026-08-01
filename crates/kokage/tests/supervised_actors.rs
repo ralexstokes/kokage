@@ -98,7 +98,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -241,7 +241,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 

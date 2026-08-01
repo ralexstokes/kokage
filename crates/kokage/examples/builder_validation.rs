@@ -31,7 +31,7 @@ fn report(label: &str, result: Result<kokage::RunningTree, BuildError>) {
 
 #[tokio::main]
 async fn main() {
-    let mut zero_capacity = Tree::new().mailbox_capacity(0);
+    let mut zero_capacity = Tree::new().default_actor_mailbox_capacity(0);
     zero_capacity.add_actor_spec(ActorSpec::new("worker", Idle::<()>::new));
     report("zero mailbox capacity", zero_capacity.spawn());
 

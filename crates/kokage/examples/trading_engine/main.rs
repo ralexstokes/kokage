@@ -313,13 +313,13 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         })
         .mailbox(Mailbox::queue(VENUE_MAILBOX));
 
-    let mut venues =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));
+    let mut venues = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));
     venues.add_actor_spec(venue_a_feed_actor);
     venues.add_actor_spec(venue_a_gateway_actor);
     venues.add_actor_spec(venue_b_feed_actor);
     venues.add_actor_spec(venue_b_gateway_actor);
-    let mut tree = Tree::new().mailbox_capacity(32);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(32);
     tree.add_subtree("venues", venues);
     tree.add_actor_spec(reconciler_actor);
     tree.add_actor_spec(ledger_actor);

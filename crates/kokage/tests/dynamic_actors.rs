@@ -831,8 +831,8 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let running_tree = DynamicTree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort())
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
@@ -877,8 +877,8 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 #[tokio::test]
 async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     let running_tree = DynamicTree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort())
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
@@ -1156,7 +1156,7 @@ impl Actor for GatedMailboxProbe {
 #[tokio::test]
 async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
     let running_tree = DynamicTree::new()
-        .default_mailbox_shutdown(MailboxShutdown::Discard)
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard)
         .spawn()
         .expect("dynamic tree builds");
     let scope = support::dynamic_root(&running_tree);
@@ -1269,6 +1269,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 #[tokio::test]
 async fn runtime_added_actor_can_override_mailbox_capacity() {
     let running_tree = DynamicTree::new()
+        .default_actor_mailbox_capacity(4)
         .spawn()
         .expect("graphless runtime builds");
     let sink = support::dynamic_root(&running_tree)

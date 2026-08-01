@@ -646,7 +646,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_preempts_zero_delay_restart() {
     let supervisor = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1)))
         .child(TaskSpec::new("flaky", |_ctx| async move {
             Err(common::test_error("restart immediately"))
         }))
@@ -695,7 +695,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
 
     let saw_cancel_for_keeper = saw_cancel.clone();
     let supervisor = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             8,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(200)),

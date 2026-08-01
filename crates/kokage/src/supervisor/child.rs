@@ -222,11 +222,11 @@ impl TaskSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
     ) -> (RestartPolicy, Shutdown) {
         self.spec
-            .resolved_policies(default_restart, default_shutdown)
+            .resolved_policies(default_child_restart, default_child_shutdown)
     }
 
     pub(crate) fn removes_when_done(&self) -> bool {
@@ -402,16 +402,16 @@ impl ChildSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
     ) -> (RestartPolicy, Shutdown) {
         let restart = if self.inner.restart_is_default {
-            default_restart
+            default_child_restart
         } else {
             self.inner.restart
         };
         let shutdown = if self.inner.shutdown_is_default {
-            default_shutdown
+            default_child_shutdown
         } else {
             self.inner.shutdown_policy
         };

@@ -95,8 +95,8 @@ impl std::fmt::Debug for RunningSupervisor {
 pub(crate) struct SupervisorConfig {
     pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) default_restart: RestartPolicy,
-    pub(crate) default_shutdown: Shutdown,
+    pub(crate) default_child_restart: RestartPolicy,
+    pub(crate) default_child_shutdown: Shutdown,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
 }

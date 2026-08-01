@@ -63,8 +63,8 @@ fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let mut tree = Tree::new()
         .strategy(Strategy::RestForOne)
-        .default_restart(RestartPolicy::always())
-        .default_mailbox_shutdown(MailboxShutdown::Discard);
+        .default_child_restart(RestartPolicy::always())
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     tree.add_subtree("workers", Tree::new().strategy(Strategy::OneForAll));
     tree.add_task_spec(
         TaskSpec::new("clock", |ctx| async move {
@@ -84,9 +84,12 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::RestForOne);
-    assert_eq!(outline.default_restart, RestartPolicy::always());
-    assert_eq!(outline.default_shutdown, Shutdown::default());
-    assert_eq!(outline.default_mailbox_shutdown, MailboxShutdown::Discard);
+    assert_eq!(outline.default_child_restart, RestartPolicy::always());
+    assert_eq!(outline.default_child_shutdown, Shutdown::default());
+    assert_eq!(
+        outline.default_actor_mailbox_shutdown,
+        MailboxShutdown::Discard
+    );
     assert_eq!(outline.child_ids(), ["workers", "clock", "ingest", "parse"]);
 
     let ChildOutline::Scope {
@@ -135,7 +138,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 
 #[test]
 fn tree_debug_includes_nested_declarations_without_serde() {
-    let mut workers = Tree::new().default_mailbox_shutdown(MailboxShutdown::Discard);
+    let mut workers = Tree::new().default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     workers.add_actor("press", || Worker);
     let mut tree = Tree::new();
     tree.add_subtree("workers", workers);
@@ -143,7 +146,7 @@ fn tree_debug_includes_nested_declarations_without_serde() {
     let debug = format!("{tree:#?}");
     assert!(debug.contains("workers"));
     assert!(debug.contains("press"));
-    assert!(debug.contains("default_mailbox_shutdown: Discard"));
+    assert!(debug.contains("default_actor_mailbox_shutdown: Discard"));
 }
 
 #[test]
@@ -151,8 +154,8 @@ fn tree_debug_includes_nested_declarations_without_serde() {
 fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     let explicit_shutdown = Shutdown::graceful_for(Duration::from_millis(17));
     let mut tree = Tree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort());
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort());
     tree.add_task_spec(TaskSpec::new("inherited", |_| async { Ok(()) }));
     tree.add_task_spec(
         TaskSpec::new("explicit", |_| async { Ok(()) })
@@ -187,7 +190,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         std::future::pending::<()>().await;
         Ok(())
     }));
-    let mut declared = Tree::new().default_restart(RestartPolicy::always());
+    let mut declared = Tree::new().default_child_restart(RestartPolicy::always());
     declared.add_subtree_spec(
         "declared",
         SubtreeSpec::from(stubborn)
@@ -308,7 +311,7 @@ fn tree_placement_rejects_zero_actor_mailbox_capacity() {
 
 #[test]
 fn tree_placement_rejects_zero_scope_mailbox_capacity() {
-    let mut tree = Tree::new().mailbox_capacity(0);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(0);
     tree.add_actor_spec(ActorSpec::new("worker", || Worker));
     let result = tree.spawn();
 
@@ -326,7 +329,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let first_actor = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
     let direct_actor = direct.actor_ref();
-    let mut tree = Tree::new().mailbox_capacity(9);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(9);
     tree.add_actor_spec(first);
     tree.add_actor_spec(direct);
     let running_tree = tree.spawn().expect("tree builds");
@@ -347,7 +350,7 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     let nested_ref = nested.actor_ref();
     let mut nested_tree = Tree::new();
     nested_tree.add_actor_spec(nested);
-    let mut tree = Tree::new().mailbox_capacity(9);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(9);
     tree.add_subtree("nested", nested_tree);
     let running_tree = tree.spawn().expect("tree builds");
     running_tree
@@ -367,7 +370,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let leader = ActorSpec::new("leader", || Worker);
     let leader_ref = leader.actor_ref();
     let mut owned = Tree::new()
-        .mailbox_capacity(9)
+        .default_actor_mailbox_capacity(9)
         .strategy(Strategy::OneForAll);
     owned.add_actor_spec(leader);
     owned.add_subtree("children", DynamicTree::new());
@@ -388,7 +391,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 
 #[test]
 fn pre_spawn_projection_preserves_declared_restart_policies() {
-    let mut tree = Tree::new().default_restart(RestartPolicy::always());
+    let mut tree = Tree::new().default_child_restart(RestartPolicy::always());
     tree.add_actor_spec(ActorSpec::new("explicit", || Worker).restart(RestartPolicy::never()));
     tree.add_actor_spec(ActorSpec::new("inherited", || Worker));
     let snapshot = tree.scope().snapshot();
@@ -482,16 +485,16 @@ async fn static_tree_actor_can_remove_itself_when_done() {
 fn dynamic_outlines_include_future_member_policy_defaults() {
     let standard = DynamicTree::new().outline();
     let customized = DynamicTree::new()
-        .default_restart(RestartPolicy::never())
-        .default_shutdown(Shutdown::abort())
-        .default_mailbox_shutdown(MailboxShutdown::Discard)
+        .default_child_restart(RestartPolicy::never())
+        .default_child_shutdown(Shutdown::abort())
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard)
         .outline();
 
     assert_ne!(standard, customized);
-    assert_eq!(customized.default_restart, RestartPolicy::never());
-    assert_eq!(customized.default_shutdown, Shutdown::abort());
+    assert_eq!(customized.default_child_restart, RestartPolicy::never());
+    assert_eq!(customized.default_child_shutdown, Shutdown::abort());
     assert_eq!(
-        customized.default_mailbox_shutdown,
+        customized.default_actor_mailbox_shutdown,
         MailboxShutdown::Discard
     );
 }
@@ -546,8 +549,8 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     let ingest = ActorSpec::new("ingest", || Worker);
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
-    let mut children =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let mut children = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     children.add_task_spec(
         TaskSpec::new("fatal", move |_| {
             let fail = Arc::clone(&fail_child);
@@ -559,7 +562,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
         .restart(RestartPolicy::always().limit(0, Duration::from_secs(60)))
         .shutdown(Shutdown::abort()),
     );
-    let mut owned = Tree::new().default_restart(RestartPolicy::never());
+    let mut owned = Tree::new().default_child_restart(RestartPolicy::never());
     owned.add_actor_spec(ingest);
     owned.add_subtree("children", children);
     let mut tree = Tree::new();
@@ -616,12 +619,12 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let (graph, _ingest, _parse) = two_actor_tree();
     let mut graph = graph
         .strategy(Strategy::RestForOne)
-        .default_mailbox_shutdown(MailboxShutdown::Discard);
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     graph.add_subtree(
         "workers",
         DynamicTree::new()
-            .default_restart(RestartPolicy::never())
-            .default_shutdown(Shutdown::abort()),
+            .default_child_restart(RestartPolicy::never())
+            .default_child_shutdown(Shutdown::abort()),
     );
     graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
     let outline = graph.outline();
@@ -633,15 +636,18 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let decoded: kokage::observe::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
-    assert_eq!(decoded.default_mailbox_shutdown, MailboxShutdown::Discard);
+    assert_eq!(
+        decoded.default_actor_mailbox_shutdown,
+        MailboxShutdown::Discard
+    );
     let ChildOutline::Scope {
         outline: workers, ..
     } = decoded.child("workers").expect("dynamic scope survives")
     else {
         panic!("expected dynamic scope");
     };
-    assert_eq!(workers.default_restart, RestartPolicy::never());
-    assert_eq!(workers.default_shutdown, Shutdown::abort());
+    assert_eq!(workers.default_child_restart, RestartPolicy::never());
+    assert_eq!(workers.default_child_shutdown, Shutdown::abort());
     assert!(matches!(
         decoded.child("clock"),
         Some(ChildOutline::Task {

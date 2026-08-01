@@ -88,8 +88,8 @@ impl TreeBuilder {
         self.tree.add_actor_spec(slot.define(factory))
     }
 
-    pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
-        self.tree = std::mem::take(&mut self.tree).mailbox_capacity(capacity);
+    pub(crate) fn default_actor_mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
+        self.tree = std::mem::take(&mut self.tree).default_actor_mailbox_capacity(capacity);
         self
     }
 

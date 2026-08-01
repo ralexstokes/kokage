@@ -297,8 +297,8 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) default_restart: RestartPolicy,
-    pub(crate) default_shutdown: Shutdown,
+    pub(crate) default_child_restart: RestartPolicy,
+    pub(crate) default_child_shutdown: Shutdown,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
@@ -447,8 +447,8 @@ impl SupervisorRuntime {
             meta: RuntimeMeta {
                 strategy: config.strategy,
                 kind,
-                default_restart: config.default_restart,
-                default_shutdown: config.default_shutdown,
+                default_child_restart: config.default_child_restart,
+                default_child_shutdown: config.default_child_shutdown,
                 path_prefix,
                 observability,
                 parent_link,
@@ -954,8 +954,10 @@ impl SupervisorRuntime {
     fn add_child(&mut self, mut child: crate::supervisor::child::ChildSpec) -> CommandResult<u64> {
         self.assert_dynamic_membership();
 
-        ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
-            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner).apply_defaults(
+            self.meta.default_child_restart,
+            self.meta.default_child_shutdown,
+        );
 
         if child.id().is_empty() {
             return Err(ControlError::Rejected(
@@ -1003,8 +1005,10 @@ impl SupervisorRuntime {
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
-        ChildDefinition::make_mut_preserving_supervisor_identity(&mut spec.inner)
-            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        ChildDefinition::make_mut_preserving_supervisor_identity(&mut spec.inner).apply_defaults(
+            self.meta.default_child_restart,
+            self.meta.default_child_shutdown,
+        );
         let id = spec.id().to_owned();
         if id.is_empty() {
             return Err(ControlError::Rejected(

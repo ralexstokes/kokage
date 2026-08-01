@@ -154,7 +154,7 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
     })
     .restart(RestartPolicy::never());
     let handle_owner = Supervisor::dynamic()
-        .default_restart(RestartPolicy::always())
+        .default_child_restart(RestartPolicy::always())
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -876,7 +876,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic()
-            .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1))),
+            .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1))),
         [
             TaskSpec::new("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -1157,7 +1157,7 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_child_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(60),
             crate::supervisor::Backoff::fixed(std::time::Duration::from_secs(30)),
@@ -1214,7 +1214,7 @@ async fn remove_child_preempts_zero_delay_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(
+        Supervisor::dynamic().default_child_restart(
             crate::supervisor::RestartPolicy::on_failure()
                 .limit(8, std::time::Duration::from_secs(1)),
         ),
@@ -1269,7 +1269,7 @@ async fn remove_child_preempts_zero_delay_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle_owner = Supervisor::dynamic()
-        .default_restart(
+        .default_child_restart(
             crate::supervisor::RestartPolicy::on_failure()
                 .limit(8, std::time::Duration::from_secs(1)),
         )
@@ -1344,7 +1344,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let backoff = std::time::Duration::from_millis(80);
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_child_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(1),
             crate::supervisor::Backoff::fixed(backoff),

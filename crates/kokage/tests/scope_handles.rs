@@ -316,8 +316,8 @@ async fn nested_scope_wait_stopped_joins_after_shutdown_completed_elsewhere() {
 
 #[tokio::test]
 async fn nested_scope_late_waiters_receive_the_terminal_error() {
-    let nested_tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let nested_tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut nested_tree = nested_tree;
     nested_tree.add_task("worker", |_| async {
         Err(std::io::Error::other("worker failed").into())
@@ -990,8 +990,8 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert!(tree.spawn().is_err());
     assert_snapshot_receiver_closes(failed_ordered_snapshots).await;
 
-    let builder =
-        DynamicTree::new().default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO));
+    let builder = DynamicTree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO));
     let failed_dynamic = builder.scope();
     let failed_dynamic_snapshots = failed_dynamic.subscribe_snapshots();
     assert!(builder.spawn().is_err());
@@ -1364,7 +1364,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     let mut inner = Tree::new();
     inner.add_actor_spec(worker_spec);
     let inner =
-        inner.default_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(30)));
+        inner.default_child_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(30)));
     let mut owned = Tree::new().strategy(Strategy::OneForAll);
     owned.add_actor_spec(leader);
     owned.add_subtree("children", inner);

@@ -65,7 +65,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
 
     let mut tree = Tree::new()
         .strategy(strategy)
-        .default_restart(RestartPolicy::always());
+        .default_child_restart(RestartPolicy::always());
     tree.add_actor_spec(healthy);
     tree.add_actor_spec(failing);
     let running_tree = tree.spawn()?;

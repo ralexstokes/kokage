@@ -356,7 +356,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
 
 #[tokio::test]
 async fn a_dynamic_scope_can_await_completion() {
-    let builder = Supervisor::dynamic().default_restart(RestartPolicy::never());
+    let builder = Supervisor::dynamic().default_child_restart(RestartPolicy::never());
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let finished = builder
@@ -773,7 +773,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle_owner = Supervisor::dynamic()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

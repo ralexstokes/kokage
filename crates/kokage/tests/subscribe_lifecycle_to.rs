@@ -155,9 +155,9 @@ async fn runtime_with_watched_subtree() -> (
     let watched = support::dynamic_root(&running_tree)
         .add_subtree(
             "watched",
-            graph
-                .build()
-                .default_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1))),
+            graph.build().default_child_restart(
+                RestartPolicy::on_failure().limit(8, Duration::from_secs(1)),
+            ),
         )
         .await
         .expect("watched subtree added");

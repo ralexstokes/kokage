@@ -94,7 +94,7 @@ for a whole tree:
 #     async fn handle(&mut self, _job: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
 let spec = ActorSpec::new("press", || Press).mailbox(Mailbox::queue(8));
-let tree = Tree::new().mailbox_capacity(128); // default for actors in this tree
+let tree = Tree::new().default_actor_mailbox_capacity(128); // default for actors in this tree
 # let _ = (spec, tree);
 ```
 

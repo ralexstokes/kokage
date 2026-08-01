@@ -164,7 +164,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO))
+                    .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
                 assert!(error.to_string().contains("window"));

@@ -18,7 +18,7 @@ use common::ObservedEvent;
 #[tokio::test]
 async fn repeated_failures_can_exceed_restart_intensity() {
     let supervisor = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
         .child(TaskSpec::new("flaky", |_| async {
             Err(common::test_error("boom"))
         }))
@@ -38,7 +38,7 @@ async fn repeated_failures_can_exceed_restart_intensity() {
 #[tokio::test]
 async fn configured_backoff_delays_restart_attempts() {
     let supervisor = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             1,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(75)),
@@ -67,7 +67,7 @@ async fn configured_backoff_delays_restart_attempts() {
 #[tokio::test]
 async fn jittered_exponential_backoff_delays_restart_attempts() {
     let supervisor = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             1,
             Duration::from_secs(1),
             Backoff::exponential_with_jitter(
@@ -102,7 +102,7 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let running = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             3,
             Duration::from_secs(1),
             Backoff::exponential(Duration::from_millis(40), 2, Duration::from_millis(200)),
@@ -149,7 +149,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
     let release_for_child = release.clone();
 
     let running = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             5,
             Duration::from_millis(200),
             Backoff::exponential(Duration::from_millis(50), 4, Duration::from_secs(2)),
@@ -215,7 +215,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
 #[tokio::test]
 async fn child_restart_intensity_override_controls_backoff() {
     let supervisor = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(
             TaskSpec::new("flaky", |_| async { Err(common::test_error("boom")) }).restart(
                 common::restart_with_backoff(
@@ -283,7 +283,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     });
 
     let handle_owner = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
         .build()
@@ -303,7 +303,7 @@ async fn child_restart_intensity_override_is_enforced() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let running = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(10, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(10, Duration::from_secs(1)))
         .child(
             TaskSpec::new("flaky", move |ctx| {
                 let starts_tx = starts_tx.clone();
@@ -339,7 +339,7 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
 
     let release_second_failure_for_child = release_second_failure.clone();
     let running = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(1, Duration::from_millis(100)))
+        .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::from_millis(100)))
         .child(TaskSpec::new("flaky", move |ctx| {
             let release_second_failure = release_second_failure_for_child.clone();
             let starts_tx = starts_tx.clone();
@@ -423,7 +423,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
 
     let handle_owner = Supervisor::ordered()
         .strategy(crate::supervisor::Strategy::OneForAll)
-        .default_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
         .build()

@@ -309,7 +309,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(child_a)
         .child(child_b)
         .build()
@@ -332,7 +332,7 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let running = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(40)),

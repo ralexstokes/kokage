@@ -33,24 +33,24 @@ pub(crate) struct ActorRuntimeState {
 #[derive(Debug)]
 struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
-    default_restart: RestartPolicy,
-    default_shutdown: Shutdown,
-    default_mailbox_shutdown: MailboxShutdown,
+    default_child_restart: RestartPolicy,
+    default_child_shutdown: Shutdown,
+    default_actor_mailbox_shutdown: MailboxShutdown,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
                 actor_builder,
-                default_restart,
-                default_shutdown,
-                default_mailbox_shutdown,
+                default_child_restart,
+                default_child_shutdown,
+                default_actor_mailbox_shutdown,
             }),
         }
     }
@@ -58,24 +58,24 @@ impl ActorRuntimeState {
     pub(crate) fn configure(
         &self,
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
-            default_restart,
-            default_shutdown,
-            default_mailbox_shutdown,
+            default_child_restart,
+            default_child_shutdown,
+            default_actor_mailbox_shutdown,
         };
     }
 
     fn actor_defaults(&self) -> (RestartPolicy, Shutdown, MailboxShutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         (
-            config.default_restart,
-            config.default_shutdown,
-            config.default_mailbox_shutdown,
+            config.default_child_restart,
+            config.default_child_shutdown,
+            config.default_actor_mailbox_shutdown,
         )
     }
 
@@ -1157,12 +1157,14 @@ impl DynamicScopeRef {
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
-        let (default_restart, default_shutdown, default_mailbox_shutdown) =
+        let (default_child_restart, default_child_shutdown, default_actor_mailbox_shutdown) =
             self.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
-            restart: spec.restart.unwrap_or(default_restart),
-            shutdown: spec.shutdown.unwrap_or(default_shutdown),
-            mailbox_shutdown: spec.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
+            restart: spec.restart.unwrap_or(default_child_restart),
+            shutdown: spec.shutdown.unwrap_or(default_child_shutdown),
+            mailbox_shutdown: spec
+                .mailbox_shutdown
+                .unwrap_or(default_actor_mailbox_shutdown),
             remove_when_done: spec.remove_when_done,
         };
         let actor = self.actors.make_actor(spec);

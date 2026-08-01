@@ -88,7 +88,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
         },
     ));
     let handle = builder
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 

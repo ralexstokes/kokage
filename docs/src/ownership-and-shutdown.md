@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Set timing per child (`ActorSpec::shutdown`, `TaskSpec::shutdown`), per scope
-default (`default_shutdown`), or on a subtree's edge
+default (`default_child_shutdown`), or on a subtree's edge
 (`SubtreeSpec::shutdown`). Mailbox behavior is actor-only: set a scope's actor
-default with `default_mailbox_shutdown`, then override individual declarations
+default with `default_actor_mailbox_shutdown`, then override individual declarations
 with `ActorSpec::mailbox_shutdown`. Inside an actor, `ctx.is_draining()` reports
 whether queued work is being drained, and hand-written raw-actor loops can check their
 [`raw::RawContext::shutdown_token`].

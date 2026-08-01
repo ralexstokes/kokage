@@ -240,7 +240,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let nested = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
@@ -254,7 +254,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         .build()
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
         .child_spec(ChildSpec::supervisor("nested", nested));
     let handle = builder.handle();
     let mut watch = handle.subscribe_lifecycle();
@@ -545,7 +545,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
 #[tokio::test]
 async fn restart_intensity_failure_is_an_in_band_scope_event() {
     let builder = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("always-fails", |_| async {
             Err(failure("no restart budget"))
         }));

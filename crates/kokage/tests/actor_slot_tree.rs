@@ -103,12 +103,12 @@ async fn slots_reserve_every_ref_before_nested_tree_wiring() {
     let probe_slot = ActorSlot::<ProbeMsg>::new("probe");
     let probe = probe_slot.actor_ref();
 
-    let sessions_tree = DynamicTree::new().mailbox_capacity(4);
+    let sessions_tree = DynamicTree::new().default_actor_mailbox_capacity(4);
     let sessions = sessions_tree.scope();
 
     let mut workers_tree = Tree::new()
         .strategy(Strategy::OneForAll)
-        .default_shutdown(Shutdown::graceful_for(Duration::from_secs(1)));
+        .default_child_shutdown(Shutdown::graceful_for(Duration::from_secs(1)));
     let workers = workers_tree.scope();
     workers_tree.add_actor_spec(left_slot.define({
         let right = right.clone();
@@ -124,9 +124,9 @@ async fn slots_reserve_every_ref_before_nested_tree_wiring() {
     }));
 
     let mut tree = Tree::new()
-        .default_restart(RestartPolicy::never())
-        .default_mailbox_shutdown(MailboxShutdown::Drain)
-        .mailbox_capacity(16);
+        .default_child_restart(RestartPolicy::never())
+        .default_actor_mailbox_shutdown(MailboxShutdown::Drain)
+        .default_actor_mailbox_capacity(16);
     let root = tree.scope();
     tree.add_subtree("sessions", sessions_tree);
     tree.add_subtree_spec(

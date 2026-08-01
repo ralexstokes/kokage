@@ -51,8 +51,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let mut tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
+    let mut tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
     tree.add_task_spec(warm_cache);
     tree.add_task_spec(metrics);
     let running_tree = tree.spawn()?;

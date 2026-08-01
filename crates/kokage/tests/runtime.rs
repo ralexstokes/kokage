@@ -543,8 +543,8 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     nested_graph.define(static_ref_slot, || FailOnMessage);
     let mut nested_graph = nested_graph.build();
     nested_graph.add_subtree("dynamic", DynamicTree::new());
-    let nested_graph =
-        nested_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let nested_graph = nested_graph
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = Tree::new();
     tree.add_subtree("workers", nested_graph);
     let handle = tree.spawn().expect("nested runtime builds");
@@ -650,7 +650,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = graph.build();
     graph.add_subtree("dynamic", DynamicTree::new());
     let graph =
-        graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+        graph.default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let subtree = support::dynamic_root(&root)
         .add_subtree("workers", graph)
         .await
@@ -692,8 +692,8 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     parent_graph.define(fuse_slot, || FailOnMessage);
     let mut parent_graph = parent_graph.build();
     parent_graph.add_subtree("dynamic", DynamicTree::new());
-    let parent_graph =
-        parent_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let parent_graph = parent_graph
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = Tree::new();
     tree.add_subtree("parent", parent_graph);
     let root = tree.spawn().expect("runtime builds");
@@ -1047,7 +1047,7 @@ async fn snapshot_child_wait_arms_before_the_future_is_polled() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -1094,7 +1094,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::always().limit(1, Duration::from_secs(60)))
+        .default_child_restart(RestartPolicy::always().limit(1, Duration::from_secs(60)))
         .spawn()
         .expect("runtime builds");
 
@@ -1163,7 +1163,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     let graph = builder.build();
 
     let handle = graph
-        .default_restart(RestartPolicy::always())
+        .default_child_restart(RestartPolicy::always())
         .spawn()
         .expect("runtime builds");
 
@@ -1354,7 +1354,7 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
     });
     let handle = builder
         .build()
-        .default_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
+        .default_child_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
         .spawn()
         .expect("runtime builds");
     let mut lifecycle = handle.scope().subscribe_lifecycle();

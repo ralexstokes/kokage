@@ -125,7 +125,7 @@ Every restartable policy carries a restart *budget* — by default 5 restarts
 within 30 seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 `exponential_with_jitter`) spacing the attempts. Attach a policy to one actor
 with `ActorSpec::restart(...)`, or set a scope-wide default with
-`Tree::default_restart(...)`.
+`Tree::default_child_restart(...)`.
 
 The constructors and builders cover normal configuration. `RestartPolicy` is
 also a public enum, so generic configuration code can match or construct its

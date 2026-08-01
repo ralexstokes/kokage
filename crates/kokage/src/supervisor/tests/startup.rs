@@ -481,7 +481,9 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     for index in 0..4 {
         let attempts = Arc::clone(&noisy_attempts);
         let nested = Supervisor::ordered()
-            .default_restart(RestartPolicy::on_failure().limit(100_000, Duration::from_secs(60)))
+            .default_child_restart(
+                RestartPolicy::on_failure().limit(100_000, Duration::from_secs(60)),
+            )
             .child(TaskSpec::new("flapping", move |_ctx| {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 async move { Err(std::io::Error::other("emit another nested update").into()) }

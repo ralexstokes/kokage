@@ -113,8 +113,8 @@ defaults for its own children; each child may override; a nested subtree's
 # let press_room = Tree::new();
 // Defaults for children declared in this scope.
 let mut shop = Tree::new()
-    .default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(30)))
-    .default_shutdown(Shutdown::graceful_for(Duration::from_secs(5)));
+    .default_child_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(30)))
+    .default_child_shutdown(Shutdown::graceful_for(Duration::from_secs(5)));
 
 // The press room as a child of the shop: its own restart budget as a unit.
 shop.add_subtree_spec(
@@ -125,7 +125,7 @@ shop.add_subtree_spec(
 # let _ = shop;
 ```
 
-Note the two layers are different things: `default_restart` *inside*
+Note the two layers are different things: `default_child_restart` *inside*
 `press_room` would govern each press individually; the `SubtreeSpec` restart
 governs the press room *as a whole* when it exhausts its internal budget and
 fails upward. Nested scopes do not inherit the parent's defaults — each scope
