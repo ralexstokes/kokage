@@ -47,6 +47,27 @@ async fn one_shot_ref_retains_removed_task_exit() {
 }
 
 #[tokio::test]
+async fn one_shot_panic_is_terminal_and_removed() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let task = running_tree
+        .scope()
+        .spawn_once("panicking-job", |_| async {
+            panic!("one-shot panic");
+        })
+        .await
+        .expect("task is inserted");
+
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("removed task panic is retained")
+        .expect("task exit is available");
+    assert!(exit.is_panicked());
+    assert!(task.snapshot().is_none());
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
 async fn spawn_once_accepts_a_consuming_factory() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let (observed_tx, observed_rx) = oneshot::channel();

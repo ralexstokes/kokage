@@ -227,6 +227,66 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
 }
 
 #[tokio::test]
+async fn terminal_failures_and_panics_remove_opted_in_dynamic_children() {
+    let supervisor = Supervisor::dynamic()
+        .build()
+        .expect("empty supervisor builds");
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
+    let mut events = common::event_watch(&handle);
+
+    let terminal_tasks = [
+        (
+            "failed",
+            ExitStatusView::Failed("terminal failure".to_owned()),
+            TaskSpec::new("failed", |_ctx| async move {
+                Err(common::test_error("terminal failure"))
+            })
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
+        ),
+        (
+            "panicked",
+            ExitStatusView::Panicked,
+            TaskSpec::new("panicked", |_ctx| async move {
+                panic!("terminal panic");
+            })
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
+        ),
+    ];
+
+    for (expected_id, expected_status, task) in terminal_tasks {
+        handle
+            .dynamic()
+            .expect("dynamic supervisor")
+            .add_child(task)
+            .await
+            .expect("terminal child added");
+
+        let mut exit = None;
+        loop {
+            match common::recv_supervisor_event(&mut events).await {
+                ObservedEvent::ChildExited { id, status, .. } if id == expected_id => {
+                    exit = Some(status);
+                }
+                ObservedEvent::ChildRemoved { id, .. } if id == expected_id => {
+                    assert_eq!(exit, Some(expected_status));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(handle.snapshot().child(expected_id).is_none());
+    }
+
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown should succeed");
+}
+
+#[tokio::test]
 async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
     let trigger = Arc::new(Notify::new());
     let supervisor = Supervisor::ordered()

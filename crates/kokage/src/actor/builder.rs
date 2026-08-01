@@ -248,6 +248,8 @@ impl<M: Send + 'static> ActorSpec<M> {
     ///
     /// By default a terminal child remains visible as an inactive membership.
     /// This setting is independent of the selected [`RestartPolicy`].
+    /// It does not turn an otherwise eligible restart into a terminal exit;
+    /// exhausting the restart budget still fails the enclosing scope.
     #[must_use]
     pub fn remove_on_terminal_exit(mut self) -> Self {
         self.remove_on_terminal_exit = true;

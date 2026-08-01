@@ -36,6 +36,27 @@ async fn repeated_failures_can_exceed_restart_intensity() {
 }
 
 #[tokio::test]
+async fn terminal_removal_does_not_mask_restart_intensity_failure() {
+    let supervisor = Supervisor::ordered()
+        .child(
+            TaskSpec::new("flaky", |_| async { Err(common::test_error("boom")) })
+                .restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+                .remove_on_terminal_exit(),
+        )
+        .build()
+        .expect("valid supervisor");
+
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
+    let err = handle
+        .wait()
+        .await
+        .expect_err("an eligible restart still exhausts the scope restart budget");
+
+    assert!(matches!(err, SupervisorError::RestartIntensityExceeded));
+}
+
+#[tokio::test]
 async fn configured_backoff_delays_restart_attempts() {
     let supervisor = Supervisor::ordered()
         .default_child_restart(common::restart_with_backoff(
