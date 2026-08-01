@@ -199,7 +199,7 @@ async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
 }
 
 async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
-    timeout(Duration::from_secs(2), handle.shutdown())
+    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));

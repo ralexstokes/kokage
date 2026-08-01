@@ -113,7 +113,10 @@ async fn spawn_shutdown_flow(children: usize) {
     black_box(started);
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn one_for_one_restart_flow() {
@@ -165,7 +168,10 @@ async fn one_for_one_restart_flow() {
     black_box(attempts.load(Ordering::Relaxed));
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn one_for_all_restart_flow() {
@@ -203,7 +209,10 @@ async fn one_for_all_restart_flow() {
     black_box(restarted);
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn dynamic_add_remove_flow() {
@@ -239,7 +248,10 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_removed(&mut events, "dynamic").await;
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {

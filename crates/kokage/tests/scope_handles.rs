@@ -200,7 +200,7 @@ impl Actor for DynamicCompletionLeader {
         first.wait().await?;
         second.wait().await?;
         self.reports.send("completed").expect("test receiver open");
-        dynamic.request_shutdown();
+        ctx.request_scope_shutdown();
         Ok(())
     }
 
@@ -280,7 +280,7 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
     assert!(spawned.scope().snapshot().child("worker").is_some());
 
     pre_spawn
-        .shutdown()
+        .shutdown_and_wait()
         .await
         .expect("pre-spawn handle stops the spawned scope");
 }
@@ -800,7 +800,10 @@ async fn dropping_runtime_requests_graceful_shutdown() {
     assert_eq!(next_report(&mut lifecycle_rx).await, "started");
     drop(running_tree);
     assert_eq!(next_report(&mut lifecycle_rx).await, "cancelled");
-    handle.wait().await.expect("owner drop drains runtime");
+    handle
+        .wait_stopped()
+        .await
+        .expect("owner drop drains runtime");
 }
 
 #[tokio::test]
@@ -822,7 +825,10 @@ async fn fire_and_forget_tree_spawn_shuts_down_observably() {
         .await
         .expect("temporary owner requests shutdown")
         .expect("test receiver open");
-    handle.wait().await.expect("temporary owner drains runtime");
+    handle
+        .wait_stopped()
+        .await
+        .expect("temporary owner drains runtime");
 }
 
 #[tokio::test]
@@ -1132,7 +1138,7 @@ async fn context_scope_add_task_reports_insertion_success() {
 }
 
 #[tokio::test]
-async fn dynamic_context_scope_uses_task_refs_for_completion() {
+async fn context_can_request_scope_shutdown_after_task_completion() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
     support::dynamic_root(&running_tree)

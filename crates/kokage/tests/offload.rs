@@ -30,7 +30,7 @@ async fn wait_runtime_started(scope: &ScopeRef, phase: &str) {
 }
 
 async fn shutdown_runtime(scope: &ScopeRef, phase: &str) {
-    tokio::time::timeout(TEST_TIMEOUT, scope.shutdown())
+    tokio::time::timeout(TEST_TIMEOUT, scope.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));

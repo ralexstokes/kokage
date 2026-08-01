@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested-cache removed from nested supervisor");
 
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

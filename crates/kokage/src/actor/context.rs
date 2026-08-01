@@ -1608,11 +1608,28 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// Awaiting scope or child lifecycle progress directly from a callback can
     /// deadlock when that progress depends on the callback returning; see
-    /// [`ScopeRef::wait_started`](crate::ScopeRef::wait_started). Pass the
-    /// wait to [`offload`](Self::offload) to run it outside the callback and
-    /// receive its result as an ordinary message.
+    /// [`ScopeRef::wait_started`](crate::ScopeRef::wait_started) and
+    /// [`ScopeRef::wait_stopped`](crate::ScopeRef::wait_stopped). Pass a wait
+    /// on an independently progressing scope to [`offload`](Self::offload) to
+    /// receive its result as an ordinary message. An offloaded wait on this
+    /// actor's own scope cannot deliver its result because the actor must exit
+    /// before the wait resolves; use
+    /// [`request_scope_shutdown`](Self::request_scope_shutdown) to request its
+    /// shutdown without waiting.
     pub fn scope(&self) -> ScopeRef {
         self.cx.scope()
+    }
+
+    /// Requests graceful shutdown of this actor's enclosing scope.
+    ///
+    /// The request does not wait for shutdown to finish. This is the safe
+    /// in-actor counterpart to
+    /// [`ScopeRef::shutdown_and_wait`](crate::ScopeRef::shutdown_and_wait): an
+    /// actor cannot await its own enclosing scope's termination because its
+    /// exit is part of that termination condition. Observe completion from
+    /// outside the scope instead.
+    pub fn request_scope_shutdown(&self) {
+        self.cx.scope().request_shutdown();
     }
 
     /// Runs blocking work on Tokio's blocking pool.

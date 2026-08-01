@@ -755,22 +755,25 @@ impl ScopeRef {
             .clone()
     }
 
-    /// Requests a graceful shutdown of the supervisor without waiting for it.
+    /// Requests graceful shutdown of this scope without waiting for it.
     pub fn request_shutdown(&self) {
         self.supervisor.shutdown();
     }
 
-    /// Requests a graceful shutdown and waits for the supervisor to stop.
+    /// Requests graceful shutdown and waits for this scope to stop.
     ///
-    /// Awaiting this from an actor callback in the same scope can block on that
-    /// callback returning. The cycle ends only if the actor's shutdown grace
-    /// expires and aborts it. An actor in the scope cannot receive this result:
-    /// its own exit is part of the shutdown condition. Call
-    /// [`request_shutdown`](Self::request_shutdown) from that actor and observe
-    /// completion from outside the scope. A bounded
-    /// [`Context::offload`](crate::Context::offload) is appropriate only when
-    /// shutting down a different scope that can stop while the actor remains live.
-    pub async fn shutdown(&self) -> Result<(), SupervisorError> {
+    /// Awaiting this from an actor callback in the same scope deadlocks that
+    /// callback: its own exit is part of the shutdown condition. The cycle
+    /// ends only when the actor's shutdown policy aborts the callback, so the
+    /// actor cannot receive this result. Call
+    /// [`Context::request_scope_shutdown`](crate::Context::request_scope_shutdown)
+    /// from that actor and observe completion from outside the scope. An
+    /// offload cannot deliver this same-scope result either: the actor must
+    /// exit before shutdown completes, and its offloads are cancelled while
+    /// it stops. A bounded [`Context::offload`](crate::Context::offload) is
+    /// appropriate only when shutting down a different scope that can stop
+    /// while the actor remains live.
+    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
@@ -805,15 +808,19 @@ impl ScopeRef {
         )
     }
 
-    /// Waits for the supervisor to stop.
+    /// Waits for this scope to stop without requesting shutdown.
     ///
-    /// Awaiting this from an actor callback in the same scope can deadlock when
-    /// stopping the scope depends on that callback returning. An actor in the
-    /// scope cannot receive this result because its own exit is part of the
-    /// wait condition. Observe termination from outside the scope instead. A
-    /// bounded [`Context::offload`](crate::Context::offload) is appropriate only
-    /// when waiting on a different scope that can stop while the actor remains live.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    /// Awaiting this from an actor callback in the same scope deadlocks because
+    /// the actor's own exit is part of the wait condition. If shutdown is
+    /// requested, the actor's grace may eventually abort the callback, but the
+    /// actor can never receive this result. An
+    /// [`Context::offload`](crate::Context::offload) avoids blocking the
+    /// callback, but cannot deliver the result: the actor must exit before the
+    /// wait resolves, and its offloads are cancelled while it stops. Observe
+    /// termination from outside the scope instead. A bounded offload is
+    /// appropriate only when waiting on a different scope that can stop while
+    /// the actor remains live.
+    pub async fn wait_stopped(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
 

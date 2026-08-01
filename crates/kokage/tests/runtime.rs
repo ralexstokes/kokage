@@ -1311,7 +1311,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
     handle.scope().request_shutdown();
     let shutdown = tokio::spawn({
         let handle = handle.scope();
-        async move { handle.wait().await }
+        async move { handle.wait_stopped().await }
     });
     tokio::task::yield_now().await;
     release_gate.notify_one();

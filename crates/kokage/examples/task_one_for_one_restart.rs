@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         restarted.generation
     );
 
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())
