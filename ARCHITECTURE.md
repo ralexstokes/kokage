@@ -102,8 +102,11 @@ escalates to the parent.
 Ordered scopes start children one at a time; a readiness-gated child
 (`ChildReadiness::Manual` or `Automatic`) blocks the sequence until it reports
 ready. Nested supervisors report ready recursively, once all *their* initial
-children have started — so `tree.spawn()` returning means the whole declared
-tree is up. A gated child that dies before readiness aborts the whole startup.
+children have started. Note that `tree.spawn()` itself is synchronous — it
+launches the supervisor task and returns immediately; the readiness barrier
+callers await is `scope().wait_started()`, which resolves once the whole
+declared tree is up. A gated child that dies before readiness aborts the
+whole startup.
 
 Shutdown (`runtime/shutdown.rs`) is the reverse. Each child gets an
 escalation ladder: cooperative cancellation (shutdown token) → grace expiry →
