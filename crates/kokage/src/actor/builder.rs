@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use crate::supervisor::{MailboxShutdown, RestartPolicy, Shutdown};
@@ -169,6 +169,97 @@ pub struct ActorSpec<M: Send + 'static> {
     pub(crate) shutdown: Option<Shutdown>,
     pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
     pub(crate) remove_on_terminal_exit: bool,
+}
+
+struct OneShotActorFactory<F> {
+    factory: Mutex<Option<F>>,
+}
+
+impl<A, F> ActorFactory for OneShotActorFactory<F>
+where
+    A: RawActor,
+    F: FnOnce() -> A + Send + 'static,
+{
+    type Actor = A;
+
+    fn build(&self) -> Self::Actor {
+        self.factory
+            .lock()
+            .expect("one-shot actor factory lock poisoned")
+            .take()
+            .expect("one-shot actor factory invoked more than once")()
+    }
+}
+
+/// A consuming declaration for one finite actor membership.
+///
+/// Unlike [`ActorSpec`], this declaration accepts an `FnOnce` factory, never
+/// restarts, and removes its dynamic-scope membership after terminal exit.
+/// It is intended for connection and session actors that must take ownership
+/// of a unique resource. Insert it through
+/// [`DynamicScopeRef::spawn_actor_once_spec`](crate::DynamicScopeRef::spawn_actor_once_spec).
+pub struct OneShotActorSpec<M: Send + 'static> {
+    pub(crate) spec: ActorSpec<M>,
+}
+
+impl<M: Send + 'static> OneShotActorSpec<M> {
+    /// Creates a one-shot actor declaration under `actor_id`.
+    pub fn new<A, F>(actor_id: impl Into<String>, factory: F) -> Self
+    where
+        A: RawActor<Msg = M>,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        Self {
+            spec: ActorSpec::new(
+                actor_id,
+                OneShotActorFactory {
+                    factory: Mutex::new(Some(factory)),
+                },
+            )
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
+        }
+    }
+
+    /// Configures the actor's mailbox storage and capacity.
+    #[must_use]
+    pub fn mailbox(mut self, mailbox: Mailbox<M>) -> Self {
+        self.spec = self.spec.mailbox(mailbox);
+        self
+    }
+
+    /// Enables accepted-message byte observation.
+    #[must_use]
+    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+        self.spec = self.spec.message_size(size_hint);
+        self
+    }
+
+    /// Overrides the enclosing scope's shutdown policy.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
+        self.spec = self.spec.shutdown(shutdown);
+        self
+    }
+
+    /// Selects how accepted mailbox messages are handled during shutdown.
+    #[must_use]
+    pub fn mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+        self.spec = self.spec.mailbox_shutdown(policy);
+        self
+    }
+
+    /// Keeps this terminal membership visible until it is explicitly removed.
+    #[must_use]
+    pub fn retain_on_terminal_exit(mut self) -> Self {
+        self.spec.remove_on_terminal_exit = false;
+        self
+    }
+
+    /// Returns the actor id within its enclosing dynamic scope.
+    pub fn id(&self) -> &str {
+        &self.spec.actor_id
+    }
 }
 
 impl<M: Send + 'static> ActorSpec<M> {

@@ -34,6 +34,7 @@ smoke:
     cargo run --locked -p kokage --example build_farm --features serde
     cargo run --locked -p kokage --example shard_store --features serde
     cargo run --locked -p kokage --example sidecar
+    cargo run --locked -p kokage --example ingest_gateway --features serde
 
 all-examples:
     bash scripts/run-all-examples.sh

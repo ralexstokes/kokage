@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-    MonitorEventKind, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
-    StopContext, SupervisorError, TaskSpec, Tree,
+    MonitorEventKind, OneShotActorSpec, RestartPolicy, RunningTree, ScopeRef, SendError,
+    SendErrorKind, Shutdown, StopContext, SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, ExitStatus, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -384,6 +384,75 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert!(replacement_lineage > initial_lineage);
 
     shutdown_running_tree(running_tree, "dynamic actor reference test shutdown").await;
+}
+
+struct ConsumingActor {
+    unique_resource: String,
+    observed: mpsc::UnboundedSender<String>,
+}
+
+impl RawActor for ConsumingActor {
+    type Msg = ();
+
+    async fn run(&mut self, _ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        self.observed
+            .send(std::mem::take(&mut self.unique_resource))
+            .expect("receiver alive");
+        Ok(())
+    }
+}
+
+struct CompleteOnce;
+
+impl RawActor for CompleteOnce {
+    type Msg = ();
+
+    async fn run(&mut self, _ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn one_shot_actor_consumes_unique_resource_and_removes_membership() {
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
+    let scope = support::dynamic_root(&running_tree);
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let unique_resource = String::from("owned socket");
+
+    let actor_ref = scope
+        .spawn_actor_once("connection", move || ConsumingActor {
+            unique_resource,
+            observed: observed_tx,
+        })
+        .await
+        .expect("one-shot actor added");
+
+    assert_eq!(
+        recv_test_event(&mut observed_rx, "consuming actor output").await,
+        "owned socket"
+    );
+    wait_for_child(&scope, "connection", false).await;
+    assert!(matches!(
+        actor_ref.send(()).await,
+        Err(SendError {
+            kind: SendErrorKind::Terminated,
+            ..
+        })
+    ));
+
+    let retained = scope
+        .spawn_actor_once_spec(
+            OneShotActorSpec::new("retained-connection", || CompleteOnce).retain_on_terminal_exit(),
+        )
+        .await
+        .expect("configured one-shot actor added");
+    wait_for_retained_terminal_child(&scope, "retained-connection").await;
+    scope
+        .remove(&retained)
+        .await
+        .expect("retained actor removed");
+
+    shutdown_running_tree(running_tree, "one-shot actor test shutdown").await;
 }
 
 #[tokio::test]

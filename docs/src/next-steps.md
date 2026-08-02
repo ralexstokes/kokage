@@ -26,19 +26,24 @@ Every feature in this book has a runnable counterpart under
   `supervisor_snapshot_trace` — observability patterns ready to adapt.
 - `json_edge` — decoding a byte-oriented edge into typed messages.
 
-Five larger examples put everything together the way this book did, and are
+Six larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry), **`assistant_control_plane`** (an LLM-agent control
 plane with offloaded model calls), **`build_farm`** (a finite dependency
 build over restarting service tasks and dynamic one-shot workers), and
 **`shard_store`** (planned sharded-state handoff, directory rebinding, rolling
-reload, and crash recovery). The first two run with
-`--features metrics,derive`; `build_farm` and `shard_store` run with
-`--features serde` so they can validate and round-trip declarations or runtime
-snapshots. **`sidecar`** is the task-first embedding case: a host-owned
+reload, and crash recovery), and **`ingest_gateway`** (real loopback TCP,
+dynamic connection actors, bounded FIFO overload, and a flaky downstream
+sink). The first two run with `--features metrics,derive`; `build_farm`,
+`shard_store`, and `ingest_gateway` run with `--features serde` so they can
+validate and round-trip declarations, runtime snapshots, or network frames.
+**`sidecar`** is the task-first embedding case: a host-owned
 process starts and stops plain supervised services, mixes in one actor subtree,
 rolls back failed startup, and re-embeds supervision without surrendering
 `main` or the Tokio runtime. It runs with the default feature set.
+
+The ingest gateway stays headless in CI. Pass `-- --console` to attach
+`kokage-console` to its live tree and keep it open until Ctrl-C.
 
 ## Watch a tree live
 

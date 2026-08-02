@@ -607,6 +607,7 @@ name = "kokage"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "kokage-console",
  "kokage-derive",
  "metrics",
  "metrics-exporter-prometheus",

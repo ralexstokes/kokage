@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, ExitResult,
+    ActorFactory, ActorRef, ActorSpec, ExitResult, OneShotActorSpec,
     actor::{
         ActorNode, ActorOptionsValidationError, ActorRunError, RawActor, RunnableActor,
         RunnableActorBuilder, ScopedActorStats,
@@ -1251,6 +1251,39 @@ impl DynamicScopeRef {
         F::Actor: RawActor<Msg = M>,
     {
         self.add_actor_spec(ActorSpec::new(id, factory)).await
+    }
+
+    /// Spawns a finite actor from a consuming factory and removes its
+    /// membership after terminal exit.
+    ///
+    /// The actor never restarts, so the factory may transfer ownership of a
+    /// unique resource such as a socket into the actor incarnation. Use
+    /// [`spawn_actor_once_spec`](Self::spawn_actor_once_spec) to configure its
+    /// mailbox, shutdown, or terminal-membership retention.
+    pub async fn spawn_actor_once<M, A, F>(
+        &self,
+        id: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<M>, ControlError>
+    where
+        M: Send + 'static,
+        A: RawActor<Msg = M>,
+        F: FnOnce() -> A + Send + 'static,
+    {
+        self.spawn_actor_once_spec(OneShotActorSpec::new(id, factory))
+            .await
+    }
+
+    /// Spawns an explicitly configured one-shot actor declaration.
+    ///
+    /// Success means the membership was inserted and startup was scheduled.
+    /// The returned ref remains tied to that exact membership after its
+    /// automatic removal.
+    pub async fn spawn_actor_once_spec<M: Send + 'static>(
+        &self,
+        spec: OneShotActorSpec<M>,
+    ) -> Result<ActorRef<M>, ControlError> {
+        self.add_actor_spec(spec.spec).await
     }
 
     /// Adds one explicitly configured actor declaration and returns its stable typed ref.
