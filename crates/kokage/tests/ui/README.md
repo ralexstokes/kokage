@@ -15,10 +15,10 @@ imports instead of silently expanding the common prelude.
 
 The snapshots are coupled to rustc's error rendering, so bumping the pinned
 toolchain in `rust-toolchain.toml` may break them even though nothing is
-wrong. Regenerate locally and review the diff:
+wrong. Regenerate both UI-test targets locally and review the diff:
 
 ```sh
-./scripts/dev env TRYBUILD=overwrite cargo test -p kokage --test derive_ui
+./scripts/dev env TRYBUILD=overwrite cargo test -p kokage --all-features --test derive_ui --test prelude_ui
 git diff crates/kokage/tests/ui
 ```
 
