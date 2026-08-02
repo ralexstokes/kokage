@@ -196,16 +196,38 @@ where
     let cancellation = CancellationToken::new();
     let (finished, finished_on_drop) = CompletionOnDrop::armed();
     let task_cancellation = cancellation.clone();
-    let mut target_incarnation = target.current_incarnation_mailbox();
     let task = tokio::spawn(async move {
         let _finished_on_drop = finished_on_drop;
+        let mut target_incarnation = None;
         loop {
-            let Some(update) = (tokio::select! {
+            let observed_incarnation = target_incarnation.clone();
+            let update = tokio::select! {
                 biased;
-                () = task_cancellation.cancelled() => None,
-                () = target.wait_terminated() => None,
+                () = task_cancellation.cancelled() => return,
+                incarnation = target.wait_for_incarnation_after(observed_incarnation.as_ref()) => {
+                    let Ok(incarnation) = incarnation else { return; };
+                    let target_restarted = target_incarnation.is_some();
+                    target_incarnation = Some(incarnation);
+                    if !target_restarted {
+                        continue;
+                    }
+
+                    let reset = observation.current_reset();
+                    let accepted = tokio::select! {
+                        biased;
+                        () = task_cancellation.cancelled() => return,
+                        () = target.wait_terminated() => return,
+                        sent = target.send_to_incarnation(map(reset)) => {
+                            let Ok(mailbox) = sent else { return; };
+                            mailbox
+                        }
+                    };
+                    target_incarnation = Some(accepted);
+                    continue;
+                }
                 update = observation.next() => update,
-            }) else {
+            };
+            let Some(update) = update else {
                 return;
             };
             let update_is_reset = matches!(&update, ChildObservationUpdate::Reset { .. });
@@ -272,14 +294,14 @@ impl ChildObservationWatch {
     /// Forwards transitions and recovery resets into `target` using its
     /// ordinary mailbox policy.
     ///
-    /// The pump follows the target through ordinary actor restarts. When it
-    /// discovers that a fresh incarnation accepted an update, it follows that
-    /// update with a complete reset (`dropped == 0`) so the replacement actor
-    /// does not continue with partial reducer state. Delivery remains
-    /// at-most-once: an update accepted by one incarnation is never replayed to
-    /// its replacement. The pump stops when the returned guard is dropped or
-    /// cancelled, when this stream ends, or when the target permanently
-    /// terminates.
+    /// The pump follows the target through ordinary actor restarts and observes
+    /// its mailbox binding independently from source updates. As soon as a
+    /// replacement incarnation binds, the pump sends it a complete reset
+    /// (`dropped == 0`), even when the observed scope is quiet. Delivery
+    /// remains at-most-once: an update accepted by one incarnation is never
+    /// replayed to its replacement. The pump stops when the returned guard is
+    /// dropped or cancelled, when this stream ends, or when the target
+    /// permanently terminates.
     pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
     where
         M: Send + 'static,
