@@ -354,6 +354,12 @@ fn task_policy_types_cover_common_configuration() {
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );
+    assert_eq!(
+        RestartPolicy::never()
+            .limit(9, Duration::from_secs(9))
+            .backoff(Backoff::fixed(Duration::from_millis(50))),
+        RestartPolicy::Never
+    );
     let policy = RestartPolicy::on_failure();
     let RestartPolicy::OnFailure {
         max_restarts,

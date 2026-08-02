@@ -239,6 +239,8 @@ impl RestartPolicy {
     }
 
     /// Returns the maximum eligible exits in the restart window.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn max_restarts(self) -> Option<usize> {
         match self {
             Self::Always { max_restarts, .. } | Self::OnFailure { max_restarts, .. } => {
@@ -249,6 +251,8 @@ impl RestartPolicy {
     }
 
     /// Returns the sliding restart-budget window.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn within(self) -> Option<Duration> {
         match self {
             Self::Always { within, .. } | Self::OnFailure { within, .. } => Some(within),
@@ -257,6 +261,8 @@ impl RestartPolicy {
     }
 
     /// Returns the delay applied before each replacement incarnation.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn backoff_policy(self) -> Option<Backoff> {
         match self {
             Self::Always { backoff, .. } | Self::OnFailure { backoff, .. } => Some(backoff),
