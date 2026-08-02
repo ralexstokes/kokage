@@ -833,7 +833,7 @@ impl ScopeRef {
     /// Initialize state from [`LifecycleObservation::snapshot`], then apply
     /// every transition or complete reset returned by its event stream.
     pub fn observe_children(&self) -> LifecycleObservation {
-        self.supervisor.observe_lifecycle()
+        self.supervisor.observe_children()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.

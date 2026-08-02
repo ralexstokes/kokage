@@ -6,8 +6,8 @@ the system can tell you exactly what has been happening. Kokage exposes three
 observation contracts:
 
 1. `snapshot()` / `subscribe_snapshots()` for conflated current state;
-2. `subscribe_lifecycle()` for ordered history, with `observe_children()` as the
-   self-recovering direct-child state-and-updates primitive;
+2. `subscribe_lifecycle()` for ordered history, with `observe_children()` as
+   the self-recovering direct-child state-and-updates primitive;
 3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
 
 Tracing, actor stats, metrics, and `kokage-console` project those contracts for
@@ -89,10 +89,10 @@ You saw this pattern in [Let It Crash](let-it-crash.md).
 
 ## Aligning current state with direct-child events
 
-Most stateful consumers should use [`snapshot`] or [`subscribe_snapshots`] and avoid
-maintaining a second copy of runtime state. When a consumer does need its own
-direct-child reducer, [`observe_children`] returns an aligned snapshot and a
-self-recovering [`ChildObservationWatch`]. Initialize from the snapshot, then
+Most stateful consumers should use [`snapshot`] or [`subscribe_snapshots`] and
+avoid maintaining a second copy of runtime state. When a consumer does need its
+own direct-child reducer, [`observe_children`] returns an aligned snapshot and
+a self-recovering [`ChildObservationWatch`]. Initialize from the snapshot, then
 apply every [`ChildObservationUpdate`] from the watch:
 
 ```rust,ignore
@@ -123,9 +123,9 @@ resets through an actor's ordinary mailbox.
 ## The recursive lifecycle stream: what happened, in order
 
 Snapshots tell you *now*; the lifecycle stream tells you *the story*.
-[`subscribe_lifecycle`] on any `ScopeRef` yields every transition in the scope —
-recursively for the whole subtree by default, or `.direct_children()` for
-one level:
+[`subscribe_lifecycle`] on any `ScopeRef` yields every transition in the
+scope — recursively for the whole subtree by default, or `.direct_children()`
+for one level:
 
 ```rust
 use kokage::{observe::LifecycleEventKind, prelude::*};

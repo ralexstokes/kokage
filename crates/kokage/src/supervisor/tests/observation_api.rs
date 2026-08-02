@@ -15,7 +15,7 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
         Ok(())
     }));
     let handle = supervisor.handle();
-    let observation = handle.observe_lifecycle();
+    let observation = handle.observe_children();
     let baseline = observation.snapshot.lifecycle_seq;
     assert!(observation.snapshot.child("worker").is_some());
     let mut events = observation.events;
@@ -72,7 +72,7 @@ async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_id
     let root = running.handle();
     root.wait_started().await.expect("initial tree starts");
 
-    let observation = leaf.observe_lifecycle();
+    let observation = leaf.observe_children();
     let baseline = observation.snapshot.lifecycle_seq;
     let mut updates = observation.events;
 

@@ -1781,7 +1781,7 @@ impl SupervisorHandle {
     /// sequences are local to each scope, so the stream is intentionally
     /// restricted to this scope. Use [`subscribe_lifecycle`](Self::subscribe_lifecycle)
     /// for the lower-level recursive history stream and custom recovery policy.
-    pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
+    pub fn observe_children(&self) -> crate::supervisor::LifecycleObservation {
         let snapshots = self.subscribe_snapshots();
         let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());
         let events = events.direct_children();
@@ -1793,7 +1793,7 @@ impl SupervisorHandle {
     /// Returns the ordered lifecycle stream for this entire supervisor tree.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
-    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
+    /// Use [`observe_children`](Self::observe_children) for the common
     /// gap-free direct-child state-plus-stream setup. This lower-level method
     /// is useful when recursive transitions after subscription are needed.
     /// Pre-spawn snapshots already project configured children as `Starting`,
