@@ -215,13 +215,11 @@ impl<H: Actor> RawActor for H {
             }
         }
 
-        // Preserve the accepted prefix for graceful shutdown: external intake
-        // closes only after the loop observes supervisor cancellation. A local
-        // stop leaves it open so a raw decorator can re-enter this handler on
-        // the same context before the outermost run returns.
-        if ctx.shutdown.is_cancelled() {
-            ctx.close_external_intake();
-        }
+        // Freeze the accepted prefix whenever this handler decides to stop.
+        // In particular, a local stop must reject external work while the
+        // mailbox drains and `on_stop` runs so awaited sends can ride through
+        // to a restarted incarnation.
+        ctx.close_external_intake();
         if ctx.drain_messages {
             // Completions and the mailbox are independent loop-owned sources.
             // Drain whichever is ready until the JoinSet is empty and the

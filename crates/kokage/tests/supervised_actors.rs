@@ -8,12 +8,12 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, Reply, RestartPolicy, SendError, Strategy,
-    Tree,
+    Actor, ActorRef, ActorSpec, Backoff, BoxError, Context, ExitResult, Reply, RestartPolicy,
+    SendError, SendErrorKind, StopContext, Strategy, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{Notify, mpsc, oneshot},
     time::{advance, timeout},
 };
 
@@ -134,6 +134,98 @@ async fn supervised_actors_restart_only_the_failed_actor() {
         .shutdown()
         .await
         .expect("supervisor shut down cleanly");
+}
+
+#[derive(Clone)]
+struct LocalStopRestart {
+    incarnation: usize,
+    handled: mpsc::UnboundedSender<(usize, &'static str)>,
+    first_stopping: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    release_first_stop: Arc<Notify>,
+}
+
+impl Actor for LocalStopRestart {
+    type Msg = &'static str;
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.handled.send((self.incarnation, message)).unwrap();
+        if message == "go" {
+            ctx.stop();
+        }
+        Ok(())
+    }
+
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ExitResult {
+        if self.incarnation == 0 {
+            send_once(&self.first_stopping, ());
+            self.release_first_stop.notified().await;
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn send_during_local_stop_rides_through_to_restarted_handler() {
+    let (handled_tx, mut handled_rx) = mpsc::unbounded_channel();
+    let (first_stopping_tx, first_stopping_rx) = oneshot::channel();
+    let first_stopping = oneshot_slot(first_stopping_tx);
+    let release_first_stop = Arc::new(Notify::new());
+    let next_incarnation = Arc::new(AtomicUsize::new(0));
+
+    let worker = ActorSpec::new("worker", {
+        let next_incarnation = Arc::clone(&next_incarnation);
+        let first_stopping = Arc::clone(&first_stopping);
+        let release_first_stop = Arc::clone(&release_first_stop);
+        move || LocalStopRestart {
+            incarnation: next_incarnation.fetch_add(1, Ordering::SeqCst),
+            handled: handled_tx.clone(),
+            first_stopping: Arc::clone(&first_stopping),
+            release_first_stop: Arc::clone(&release_first_stop),
+        }
+    })
+    .restart(RestartPolicy::always());
+    let worker_ref = worker.actor_ref();
+    let mut tree = Tree::new().strategy(Strategy::OneForOne);
+    tree.add_actor_spec(worker);
+    let handle = tree.spawn().expect("runtime builds");
+
+    worker_ref.send("go").await.expect("first run accepts stop");
+    assert_eq!(handled_rx.recv().await, Some((0, "go")));
+    timeout(Duration::from_secs(1), first_stopping_rx)
+        .await
+        .expect("first incarnation enters on_stop")
+        .expect("first incarnation reports on_stop");
+    assert!(matches!(
+        worker_ref.try_send("probe"),
+        Err(SendError {
+            kind: SendErrorKind::NotRunning,
+            ..
+        })
+    ));
+
+    let late_send = tokio::spawn({
+        let worker_ref = worker_ref.clone();
+        async move { worker_ref.send("late").await }
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !late_send.is_finished(),
+        "send waits for the next binding while on_stop is running"
+    );
+
+    release_first_stop.notify_one();
+    late_send
+        .await
+        .expect("late send task joins")
+        .expect("late message is accepted after restart");
+    assert_eq!(
+        timeout(Duration::from_secs(1), handled_rx.recv())
+            .await
+            .expect("restarted actor handles late message"),
+        Some((1, "late"))
+    );
+
+    handle.shutdown().await.expect("supervisor shuts down");
 }
 
 #[derive(Clone)]

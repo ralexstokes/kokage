@@ -185,11 +185,10 @@ where
                 }
             };
             // Keep final incarnation teardown outside `RawActor::run`:
-            // decorators may invoke an inner actor more than once with this
-            // context, and an ordinary inner return must not close intake for
-            // the outer run. The handler loop closes intake sooner when it
-            // observes supervisor shutdown so its drain and stop hooks reject
-            // later external work.
+            // decorators may invoke a custom raw inner actor more than once
+            // with this context, and an ordinary raw inner return must not
+            // close intake for the outer run. The provided handler loop closes
+            // intake sooner whenever it decides to stop.
             ctx.close_external_intake();
             // Only the handler receive loop takes continuations. Anything
             // still queued here was pushed while that loop was stopping and
@@ -199,6 +198,11 @@ where
                 ctx.observability
                     .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
             }
+            // `RawContext` owns incarnation-scoped offloads, lifetime tasks,
+            // and monitor leases. Tear those down before running arbitrary
+            // actor destructor code or publishing the incarnation's exit.
+            // The binding guard intentionally remains alive through both.
+            drop(ctx);
             drop(actor);
             exit_report.report_result(&result);
             result

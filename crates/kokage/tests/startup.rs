@@ -11,8 +11,8 @@ use std::{
 #[cfg(feature = "host")]
 use kokage::raw::ActorRunError;
 use kokage::{
-    ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
-    SupervisorError, TaskSpec,
+    ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, SendError,
+    SendErrorKind, Shutdown, SupervisorError, TaskSpec,
     observe::ExitStatus,
     prelude::*,
     raw::{RawActor, RawContext},
@@ -605,14 +605,18 @@ impl RawActor for ExitCleanupProbe {
 
 impl Drop for ExitCleanupProbe {
     fn drop(&mut self) {
-        let intake_closed = self
-            .self_ref
-            .lock()
-            .unwrap()
-            .as_ref()
-            .expect("the actor ref is installed before spawning")
-            .try_send(())
-            .is_err();
+        let intake_closed = matches!(
+            self.self_ref
+                .lock()
+                .unwrap()
+                .as_ref()
+                .expect("the actor ref is installed before spawning")
+                .try_send(()),
+            Err(SendError {
+                kind: SendErrorKind::NotRunning,
+                ..
+            })
+        );
         self.intake_closed.store(intake_closed, Ordering::SeqCst);
         self.dropped.notify_one();
     }
@@ -648,48 +652,41 @@ async fn raw_actor_exit_closes_external_intake_before_dropping_the_actor() {
     handle.shutdown().await.unwrap();
 }
 
-struct StopsEachRun {
-    starts: Arc<AtomicUsize>,
-    stops: Arc<AtomicUsize>,
+struct ReceivesOneRaw {
+    runs: Arc<AtomicUsize>,
+    received: mpsc::UnboundedSender<(usize, &'static str)>,
 }
 
-impl Actor for StopsEachRun {
+impl RawActor for ReceivesOneRaw {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        ctx.stop();
-        Ok(())
-    }
-
-    async fn handle(&mut self, _message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        unreachable!("the persistent stop request skips the receive loop")
-    }
-
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ExitResult {
-        self.stops.fetch_add(1, Ordering::SeqCst);
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        let run = self.runs.fetch_add(1, Ordering::SeqCst);
+        ctx.mark_ready();
+        let message = ctx.recv().await.expect("outer raw run remains active");
+        self.received.send((run, message)).unwrap();
         Ok(())
     }
 }
 
 struct ReenteringRawActor {
-    inner: StopsEachRun,
+    inner: ReceivesOneRaw,
     between_runs: mpsc::UnboundedSender<()>,
     resume: Arc<Notify>,
-    received: mpsc::UnboundedSender<&'static str>,
     finished: Arc<Notify>,
 }
 
 impl RawActor for ReenteringRawActor {
     type Msg = &'static str;
 
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(Duration::from_secs(1))
+    }
+
     async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         self.inner.run(ctx).await?;
         self.between_runs.send(()).unwrap();
         self.resume.notified().await;
-        self.received
-            .send(ctx.try_recv().expect("message accepted between inner runs"))
-            .unwrap();
         self.inner.run(ctx).await?;
         self.finished.notify_one();
         Ok(())
@@ -698,28 +695,25 @@ impl RawActor for ReenteringRawActor {
 
 #[tokio::test]
 async fn raw_actor_decorator_can_reenter_with_the_same_open_context() {
-    let starts = Arc::new(AtomicUsize::new(0));
-    let stops = Arc::new(AtomicUsize::new(0));
+    let runs = Arc::new(AtomicUsize::new(0));
     let (between_runs, mut between_runs_rx) = mpsc::unbounded_channel();
     let resume = Arc::new(Notify::new());
     let (received, mut received_rx) = mpsc::unbounded_channel();
     let finished = Arc::new(Notify::new());
     let mut graph = Tree::new();
     let actor = graph.add_actor_spec(ActorSpec::new("ReenteringRawActor", {
-        let starts = Arc::clone(&starts);
-        let stops = Arc::clone(&stops);
+        let runs = Arc::clone(&runs);
         let between_runs = between_runs.clone();
         let resume = Arc::clone(&resume);
         let received = received.clone();
         let finished = Arc::clone(&finished);
         move || ReenteringRawActor {
-            inner: StopsEachRun {
-                starts: Arc::clone(&starts),
-                stops: Arc::clone(&stops),
+            inner: ReceivesOneRaw {
+                runs: Arc::clone(&runs),
+                received: received.clone(),
             },
             between_runs: between_runs.clone(),
             resume: Arc::clone(&resume),
-            received: received.clone(),
             finished: Arc::clone(&finished),
         }
     }));
@@ -728,18 +722,23 @@ async fn raw_actor_decorator_can_reenter_with_the_same_open_context() {
         .spawn()
         .unwrap();
 
+    tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
+        .await
+        .unwrap()
+        .unwrap();
+    actor.send("first").await.unwrap();
     between_runs_rx.recv().await.expect("the first run returns");
+    assert_eq!(received_rx.recv().await, Some((0, "first")));
     actor
         .send("between")
         .await
         .expect("the outer raw run keeps external intake open");
     resume.notify_one();
-    assert_eq!(received_rx.recv().await, Some("between"));
+    assert_eq!(received_rx.recv().await, Some((1, "between")));
     tokio::time::timeout(Duration::from_secs(1), finished.notified())
         .await
         .expect("the second run returns");
-    assert_eq!(starts.load(Ordering::SeqCst), 2);
-    assert_eq!(stops.load(Ordering::SeqCst), 2);
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
 
     handle.shutdown().await.unwrap();
 }

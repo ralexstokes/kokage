@@ -69,10 +69,11 @@ pub trait RawActor: Send + 'static {
     /// context. Repeated invocations share all incarnation-local state:
     /// readiness can only be reported once, a stop request remains set, and
     /// the same mailbox, timers, offloads, watches, and identity carry over.
-    /// An ordinary inner return does not close external mailbox intake. The
-    /// framework guarantees closure after the outermost invocation returns;
-    /// the provided [`Actor`](crate::Actor) loop closes it earlier when it
-    /// observes supervisor shutdown so it can drain a fixed accepted prefix.
-    /// Once closed, intake remains closed across later calls.
+    /// A custom raw inner actor's return does not by itself close external
+    /// mailbox intake. The framework guarantees closure after the outermost
+    /// invocation returns. The provided [`Actor`](crate::Actor) loop closes
+    /// intake whenever its receive loop decides to stop, including a local
+    /// stop, so it can drain a fixed accepted prefix. Once closed, intake
+    /// remains closed across later calls.
     fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
 }

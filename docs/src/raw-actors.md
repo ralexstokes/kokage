@@ -80,11 +80,12 @@ actor that decorates another raw actor can therefore inspect the context after
 the inner actor returns or call the inner actor again in place. Those calls
 share the same mailbox and all other incarnation state: readiness remains a
 one-shot signal, a stop request remains set, and timers, offloads, watches,
-identity, and queued work carry over. An ordinary inner return does not close
-external mailbox intake. The framework guarantees closure after the outermost
-`run` returns; the provided `Actor` loop closes it earlier when it observes
-supervisor shutdown so it can drain a fixed accepted prefix. Once closed,
-intake remains closed across later calls.
+identity, and queued work carry over. A custom raw inner actor's return does
+not by itself close external mailbox intake. The framework guarantees closure
+after the outermost `run` returns. The provided `Actor` loop closes intake
+whenever its receive loop decides to stop, including a local stop, so it can
+drain a fixed accepted prefix. Re-entering that handler therefore sees the
+closed mailbox. Once closed, intake remains closed across later calls.
 
 ## Hosting an actor without a tree
 

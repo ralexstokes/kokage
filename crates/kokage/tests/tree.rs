@@ -770,6 +770,96 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     assert!(events_rx.try_recv().is_err());
 }
 
+#[derive(Clone)]
+struct BoundedLocalDrain {
+    started: mpsc::UnboundedSender<()>,
+    release_start: Arc<Notify>,
+    entered_drain: mpsc::UnboundedSender<()>,
+    release_drain: Arc<Notify>,
+    handled: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for BoundedLocalDrain {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.started.send(()).expect("receiver alive");
+        self.release_start.notified().await;
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.handled.send(message).expect("receiver alive");
+        match message {
+            "go" => ctx.stop(),
+            "queued" => {
+                assert!(ctx.is_draining());
+                self.entered_drain.send(()).expect("receiver alive");
+                self.release_drain.notified().await;
+            }
+            "late" => panic!("work accepted after the drain prefix was frozen"),
+            other => panic!("unexpected message: {other}"),
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn local_stop_drain_rejects_work_after_freezing_the_accepted_prefix() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let release_start = Arc::new(Notify::new());
+    let (entered_drain_tx, mut entered_drain_rx) = mpsc::unbounded_channel();
+    let release_drain = Arc::new(Notify::new());
+    let (handled_tx, mut handled_rx) = mpsc::unbounded_channel();
+    let mut builder = ActorHostBuilder::new();
+    let actor = builder.actor(
+        ActorSpec::new("worker", {
+            let release_start = Arc::clone(&release_start);
+            let release_drain = Arc::clone(&release_drain);
+            move || BoundedLocalDrain {
+                started: started_tx.clone(),
+                release_start: Arc::clone(&release_start),
+                entered_drain: entered_drain_tx.clone(),
+                release_drain: Arc::clone(&release_drain),
+                handled: handled_tx.clone(),
+            }
+        })
+        .mailbox_shutdown(MailboxShutdown::Drain),
+    );
+    let graph = builder.build();
+    let worker = host(graph, "worker");
+    let task = tokio::spawn(async move {
+        worker
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
+    });
+
+    recv(&mut started_rx, "handler entered on_start").await;
+    actor.send("go").await.expect("stop message queued");
+    actor.send("queued").await.expect("drain message queued");
+    release_start.notify_one();
+    recv(&mut entered_drain_rx, "handler entered drain").await;
+    assert!(matches!(
+        actor.try_send("late"),
+        Err(SendError {
+            kind: SendErrorKind::NotRunning,
+            ..
+        })
+    ));
+    release_drain.notify_one();
+
+    assert!(task.await.expect("actor task joined").is_ok());
+    assert_eq!(recv(&mut handled_rx, "stop message handled").await, "go");
+    assert_eq!(
+        recv(&mut handled_rx, "accepted prefix drained").await,
+        "queued"
+    );
+    assert!(handled_rx.try_recv().is_err());
+}
+
 async fn queued_total_call(actor: ActorRef<GateMsg>) -> JoinHandle<Result<u32, CallError>> {
     let (queued_tx, queued_rx) = oneshot::channel();
     let call_task = tokio::spawn(async move {
@@ -1672,11 +1762,13 @@ mod actor_host {
                 return;
             }
             self.entered_stale_window.send(()).expect("receiver alive");
-            let (released, wake) = &*self.release_first_drop;
-            let mut released = released.lock().unwrap();
-            while !*released {
-                released = wake.wait(released).unwrap();
-            }
+            tokio::task::block_in_place(|| {
+                let (released, wake) = &*self.release_first_drop;
+                let mut released = released.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            });
         }
     }
 
