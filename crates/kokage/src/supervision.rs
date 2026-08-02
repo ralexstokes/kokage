@@ -1169,6 +1169,7 @@ pub struct SupervisionOutline {
 /// One payload-free child declaration.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.

@@ -7,15 +7,13 @@ use crate::supervisor::SupervisorHandle;
 /// A path of these values identifies an attached child within a supervision
 /// tree without consulting serializable supervisor snapshots.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-#[doc(hidden)]
-pub struct AttachedChildIdentity {
+pub(crate) struct AttachedChildIdentity {
     /// Child id within its direct supervisor.
-    pub id: String,
+    pub(crate) id: String,
     /// Monotonic identity of this membership within its direct supervisor.
-    pub lineage: u64,
+    pub(crate) lineage: u64,
     /// Current restart generation of this child membership.
-    pub generation: u64,
+    pub(crate) generation: u64,
 }
 
 /// A typed attachment read from a running supervision tree.
@@ -24,8 +22,7 @@ pub struct AttachedChildIdentity {
 /// from [`ChildSnapshot`](crate::supervisor::ChildSnapshot), including when the `serde`
 /// feature is enabled.
 #[derive(Clone)]
-#[doc(hidden)]
-pub struct AttachedChild<T> {
+pub(crate) struct AttachedChild<T> {
     path: Vec<AttachedChildIdentity>,
     attachment: Arc<T>,
     supervisor: Option<SupervisorHandle>,
@@ -45,19 +42,19 @@ impl<T> AttachedChild<T> {
     }
 
     /// Returns the identity path from the sampled supervisor to this child.
-    pub fn path(&self) -> &[AttachedChildIdentity] {
+    pub(crate) fn path(&self) -> &[AttachedChildIdentity] {
         &self.path
     }
 
     /// Returns the typed process-local attachment.
-    pub fn attachment(&self) -> &Arc<T> {
+    pub(crate) fn attachment(&self) -> &Arc<T> {
         &self.attachment
     }
 
     /// Returns this child's nested supervisor handle, when it is a supervisor.
     ///
     /// The handle and attachment were captured from the same membership entry.
-    pub fn supervisor(&self) -> Option<&SupervisorHandle> {
+    pub(crate) fn supervisor(&self) -> Option<&SupervisorHandle> {
         self.supervisor.as_ref()
     }
 }

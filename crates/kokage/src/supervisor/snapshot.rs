@@ -659,7 +659,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_on_terminal_exit_is_required_while_unknown_fields_are_tolerated() {
+    fn remove_on_terminal_exit_is_required() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -675,14 +675,6 @@ mod tests {
         let decoded: ChildSnapshot =
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
         assert!(decoded.remove_on_terminal_exit);
-
-        let mut extended = value.clone();
-        extended
-            .as_object_mut()
-            .expect("child snapshot serializes as an object")
-            .insert("future_observation".to_owned(), serde_json::json!(true));
-        serde_json::from_value::<ChildSnapshot>(extended)
-            .expect("future child snapshot fields remain forward compatible");
 
         let mut missing_membership_policy = value;
         missing_membership_policy

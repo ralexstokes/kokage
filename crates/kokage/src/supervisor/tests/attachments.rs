@@ -1,4 +1,4 @@
-use crate::supervisor::{__private, ChildSpec, Supervisor, TaskSpec};
+use crate::supervisor::{ChildSpec, Supervisor, TaskSpec, private};
 
 fn waiting_child(id: &str) -> TaskSpec {
     TaskSpec::new(id, |ctx| async move {
@@ -32,7 +32,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
     let root = root_owner.handle();
     root.wait_started().await.expect("tree starts");
 
-    let attached = __private::attached_children::<String>(&root);
+    let attached = private::attached_children::<String>(&root);
     let values = attached
         .iter()
         .map(|child| child.attachment().as_str())
@@ -75,7 +75,7 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
         .await
         .expect("old child added");
 
-    let old = __private::attached_children::<String>(&handle);
+    let old = private::attached_children::<String>(&handle);
     assert_eq!(old.len(), 1);
     assert_eq!(old[0].attachment().as_str(), "old");
     assert_eq!(old[0].path()[0].lineage, old_lineage);
@@ -97,7 +97,7 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
         .await
         .expect("replacement child added");
 
-    let current = __private::attached_children::<String>(&handle);
+    let current = private::attached_children::<String>(&handle);
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].attachment().as_str(), "new");
     assert_eq!(current[0].path()[0].lineage, new_lineage);

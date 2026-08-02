@@ -81,12 +81,7 @@ impl OrderedSupervisorBuilder {
 
     /// Projects child ids, restart policies, and terminal-retention flags in
     /// this scope's pre-spawn snapshot.
-    ///
-    /// Not part of the public contract: this exists so `kokage` can project
-    /// the membership its own higher-level builders will lower to, and is
-    /// superseded by the real declaration once the scope is built.
-    #[doc(hidden)]
-    pub fn project_declared_children(&self, children: Vec<(String, RestartPolicy, bool)>) {
+    pub(crate) fn project_declared_children(&self, children: Vec<(String, RestartPolicy, bool)>) {
         self.channels().project_declared_children(children);
     }
 

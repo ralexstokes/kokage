@@ -676,7 +676,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn an_outline_requires_the_current_terminal_membership_key() {
+fn an_outline_rejects_unknown_fields_and_requires_the_current_terminal_membership_key() {
     fn nested_child_fields<'a>(
         outline: &'a mut serde_json::Value,
         variant: &str,
@@ -707,8 +707,14 @@ fn an_outline_requires_the_current_terminal_membership_key() {
         let mut extended = outline.clone();
         nested_child_fields(&mut extended, variant)
             .insert("future_observation".to_owned(), serde_json::json!(true));
-        serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
-            .unwrap_or_else(|error| panic!("future {variant} fields remain compatible: {error}"));
+        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
+            .expect_err("unknown child declaration fields must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `future_observation`"),
+            "unexpected error for {variant}: {error}"
+        );
 
         let mut missing_membership_policy = outline.clone();
         nested_child_fields(&mut missing_membership_policy, variant)
