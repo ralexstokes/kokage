@@ -4,6 +4,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+use tokio::sync::Notify;
 
 use crate::{
     messages::{Artifact, Phase, StoreReport},
@@ -88,6 +89,7 @@ impl AttemptBook {
 #[derive(Debug, Default)]
 pub struct ProgressBook {
     phases: Mutex<BTreeMap<TargetId, Phase>>,
+    changed: Notify,
 }
 
 impl ProgressBook {
@@ -100,13 +102,18 @@ impl ProgressBook {
             .lock()
             .expect("progress lock is not poisoned")
             .insert(target, phase);
+        self.changed.notify_one();
     }
 
-    pub fn snapshot(&self) -> BTreeMap<TargetId, Phase> {
-        self.phases
+    pub async fn wait_for(&self, target: TargetId) {
+        while !self
+            .phases
             .lock()
             .expect("progress lock is not poisoned")
-            .clone()
+            .contains_key(target)
+        {
+            self.changed.notified().await;
+        }
     }
 }
 
@@ -124,7 +131,7 @@ pub struct BuildReport {
     pub failed_attempts: u64,
     pub retired_workers: u64,
     pub peak_workers: usize,
-    pub lease_waits: u64,
+    pub lease_outages: u64,
     pub complete: bool,
 }
 

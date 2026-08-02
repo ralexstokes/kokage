@@ -4,25 +4,33 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use kokage::{
-    ActorRef, DynamicScopeRef, ExitResult, OneShotTaskSpec, TaskRef, observe::ExitStatus,
+    ActorRef, ControlError, DynamicScopeRef, ExitResult, OneShotTaskSpec, TaskRef,
+    observe::ExitStatus,
 };
-use tokio::time::timeout;
+use tokio::{sync::oneshot, time::timeout};
 
 use crate::{
-    lease::Lease,
+    lease::{Lease, LeaseState},
     messages::{Artifact, CasMsg, Phase, ProgressMsg},
     model::{Action, Behavior, BuildPlan, Digest, TargetId, artifact_size, digest},
     shared::{AttemptBook, BuildJournal, BuildReport, TargetState},
 };
 
 const CALL_BOUND: Duration = Duration::from_secs(1);
-const WORKER_BOUND: Duration = Duration::from_millis(120);
+const WORKER_BACKSTOP: Duration = Duration::from_secs(3);
+const MAX_TARGET_ATTEMPTS: u32 = 3;
+
+enum WorkerOutcome {
+    Exited(Result<ExitStatus, kokage::TaskError>),
+    Parked,
+    BackstopElapsed,
+}
 
 struct WorkerCompletion {
     action: Action,
     digest: Digest,
     worker: TaskRef,
-    outcome: Result<Result<ExitStatus, kokage::TaskError>, tokio::time::error::Elapsed>,
+    outcome: WorkerOutcome,
 }
 
 pub struct Scheduler {
@@ -45,6 +53,8 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
         attempts,
         journal,
     } = scheduler;
+    let mut lease_state = lease.subscribe();
+    let mut observed_outages = 0;
     let mut report = BuildReport {
         targets: plan
             .actions()
@@ -59,10 +69,7 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
         .values()
         .all(|state| matches!(state, TargetState::Built { .. }))
     {
-        while !lease.is_held() {
-            report.lease_waits += 1;
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+        wait_for_lease(&mut lease_state, &mut observed_outages, &mut report).await?;
 
         let ready = ready_actions(&plan, &report.targets);
         if ready.is_empty() {
@@ -100,6 +107,13 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
             }
 
             let attempt = attempts.begin(action.target);
+            if attempt > MAX_TARGET_ATTEMPTS {
+                return Err(std::io::Error::other(format!(
+                    "{} exceeded the per-target limit of {MAX_TARGET_ATTEMPTS} attempts",
+                    action.target
+                ))
+                .into());
+            }
             report.submissions += 1;
             progress
                 .send(ProgressMsg {
@@ -116,6 +130,7 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
             let task_action = action.clone();
             let task_cas = cas.clone();
             let task_progress = progress.clone();
+            let (parked, parked_rx) = oneshot::channel();
             let worker = workers
                 .spawn_once_spec(OneShotTaskSpec::new(worker_id, move |ctx| {
                     run_worker(
@@ -125,24 +140,27 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
                         attempt,
                         task_cas,
                         task_progress,
+                        parked,
                     )
                 }))
                 .await?;
-            report.peak_workers = report.peak_workers.max(workers.snapshot().children.len());
             let waiting = worker.clone();
             pending.push(async move {
                 WorkerCompletion {
                     action,
                     digest: action_digest,
                     worker,
-                    outcome: timeout(WORKER_BOUND, waiting.wait()).await,
+                    outcome: observe_worker(waiting, parked_rx).await,
                 }
             });
+            // This counts the scheduler-owned in-flight set rather than a
+            // membership snapshot that may still contain an unreaped exit.
+            report.peak_workers = report.peak_workers.max(pending.len());
         }
 
         while let Some(completion) = pending.next().await {
             match completion.outcome {
-                Ok(Ok(exit)) if exit.is_completed() => {
+                WorkerOutcome::Exited(Ok(exit)) if exit.is_completed() => {
                     let artifact = cas
                         .call(
                             |reply| CasMsg::Lookup {
@@ -166,13 +184,25 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
                         },
                     );
                 }
-                Ok(Ok(_)) => {
+                WorkerOutcome::Exited(Ok(_)) => {
                     report.failed_attempts += 1;
                 }
-                Ok(Err(error)) => return Err(error.into()),
-                Err(_) => {
+                WorkerOutcome::Exited(Err(error)) => return Err(error.into()),
+                WorkerOutcome::Parked => {
                     report.retired_workers += 1;
-                    workers.remove(&completion.worker).await?;
+                    match workers.remove(&completion.worker).await {
+                        Ok(())
+                        | Err(ControlError::UnknownChildId(_))
+                        | Err(ControlError::UnknownChildHandle) => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                WorkerOutcome::BackstopElapsed => {
+                    return Err(std::io::Error::other(format!(
+                        "worker {} exceeded the {WORKER_BACKSTOP:?} liveness backstop",
+                        completion.action.target
+                    ))
+                    .into());
                 }
             }
         }
@@ -181,6 +211,43 @@ pub async fn run(scheduler: Scheduler) -> ExitResult {
     report.complete = true;
     journal.record(report);
     Ok(())
+}
+
+async fn wait_for_lease(
+    state: &mut tokio::sync::watch::Receiver<LeaseState>,
+    observed_outages: &mut u64,
+    report: &mut BuildReport,
+) -> Result<(), std::io::Error> {
+    loop {
+        let current = *state.borrow_and_update();
+        report.lease_outages += current.outages.saturating_sub(*observed_outages);
+        *observed_outages = current.outages;
+        if current.held {
+            return Ok(());
+        }
+        state
+            .changed()
+            .await
+            .map_err(|_| std::io::Error::other("lease state channel closed"))?;
+    }
+}
+
+async fn observe_worker(worker: TaskRef, mut parked: oneshot::Receiver<()>) -> WorkerOutcome {
+    let after_signal_close = worker.clone();
+    match timeout(WORKER_BACKSTOP, async move {
+        tokio::select! {
+            exit = worker.wait() => WorkerOutcome::Exited(exit),
+            signal = &mut parked => match signal {
+                Ok(()) => WorkerOutcome::Parked,
+                Err(_) => WorkerOutcome::Exited(after_signal_close.wait().await),
+            },
+        }
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(_) => WorkerOutcome::BackstopElapsed,
+    }
 }
 
 fn ready_actions(
@@ -211,6 +278,7 @@ async fn run_worker(
     attempt: u32,
     cas: ActorRef<CasMsg>,
     progress: ActorRef<ProgressMsg>,
+    parked: oneshot::Sender<()>,
 ) -> ExitResult {
     progress
         .send(ProgressMsg {
@@ -229,9 +297,12 @@ async fn run_worker(
     }
 
     if action.behavior == Behavior::StallOnce && attempt == 1 {
+        let _ = parked.send(());
         shutdown.cancelled().await;
         return Ok(());
     }
+
+    drop(parked);
 
     for _ in 0..4 {
         tokio::select! {

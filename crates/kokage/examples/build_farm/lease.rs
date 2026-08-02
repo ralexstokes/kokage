@@ -3,18 +3,36 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use kokage::{Backoff, RestartPolicy, TaskSpec};
+use tokio::sync::watch;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LeaseState {
+    pub held: bool,
+    pub outages: u64,
+}
+
+#[derive(Debug)]
 pub struct Lease {
-    held: AtomicBool,
+    state: watch::Sender<LeaseState>,
     acquisitions: AtomicU64,
     renewals: AtomicU64,
+}
+
+impl Default for Lease {
+    fn default() -> Self {
+        let (state, _) = watch::channel(LeaseState::default());
+        Self {
+            state,
+            acquisitions: AtomicU64::new(0),
+            renewals: AtomicU64::new(0),
+        }
+    }
 }
 
 impl Lease {
@@ -22,8 +40,8 @@ impl Lease {
         Arc::new(Self::default())
     }
 
-    pub fn is_held(&self) -> bool {
-        self.held.load(Ordering::Acquire)
+    pub fn subscribe(&self) -> watch::Receiver<LeaseState> {
+        self.state.subscribe()
     }
 
     pub fn acquisitions(&self) -> u64 {
@@ -33,26 +51,41 @@ impl Lease {
     pub fn renewals(&self) -> u64 {
         self.renewals.load(Ordering::Acquire)
     }
+
+    fn acquire(&self) {
+        self.acquisitions.fetch_add(1, Ordering::AcqRel);
+        self.state.send_modify(|state| state.held = true);
+    }
+
+    fn release(&self) {
+        self.state.send_modify(|state| state.held = false);
+    }
+
+    fn record_outage(&self) {
+        self.state.send_modify(|state| {
+            state.held = false;
+            state.outages += 1;
+        });
+    }
 }
 
 pub fn renewer(lease: Arc<Lease>, fail_first: bool) -> TaskSpec {
     TaskSpec::new("lease-renewer", move |ctx| {
         let lease = Arc::clone(&lease);
         async move {
-            lease.acquisitions.fetch_add(1, Ordering::AcqRel);
-            lease.held.store(true, Ordering::Release);
+            lease.acquire();
             ctx.mark_ready();
 
             loop {
                 tokio::select! {
                     () = ctx.shutdown_token().cancelled() => {
-                        lease.held.store(false, Ordering::Release);
+                        lease.release();
                         return Ok(());
                     }
                     () = tokio::time::sleep(Duration::from_millis(15)) => {
                         lease.renewals.fetch_add(1, Ordering::AcqRel);
                         if fail_first && ctx.generation() == 0 {
-                            lease.held.store(false, Ordering::Release);
+                            lease.record_outage();
                             return Err(std::io::Error::other(
                                 "lease service rejected a renewal",
                             ).into());

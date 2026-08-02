@@ -130,12 +130,7 @@ async fn run_farm(
         worker_snapshots.wait_for(|snapshot| snapshot.children.is_empty()),
     )
     .await??;
-    tokio::time::timeout(BUILD_BOUND, async {
-        while !farm.progress_book.snapshot().contains_key(PROBE_TARGET) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(BUILD_BOUND, farm.progress_book.wait_for(PROBE_TARGET)).await?;
 
     let report = farm
         .journal
@@ -269,16 +264,18 @@ fn verify_cold(durable: &Durable, cold: &FarmResult) {
     assert_eq!(cold.report.failed_attempts, 1, "{:?}", cold.report);
     assert_eq!(cold.report.retired_workers, 1, "{:?}", cold.report);
     assert!(cold.report.peak_workers >= 3, "{:?}", cold.report);
-    assert!(cold.report.lease_waits > 0, "{:?}", cold.report);
+    assert_eq!(cold.report.lease_outages, 1, "{:?}", cold.report);
     assert_eq!(cold.lease_acquisitions, 2);
     assert!(cold.lease_renewals >= 1);
     assert_eq!(cold.store.entries, durable.plan.actions().len());
+    assert_eq!(cold.store.misses, cold.report.submissions);
+    assert_eq!(cold.store.writes, durable.plan.actions().len() as u64);
     assert_eq!(durable.attempts.snapshot().get("network"), Some(&2));
     assert_eq!(durable.attempts.snapshot().get("docs"), Some(&2));
     println!("PHASE 1 OK — cold build recovered one failure and retired one wedged TaskRef");
     println!(
-        "PHASE 2 OK — lease task restarted with backoff while {} worker tasks ran concurrently",
-        cold.report.peak_workers
+        "PHASE 2 OK — lease task signaled {} outage while {} worker tasks ran concurrently",
+        cold.report.lease_outages, cold.report.peak_workers
     );
     println!(
         "PHASE 3 OK — latest-wins progress replaced {} unread updates",
