@@ -44,7 +44,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<M>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -59,7 +59,7 @@ struct GatedExit {
 impl RawActor for GatedExit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
         self.release.notified().await;
         if self.fail {
             Err(io::Error::other("dynamic actor failed").into())
@@ -96,7 +96,7 @@ struct RestartOnce {
 impl RawActor for RestartOnce {
     type Msg = ();
 
-    async fn run(&mut self, ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<()>) -> ExitResult {
         if self.starts.fetch_add(1, Ordering::SeqCst) == 0 {
             Err(io::Error::other("restart me").into())
         } else {
@@ -119,7 +119,7 @@ struct Watcher {
 impl RawActor for Watcher {
     type Msg = WatchMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         let mut watch: Option<Guard> = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -252,7 +252,7 @@ struct ObserveOrder {
 impl RawActor for ObserveOrder {
     type Msg = (u8, u32);
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -263,7 +263,7 @@ impl RawActor for ObserveOrder {
 impl RawActor for Observe {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -282,7 +282,7 @@ struct Forwarder;
 impl RawActor for Forwarder {
     type Msg = ForwardMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<ForwardMsg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<ForwardMsg>) -> ExitResult {
         let mut target = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -1115,7 +1115,7 @@ struct GatedDrain {
 impl RawActor for GatedDrain {
     type Msg = u64;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         self.release.notified().await;
         while ctx.recv().await.is_some() {}
         Ok(())
@@ -1380,7 +1380,7 @@ struct ForwardTo {
 impl RawActor for ForwardTo {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.target.send(message).await?;
         }
@@ -1435,7 +1435,7 @@ struct PendingActor;
 impl RawActor for PendingActor {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
         pending::<()>().await;
         Ok(())
     }

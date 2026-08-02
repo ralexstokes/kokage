@@ -896,7 +896,7 @@ struct RawCompletion {
 impl RawActor for RawCompletion {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         ctx.offload(Duration::from_secs(1), async {}, |_| "done");
         let message = ctx.recv().await.expect("offload completion");
         self.observed.send(message).unwrap();

@@ -135,7 +135,7 @@ where
             let monitors = bound_mailbox.monitor_lease();
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
             let readiness_shutdown = actor_shutdown.clone();
-            let ctx = RawContext {
+            let mut ctx = RawContext {
                 id: actor_id,
                 mailbox,
                 myself,
@@ -153,7 +153,7 @@ where
             };
             let _bound_mailbox = bound_mailbox;
             let result = {
-                let future = actor.run(ctx);
+                let future = actor.run(&mut ctx);
                 tokio::pin!(future);
                 let immediate_ready = ready.clone();
                 let mut first_poll = true;
@@ -184,6 +184,25 @@ where
                     managed.await
                 }
             };
+            // Keep final incarnation teardown outside `RawActor::run`:
+            // decorators may invoke a custom raw inner actor more than once
+            // with this context, and an ordinary raw inner return must not
+            // close intake for the outer run. The provided handler loop closes
+            // intake sooner whenever it decides to stop.
+            ctx.close_external_intake();
+            // Only the handler receive loop takes continuations. Anything
+            // still queued here was pushed while that loop was stopping and
+            // will be dropped with the incarnation, including when a handler
+            // actor is wrapped by a custom `RawActor`.
+            if !ctx.continuations.is_empty() {
+                ctx.observability
+                    .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
+            }
+            // `RawContext` owns incarnation-scoped offloads, lifetime tasks,
+            // and monitor leases. Tear those down before running arbitrary
+            // actor destructor code or publishing the incarnation's exit.
+            // The binding guard intentionally remains alive through both.
+            drop(ctx);
             drop(actor);
             exit_report.report_result(&result);
             result
@@ -384,7 +403,7 @@ impl ActorHost {
     /// impl RawActor for Flaky {
     ///     type Msg = ();
     ///
-    ///     async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    ///     async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
     ///         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
     ///             return Err("first incarnation fails".into());
     ///         }

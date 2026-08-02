@@ -134,7 +134,7 @@ struct NonCloneRaw {
 impl RawActor for NonCloneRaw {
     type Msg = bool;
 
-    async fn run(&mut self, mut ctx: RawContext<bool>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<bool>) -> ExitResult {
         let mut local = 0;
         while let Some(crash) = ctx.recv().await {
             if crash {

@@ -88,20 +88,22 @@ impl ScopeObservability {
         debug!(actor_id = %actor_id, "actor mailbox cleared");
     }
 
-    /// Reports continuations that were queued but never taken, because the
-    /// actor was already stopping when they were pushed.
+    /// Reports continuations that were queued but never taken before the actor
+    /// incarnation exited.
     ///
     /// The stage split turns most no-op `continue_with` calls into compile
     /// errors. This is the case it cannot reach: the drain loop hands a
     /// draining handler the same `Context` as the ordinary loop, so the
     /// call type-checks and the message is dropped with the incarnation. The
     /// phase is readable at runtime through `Context::is_draining`, so a
-    /// handler that wants to avoid the warning can check before queueing.
+    /// handler that wants to avoid the warning can check before queueing. The
+    /// runner also reports leftovers when a handler returns early with an
+    /// error.
     pub(crate) fn emit_continuations_dropped(&self, actor_id: &Arc<str>, dropped: usize) {
         warn!(
             actor_id = %actor_id,
             dropped_continuations = dropped,
-            "continuations queued while the actor was stopping were dropped"
+            "continuations left queued when the actor exited were dropped"
         );
     }
 

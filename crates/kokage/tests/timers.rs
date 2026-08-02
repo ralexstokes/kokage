@@ -882,7 +882,7 @@ struct RawCrossScheduler {
 impl RawActor for RawCrossScheduler {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         let timer = ctx.send_after_to(&self.target, "raw-cross", Duration::from_millis(20));
         let interval = ctx.interval_to(&self.target, "raw-cross-tick", Duration::from_millis(30));
         assert!(
@@ -917,7 +917,7 @@ struct RawSelfScheduler {
 impl RawActor for RawSelfScheduler {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         let one_shot = ctx.send_after("raw-self", Duration::from_millis(20));
         let interval = ctx.interval("raw-self-tick", Duration::from_millis(30));
         while let Some(message) = ctx.recv().await {

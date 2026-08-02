@@ -22,7 +22,7 @@ pub type ExitResult = Result<(), BoxError>;
 ///
 /// # Capability contract
 ///
-/// A raw actor receives the mailbox-owning [`RawContext`], including
+/// A raw actor borrows the mailbox-owning [`RawContext`], including
 /// `recv`, `try_recv`, and `mark_ready`. Loop-owned timers and continuations
 /// depend on the framework-owned handler loop, so a raw actor expresses those
 /// branches directly with Tokio futures beside `recv`, while watches,
@@ -30,7 +30,7 @@ pub type ExitResult = Result<(), BoxError>;
 /// `RawContext` itself.
 ///
 /// Implementors can use
-/// `async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult` in
+/// `async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult` in
 /// their trait impls. Registration takes a reusable
 /// [`ActorFactory`](crate::ActorFactory), so each run owns fresh
 /// incarnation-local state, including non-[`Clone`] fields. Custom raw actors
@@ -62,5 +62,18 @@ pub trait RawActor: Send + 'static {
     }
 
     /// Runs the actor until it finishes or shutdown is requested.
-    fn run(&mut self, ctx: RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
+    ///
+    /// The context belongs to the actor incarnation and is borrowed for this
+    /// invocation. A `RawActor` decorator may therefore inspect the context
+    /// after an inner actor returns or invoke that actor again with the same
+    /// context. Repeated invocations share all incarnation-local state:
+    /// readiness can only be reported once, a stop request remains set, and
+    /// the same mailbox, timers, offloads, watches, and identity carry over.
+    /// A custom raw inner actor's return does not by itself close external
+    /// mailbox intake. The framework guarantees closure after the outermost
+    /// invocation returns. The provided [`Actor`](crate::Actor) loop closes
+    /// intake whenever its receive loop decides to stop, including a local
+    /// stop, so it can drain a fixed accepted prefix. Once closed, intake
+    /// remains closed across later calls.
+    fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
 }

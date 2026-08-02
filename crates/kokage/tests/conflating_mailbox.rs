@@ -39,7 +39,7 @@ impl<M> Clone for GatedCollector<M> {
 impl<M: Send + 'static> RawActor for GatedCollector<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<M>) -> ExitResult {
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         while let Some(message) = ctx.recv().await {

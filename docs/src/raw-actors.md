@@ -8,8 +8,8 @@ implement a custom drain — drop one level down to [`raw::RawActor`].
 
 ## Owning the receive loop
 
-A raw actor implements `run`, which receives the [`raw::RawContext`] by
-value and *is* the actor's whole life:
+A raw actor implements `run`, which borrows the [`raw::RawContext`] and *is*
+the actor's whole life:
 
 ```rust
 use kokage::{
@@ -22,7 +22,7 @@ struct BatchPress;
 impl RawActor for BatchPress {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         // recv() returns None as soon as shutdown is requested.
         while let Some(job) = ctx.recv().await {
             // Greedily gather whatever else is already queued.
@@ -74,6 +74,18 @@ The contract you take on:
   `manual_readiness`. Missing the deadline fails the incarnation under its
   restart policy; shutdown disarms the startup deadline so the actor keeps its
   configured cooperative shutdown grace.
+
+The context is owned by the actor incarnation and borrowed by `run`. A raw
+actor that decorates another raw actor can therefore inspect the context after
+the inner actor returns or call the inner actor again in place. Those calls
+share the same mailbox and all other incarnation state: readiness remains a
+one-shot signal, a stop request remains set, and timers, offloads, watches,
+identity, and queued work carry over. A custom raw inner actor's return does
+not by itself close external mailbox intake. The framework guarantees closure
+after the outermost `run` returns. The provided `Actor` loop closes intake
+whenever its receive loop decides to stop, including a local stop, so it can
+drain a fixed accepted prefix. Re-entering that handler therefore sees the
+closed mailbox. Once closed, intake remains closed across later calls.
 
 ## Hosting an actor without a tree
 

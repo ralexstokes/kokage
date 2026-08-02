@@ -63,7 +63,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<M>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -167,7 +167,7 @@ struct Frontend {
 impl RawActor for Frontend {
     type Msg = Request;
 
-    async fn run(&mut self, mut ctx: RawContext<Request>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Request>) -> ExitResult {
         while let Some(Request(payload)) = ctx.recv().await {
             self.worker.send(Job { payload }).await?;
         }
@@ -183,7 +183,7 @@ struct Worker {
 impl RawActor for Worker {
     type Msg = Job;
 
-    async fn run(&mut self, mut ctx: RawContext<Job>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Job>) -> ExitResult {
         while let Some(job) = ctx.recv().await {
             self.seen.send(job).expect("receiver alive");
         }
@@ -226,7 +226,7 @@ struct Echo {
 impl RawActor for Echo {
     type Msg = u32;
 
-    async fn run(&mut self, mut ctx: RawContext<u32>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<u32>) -> ExitResult {
         while let Some(n) = ctx.recv().await {
             self.seen.send(n).expect("receiver alive");
         }
@@ -293,7 +293,7 @@ struct Counter;
 impl RawActor for Counter {
     type Msg = CounterMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<CounterMsg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<CounterMsg>) -> ExitResult {
         let mut total = 0;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -770,6 +770,96 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     assert!(events_rx.try_recv().is_err());
 }
 
+#[derive(Clone)]
+struct BoundedLocalDrain {
+    started: mpsc::UnboundedSender<()>,
+    release_start: Arc<Notify>,
+    entered_drain: mpsc::UnboundedSender<()>,
+    release_drain: Arc<Notify>,
+    handled: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for BoundedLocalDrain {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.started.send(()).expect("receiver alive");
+        self.release_start.notified().await;
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.handled.send(message).expect("receiver alive");
+        match message {
+            "go" => ctx.stop(),
+            "queued" => {
+                assert!(ctx.is_draining());
+                self.entered_drain.send(()).expect("receiver alive");
+                self.release_drain.notified().await;
+            }
+            "late" => panic!("work accepted after the drain prefix was frozen"),
+            other => panic!("unexpected message: {other}"),
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn local_stop_drain_rejects_work_after_freezing_the_accepted_prefix() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let release_start = Arc::new(Notify::new());
+    let (entered_drain_tx, mut entered_drain_rx) = mpsc::unbounded_channel();
+    let release_drain = Arc::new(Notify::new());
+    let (handled_tx, mut handled_rx) = mpsc::unbounded_channel();
+    let mut builder = ActorHostBuilder::new();
+    let actor = builder.actor(
+        ActorSpec::new("worker", {
+            let release_start = Arc::clone(&release_start);
+            let release_drain = Arc::clone(&release_drain);
+            move || BoundedLocalDrain {
+                started: started_tx.clone(),
+                release_start: Arc::clone(&release_start),
+                entered_drain: entered_drain_tx.clone(),
+                release_drain: Arc::clone(&release_drain),
+                handled: handled_tx.clone(),
+            }
+        })
+        .mailbox_shutdown(MailboxShutdown::Drain),
+    );
+    let graph = builder.build();
+    let worker = host(graph, "worker");
+    let task = tokio::spawn(async move {
+        worker
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
+    });
+
+    recv(&mut started_rx, "handler entered on_start").await;
+    actor.send("go").await.expect("stop message queued");
+    actor.send("queued").await.expect("drain message queued");
+    release_start.notify_one();
+    recv(&mut entered_drain_rx, "handler entered drain").await;
+    assert!(matches!(
+        actor.try_send("late"),
+        Err(SendError {
+            kind: SendErrorKind::NotRunning,
+            ..
+        })
+    ));
+    release_drain.notify_one();
+
+    assert!(task.await.expect("actor task joined").is_ok());
+    assert_eq!(recv(&mut handled_rx, "stop message handled").await, "go");
+    assert_eq!(
+        recv(&mut handled_rx, "accepted prefix drained").await,
+        "queued"
+    );
+    assert!(handled_rx.try_recv().is_err());
+}
+
 async fn queued_total_call(actor: ActorRef<GateMsg>) -> JoinHandle<Result<u32, CallError>> {
     let (queued_tx, queued_rx) = oneshot::channel();
     let call_task = tokio::spawn(async move {
@@ -905,7 +995,7 @@ struct TryDrainActor {
 impl RawActor for TryDrainActor {
     type Msg = TryDrainMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<TryDrainMsg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<TryDrainMsg>) -> ExitResult {
         match ctx.recv().await {
             Some(TryDrainMsg::Start) => self.started.send(()).expect("receiver alive"),
             Some(TryDrainMsg::Value(_)) => panic!("expected start message"),
@@ -995,7 +1085,7 @@ struct Paddle {
 impl RawActor for Paddle {
     type Msg = Ball;
 
-    async fn run(&mut self, mut ctx: RawContext<Ball>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Ball>) -> ExitResult {
         while let Some(ball) = ctx.recv().await {
             if ball.bounces_left == 0 {
                 self.done.send(()).expect("receiver alive");
@@ -1117,7 +1207,7 @@ struct Fail;
 impl RawActor for Fail {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
         Err(io::Error::other("boom").into())
     }
 }
@@ -1147,7 +1237,7 @@ struct Quit;
 impl RawActor for Quit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
         Ok(())
     }
 }
@@ -1186,7 +1276,7 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
     impl RawActor for Stubborn {
         type Msg = ();
 
-        async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+        async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
             self.live.store(true, Ordering::Release);
             let _guard = LiveGuard(self.live.clone());
             self.started.notify_one();
@@ -1291,7 +1381,7 @@ mod actor_host {
     impl<M: Send + 'static> RawActor for Drain<M> {
         type Msg = M;
 
-        async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<M>) -> ExitResult {
             while ctx.recv().await.is_some() {}
             Ok(())
         }
@@ -1305,7 +1395,7 @@ mod actor_host {
     impl RawActor for StartSignallingDrain {
         type Msg = ();
 
-        async fn run(&mut self, mut ctx: RawContext<()>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<()>) -> ExitResult {
             self.started.send(()).expect("start receiver alive");
             while ctx.recv().await.is_some() {}
             Ok(())
@@ -1318,7 +1408,7 @@ mod actor_host {
     impl RawActor for NeverStops {
         type Msg = ();
 
-        async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+        async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
             pending::<ExitResult>().await
         }
     }
@@ -1329,7 +1419,7 @@ mod actor_host {
     impl RawActor for StopsOnShutdown {
         type Msg = ();
 
-        async fn run(&mut self, ctx: RawContext<()>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<()>) -> ExitResult {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
@@ -1359,7 +1449,7 @@ mod actor_host {
     impl RawActor for GatedSizedDrain {
         type Msg = SizedPayload;
 
-        async fn run(&mut self, mut ctx: RawContext<SizedPayload>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<SizedPayload>) -> ExitResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
             while let Some(_message) = ctx.recv().await {
@@ -1406,7 +1496,7 @@ mod actor_host {
     impl RawActor for GatedDrain {
         type Msg = u32;
 
-        async fn run(&mut self, mut ctx: RawContext<u32>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<u32>) -> ExitResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
             while let Some(_message) = ctx.recv().await {
@@ -1644,19 +1734,18 @@ mod actor_host {
     struct RebindActor {
         runs: Arc<AtomicUsize>,
         entered_stale_window: mpsc::UnboundedSender<()>,
-        release_first_run: Arc<Notify>,
+        release_first_drop: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
         observed: mpsc::UnboundedSender<String>,
+        run: Option<usize>,
     }
 
     impl RawActor for RebindActor {
         type Msg = String;
 
-        async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
             let run = self.runs.fetch_add(1, Ordering::SeqCst);
+            self.run = Some(run);
             if run == 0 {
-                drop(ctx);
-                self.entered_stale_window.send(()).expect("receiver alive");
-                self.release_first_run.notified().await;
                 return Ok(());
             }
 
@@ -1667,11 +1756,27 @@ mod actor_host {
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    impl Drop for RebindActor {
+        fn drop(&mut self) {
+            if self.run != Some(0) {
+                return;
+            }
+            self.entered_stale_window.send(()).expect("receiver alive");
+            tokio::task::block_in_place(|| {
+                let (released, wake) = &*self.release_first_drop;
+                let mut released = released.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            });
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn actor_ref_send_waits_for_stale_binding_to_change() {
         let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
         let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-        let release = Arc::new(Notify::new());
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
 
         let mut builder = ActorHostBuilder::new();
         let actor_ref = add_actor(&mut builder, "worker", {
@@ -1680,8 +1785,9 @@ mod actor_host {
             move || RebindActor {
                 runs: runs.clone(),
                 entered_stale_window: entered_tx.clone(),
-                release_first_run: release.clone(),
+                release_first_drop: release.clone(),
                 observed: observed_tx.clone(),
+                run: None,
             }
         });
         let graph = builder.build();
@@ -1701,12 +1807,12 @@ mod actor_host {
             })
         ));
 
-        // RebindActor reports this point after dropping RawContext while its
-        // run deliberately stays alive, so the current incarnation remains
-        // bound to a closed mailbox. The public try_send error intentionally
-        // projects that state to NotRunning. An awaited send must still park
-        // until the binding changes: completing would mean delivery into a
-        // dead mailbox, and erroring would break restart ride-through.
+        // RebindActor reports this point from its destructor, after the
+        // framework closes external intake but before it clears the current
+        // binding. The public try_send error intentionally projects that state
+        // to NotRunning. An awaited send must still park until the binding
+        // changes: completing would mean delivery into a dead mailbox, and
+        // erroring would break restart ride-through.
         let sending_ref = actor_ref.clone();
         let mut send = Box::pin(async move { sending_ref.send("held".to_owned()).await });
         let first_poll = poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx))).await;
@@ -1716,7 +1822,9 @@ mod actor_host {
         );
         let send_task = tokio::spawn(send);
 
-        release.notify_one();
+        let (released, wake) = &*release;
+        *released.lock().unwrap() = true;
+        wake.notify_one();
         let (worker, first_exit) = first_task.await.expect("first actor task joined");
         assert!(matches!(first_exit, IncarnationExit::Stopped));
 
@@ -1762,7 +1870,7 @@ mod actor_host {
     impl RawActor for FailsOnMessage {
         type Msg = ();
 
-        async fn run(&mut self, mut ctx: RawContext<()>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<()>) -> ExitResult {
             ctx.recv().await;
             Err(std::io::Error::other("commanded failure").into())
         }
@@ -1909,7 +2017,7 @@ mod actor_host {
     impl RawActor for Forwarder {
         type Msg = Work;
 
-        async fn run(&mut self, mut ctx: RawContext<Work>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<Work>) -> ExitResult {
             while let Some(work) = ctx.recv().await {
                 let worker = self.worker.clone();
                 worker.send(work).await?;
@@ -1927,7 +2035,7 @@ mod actor_host {
     impl RawActor for RestartingWorker {
         type Msg = Work;
 
-        async fn run(&mut self, mut ctx: RawContext<Work>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<Work>) -> ExitResult {
             let run = self.runs.fetch_add(1, Ordering::SeqCst);
             while let Some(Work(payload)) = ctx.recv().await {
                 self.observed.send(payload).expect("receiver alive");
@@ -2023,7 +2131,7 @@ mod actor_host {
     impl RawActor for Forward {
         type Msg = String;
 
-        async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
             while let Some(message) = ctx.recv().await {
                 if message == "quit" {
                     break;
@@ -2100,7 +2208,7 @@ mod actor_host {
     impl RawActor for PoisonableWorker {
         type Msg = u32;
 
-        async fn run(&mut self, mut ctx: RawContext<u32>) -> ExitResult {
+        async fn run(&mut self, ctx: &mut RawContext<u32>) -> ExitResult {
             let incarnation = self.incarnation.fetch_add(1, Ordering::SeqCst);
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;

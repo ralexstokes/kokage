@@ -885,8 +885,8 @@ impl Drop for ActorLifetime {
     }
 }
 
-/// Runtime context passed to a [`RawActor`](crate::raw::RawActor) each time the
-/// actor is run.
+/// Runtime context borrowed by a [`RawActor`](crate::raw::RawActor) each time
+/// the actor is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
 /// the incoming [`mailbox`](Self::recv) and explicit
@@ -1756,8 +1756,9 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Two stopping paths still reach this method: a handler for which
     /// [`is_draining`](Self::is_draining) returns `true` and an `on_start`
     /// callback that also calls [`stop`](Self::stop). Continuations queued
-    /// there are dropped with the incarnation. The provided receive loop emits
-    /// a `WARN` naming the actor and the number dropped before `on_stop` runs.
+    /// there are dropped with the incarnation. The incarnation runner emits a
+    /// `WARN` naming the actor and the number dropped after the outermost raw
+    /// run returns, including when a handler exits early with an error.
     pub fn continue_with(&mut self, message: A::Msg) {
         self.cx.push_continuation(message);
     }
