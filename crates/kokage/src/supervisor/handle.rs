@@ -17,7 +17,7 @@ use crate::supervisor::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment, TaskSpec},
     error::{ControlError, SupervisorError},
-    lifecycle::{LifecycleHub, LifecycleWatch},
+    lifecycle::{ChildObservationWatch, LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
@@ -137,6 +137,13 @@ struct SnapshotSlot {
 
 struct StableBindingState {
     current: Option<IncarnationBinding>,
+    /// Completion channel for the most recently retired incarnation.
+    ///
+    /// Nested identities drop their current binding before the parent marks
+    /// them terminal. Retaining the receiver lets a handle that starts
+    /// waiting after terminalization recover the same completion result as a
+    /// waiter that was already armed.
+    last_done_rx: Option<DoneReceiver>,
     /// Monotonic identity for bindings to these stable channels. Child
     /// generations can repeat when an ancestor reincarnates, so they cannot
     /// distinguish an old guard from its replacement.
@@ -156,15 +163,19 @@ enum StartupSnapshot {
 
 /// What [`SupervisorHandle::wait`] should do for a non-root identity.
 enum WaitTarget {
-    /// An incarnation is bound; await its completion channel.
-    Bound(DoneReceiver),
+    /// An incarnation is bound. Wait for a binding transition rather than
+    /// returning its incarnation-local result: the stable scope identity may
+    /// be rebound by its parent's restart policy.
+    Bound,
     /// Nothing has ever bound, so the scope has not started yet. The caller
     /// waits for a first incarnation rather than reporting a failure.
     NeverBound,
-    /// A previous incarnation ended and no replacement has bound yet.
+    /// A previous incarnation ended and the parent has not yet either bound a
+    /// replacement or declared the stable identity terminal.
     BetweenIncarnations,
-    /// No incarnation can ever run again.
-    Terminal,
+    /// No incarnation can ever run again. A previously bound identity retains
+    /// its final completion channel for late waiters.
+    Terminal(Option<DoneReceiver>),
 }
 
 pub(crate) struct PendingSupervisorChild {
@@ -251,6 +262,7 @@ impl StableSupervisorChannels {
         Arc::new(Self {
             binding: Mutex::new(StableBindingState {
                 current: None,
+                last_done_rx: None,
                 next_binding_epoch: 0,
                 bound_once: false,
                 terminal: false,
@@ -313,7 +325,7 @@ impl StableSupervisorChannels {
     ) {
         self.assert_reconfigurable();
 
-        self.snapshots().send_if_modified(|snapshot| {
+        self.snapshots_tx().send_if_modified(|snapshot| {
             if *snapshot == initial_snapshot {
                 false
             } else {
@@ -369,7 +381,7 @@ impl StableSupervisorChannels {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
         // makes the documented `(child_id, lineage)` upsert on
-        // `watch_lifecycle` idempotent across the pre-spawn baseline — only
+        // `subscribe_lifecycle` idempotent across the pre-spawn baseline — only
         // because a reserved identity has not minted any lineage yet, so the
         // hub allocates 0, 1, 2, ... in the same declaration order.
         debug_assert_eq!(
@@ -377,13 +389,13 @@ impl StableSupervisorChannels {
             0,
             "declared projection assumes an identity that has not minted lineages yet"
         );
-        let snapshots = self.snapshots();
+        let snapshots = self.snapshots_tx();
         snapshots.send_if_modified(|snapshot| {
             let children = children
                 .into_iter()
                 .enumerate()
                 .map(
-                    |(lineage, (id, restart_policy, remove_when_done))| ChildSnapshot {
+                    |(lineage, (id, restart_policy, remove_on_terminal_exit))| ChildSnapshot {
                         id,
                         lineage: lineage as u64,
                         generation: 0,
@@ -393,7 +405,7 @@ impl StableSupervisorChannels {
                         membership: ChildMembershipView::Active,
                         restart_count: 0,
                         restart_policy,
-                        remove_when_done,
+                        remove_on_terminal_exit,
                         next_restart_in: None,
                         supervisor: None,
                     },
@@ -489,7 +501,7 @@ impl StableSupervisorChannels {
         // incarnation is acquired inside the same lifecycle boundary, so
         // `run_as_child` never has to reopen the terminalization race after
         // binding.
-        let snapshots = self.snapshots();
+        let snapshots = self.snapshots_tx();
         let lifecycle = self.lifecycle();
         // Lineages belong to the stable supervisor identity, not an
         // individual incarnation. Assign the new static memberships before
@@ -620,7 +632,7 @@ impl StableSupervisorChannels {
         {
             return;
         }
-        self.snapshots().send_if_modified(|current| {
+        self.snapshots_tx().send_if_modified(|current| {
             if current == snapshot {
                 return false;
             }
@@ -634,9 +646,9 @@ impl StableSupervisorChannels {
     fn wait_target(&self) -> WaitTarget {
         let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
-            WaitTarget::Terminal
-        } else if let Some(current) = binding.current.as_ref() {
-            WaitTarget::Bound(current.done_rx.clone())
+            WaitTarget::Terminal(binding.last_done_rx.clone())
+        } else if binding.current.is_some() {
+            WaitTarget::Bound
         } else if binding.bound_once {
             WaitTarget::BetweenIncarnations
         } else {
@@ -700,7 +712,7 @@ impl StableSupervisorChannels {
         self.binding_revision.subscribe()
     }
 
-    pub(crate) fn snapshots(&self) -> watch::Sender<SupervisorSnapshot> {
+    pub(crate) fn snapshots_tx(&self) -> watch::Sender<SupervisorSnapshot> {
         let slot = self
             .snapshots
             .lock()
@@ -740,7 +752,11 @@ impl StableSupervisorChannels {
         let active = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             binding.terminal = true;
-            binding.current.take()
+            let active = binding.current.take();
+            if let Some(active) = &active {
+                binding.last_done_rx = Some(active.done_rx.clone());
+            }
+            active
         };
         if let Some(active) = active {
             let _ = active.shutdown_tx.send(true);
@@ -1193,6 +1209,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_wait_follows_restart_gaps_until_the_identity_is_terminal() {
+        use std::time::Duration;
+
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
+        let handle = channels.handle();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+        let first_done_tx = initial.done_tx;
+        let first = channels
+            .bind(
+                0,
+                initial.shutdown_tx,
+                initial.command_tx,
+                initial.done_rx,
+                snapshot.clone(),
+                Vec::new(),
+            )
+            .expect("first incarnation binds");
+
+        let mut waiting = Box::pin(handle.wait());
+        first_done_tx
+            .send(Some(Err(SupervisorError::RestartIntensityExceeded)))
+            .expect("first completion is observed");
+        drop(first);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "an incarnation exit must not complete an identity-scoped wait"
+        );
+
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (done_tx, done_rx) = watch::channel(None);
+        let second = channels
+            .bind(1, shutdown_tx, command_tx, done_rx, snapshot, Vec::new())
+            .expect("replacement incarnation binds");
+        done_tx
+            .send(Some(Ok(())))
+            .expect("replacement completion is observed");
+        drop(second);
+        channels.terminal();
+
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("wait follows the replacement to terminality")
+            .expect("the final incarnation completed successfully");
+    }
+
+    #[tokio::test]
+    async fn terminalization_of_a_live_binding_retains_its_later_result() {
+        use std::time::Duration;
+
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
+        let handle = channels.handle();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+        let done_tx = initial.done_tx;
+        let _bound = channels
+            .bind(
+                0,
+                initial.shutdown_tx,
+                initial.command_tx,
+                initial.done_rx,
+                snapshot,
+                Vec::new(),
+            )
+            .expect("live incarnation binds");
+
+        channels.terminal();
+        let mut waiting = Box::pin(handle.wait());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "terminalization waits for the live incarnation to publish its result"
+        );
+        done_tx
+            .send(Some(Err(SupervisorError::RestartIntensityExceeded)))
+            .expect("terminal completion is observed");
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("terminal wait resolves"),
+            Err(SupervisorError::RestartIntensityExceeded)
+        );
+    }
+
+    #[tokio::test]
     async fn cancelled_add_terminalizes_when_the_queued_supervisor_is_dropped() {
         let child = crate::supervisor::Supervisor::dynamic();
         let retained = child.handle();
@@ -1314,9 +1434,10 @@ impl Drop for StableBindingGuard {
             .current
             .as_ref()
             .is_some_and(|binding| binding.binding_epoch == self.binding_epoch)
-            && let Some(binding) = binding.current.take()
+            && let Some(current) = binding.current.take()
         {
-            let _ = binding.shutdown_tx.send(true);
+            let _ = current.shutdown_tx.send(true);
+            binding.last_done_rx = Some(current.done_rx);
             // A revivable stable identity can remain observable between
             // incarnations. Invalidate the old incarnation's attachments now
             // so an ancestor rebinding cannot traverse stale descendants
@@ -1377,7 +1498,7 @@ pub(crate) enum SupervisorCommand {
 ///   obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`snapshot`](Self::snapshot) /
 ///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
-///   and [`watch_lifecycle`](Self::watch_lifecycle) for the whole tree.
+///   and [`subscribe_lifecycle`](Self::subscribe_lifecycle) for the whole tree.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// Handles never own a supervisor's lifecycle. Dropping a root or nested
@@ -1608,12 +1729,14 @@ impl SupervisorHandle {
         }
     }
 
-    /// Waits for the supervisor to stop.
+    /// Waits for the stable supervisor identity to stop.
     ///
     /// The first caller to `wait` joins the underlying Tokio task. Subsequent
     /// callers (including concurrent ones from cloned handles) receive the
-    /// same result via a shared watch channel. A successful return means the
-    /// runtime has finished draining and joining supervised child tasks.
+    /// same result via a shared watch channel. For a nested identity, waits
+    /// follow parent-driven reincarnations and resolve only once that identity
+    /// cannot be restarted again. A successful return means the final runtime
+    /// incarnation has finished draining and joining supervised child tasks.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         let mut binding_revision = self.channels.binding_revision_rx();
         let (mut done_rx, join) = loop {
@@ -1637,7 +1760,13 @@ impl SupervisorHandle {
                     })?;
                 }
                 RootExtraSlot::NotRoot => match self.channels.wait_target() {
-                    WaitTarget::Bound(done_rx) => break (done_rx, None),
+                    WaitTarget::Bound => {
+                        binding_revision.changed().await.map_err(|_| {
+                            SupervisorError::Internal(
+                                "supervisor binding channel closed while running".to_owned(),
+                            )
+                        })?;
+                    }
                     // A reserved identity that has never bound has not
                     // started, so waiting for it to stop means waiting for it
                     // to run first. This mirrors `wait_started`, which also
@@ -1650,11 +1779,14 @@ impl SupervisorHandle {
                         })?;
                     }
                     WaitTarget::BetweenIncarnations => {
-                        return Err(SupervisorError::Internal(
-                            "supervisor incarnation is unavailable".to_owned(),
-                        ));
+                        binding_revision.changed().await.map_err(|_| {
+                            SupervisorError::Internal(
+                                "supervisor binding channel closed between incarnations".to_owned(),
+                            )
+                        })?;
                     }
-                    WaitTarget::Terminal => {
+                    WaitTarget::Terminal(Some(done_rx)) => break (done_rx, None),
+                    WaitTarget::Terminal(None) => {
                         return Err(SupervisorError::Internal(
                             "supervisor identity is terminal and cannot run again".to_owned(),
                         ));
@@ -1693,18 +1825,24 @@ impl SupervisorHandle {
 
     /// Waits until every current child generation has completed startup.
     ///
-    /// Explicitly gated children complete startup when they call
-    /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready); ordinary
-    /// children are ready as soon as they are spawned. Readiness remains
-    /// latched after a child exits, and resets when that child restarts. Nested
-    /// supervisors report ready only after their own children are ready. An
-    /// empty supervisor is ready immediately only after it has bound; a
-    /// pre-bind empty supervisor waits for its first incarnation to bind.
+    /// Manually gated children complete startup when they call
+    /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
+    /// before the deadline configured by
+    /// [`TaskSpec::manual_readiness`](crate::supervisor::TaskSpec::manual_readiness).
+    /// Framework-gated children, including actor hosts and nested supervisors,
+    /// complete their own startup protocols before reporting ready and do not
+    /// necessarily carry a deadline. Ordinary children are ready as soon as
+    /// they are spawned. Readiness remains latched after a child exits, and
+    /// resets when that child restarts. An empty supervisor is ready immediately
+    /// only after it has bound; a pre-bind empty supervisor waits for its first
+    /// incarnation to bind.
     ///
     /// # Errors
     ///
-    /// Returns [`SupervisorError::StartupAborted`] if a gated child exits or
-    /// the supervisor stops before readiness is reported.
+    /// Returns [`SupervisorError::StartupAborted`] if a gated child reaches a
+    /// terminal exit before readiness, including a manual-readiness timeout
+    /// that its restart policy does not replace, or the supervisor stops before
+    /// readiness is reported.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         let mut snapshots = self.snapshots_rx();
         let mut binding_revision = self.channels.binding_revision_rx();
@@ -1770,21 +1908,28 @@ impl SupervisorHandle {
         }
     }
 
-    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    /// Returns a snapshot and self-recovering direct-child update stream.
     ///
-    /// Child sequences are local to each scope, so the aligned stream is
-    /// intentionally restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
-    /// when a recursive stream without an initial alignment boundary is needed.
-    pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
-        let (snapshot, events) = self.lifecycle_hub().observe(|| self.snapshot());
+    /// The stream filters transitions already reflected by the initial
+    /// snapshot. It yields a complete reset when its bounded queue overflows or
+    /// the observed scope changes lifecycle state or incarnation, then resumes
+    /// from that snapshot's sequence boundary. Child sequences are local to
+    /// each scope, so the stream is intentionally restricted to this scope.
+    /// Use [`subscribe_lifecycle`](Self::subscribe_lifecycle) for the
+    /// lower-level recursive history stream and custom recovery policy.
+    pub fn observe_children(&self) -> crate::supervisor::LifecycleObservation {
+        let snapshots = self.subscribe_snapshots();
+        let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());
         let events = events.direct_children();
+        let minimum_sequence = snapshot.lifecycle_seq;
+        let events = ChildObservationWatch::new(events, snapshots, minimum_sequence);
         crate::supervisor::LifecycleObservation { snapshot, events }
     }
 
     /// Returns the ordered lifecycle stream for this entire supervisor tree.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
-    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
+    /// Use [`observe_children`](Self::observe_children) for the common
     /// gap-free direct-child state-plus-stream setup. This lower-level method
     /// is useful when recursive transitions after subscription are needed.
     /// Pre-spawn snapshots already project configured children as `Starting`,
@@ -1798,7 +1943,7 @@ impl SupervisorHandle {
     /// buffer for the whole tree; sustained overflow is a tree-wide
     /// [`LifecycleEventKind::Lagged`](crate::supervisor::LifecycleEventKind::Lagged)
     /// marker with an empty path.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn subscribe_lifecycle(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch()
     }
 

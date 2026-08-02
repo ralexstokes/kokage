@@ -95,8 +95,8 @@ impl std::fmt::Debug for RunningSupervisor {
 pub(crate) struct SupervisorConfig {
     pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) default_restart: RestartPolicy,
-    pub(crate) default_shutdown: Shutdown,
+    pub(crate) default_child_restart: RestartPolicy,
+    pub(crate) default_child_shutdown: Shutdown,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
 }
@@ -377,6 +377,12 @@ impl Supervisor {
         };
         nested_task_on_drop.disarm();
 
+        // The inner task normally publishes its own result. When this wrapper
+        // hard-aborts that task, it instead owns the synthesized timeout (and
+        // likewise any join failure), so publish the wrapper's final result
+        // before retiring the binding. Late stable-identity waiters then see
+        // the same outcome as the parent that joined this child.
+        let _ = done_tx.send(Some(result.clone()));
         drop(binding);
         result.map_err(|error| Box::new(error) as crate::supervisor::BoxError)
     }
@@ -537,7 +543,7 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
                 membership: ChildMembershipView::Active,
                 restart_count: 0,
                 restart_policy: child.restart,
-                remove_when_done: child.remove_when_done,
+                remove_on_terminal_exit: child.remove_on_terminal_exit,
                 next_restart_in: None,
                 supervisor: None,
             })

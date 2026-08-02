@@ -124,6 +124,9 @@ pub enum RestartPolicy {
         backoff: Backoff,
     },
     /// Never restart; the child runs at most once.
+    ///
+    /// [`limit`](Self::limit) and [`backoff`](Self::backoff) have no effect on
+    /// this variant.
     Never,
 }
 
@@ -153,11 +156,17 @@ impl RestartPolicy {
     }
 
     /// Never restarts; the child runs at most once.
+    ///
+    /// Calling [`limit`](Self::limit) or [`backoff`](Self::backoff) on the
+    /// returned policy has no effect.
     pub const fn never() -> Self {
         Self::Never
     }
 
     /// Sets the sliding restart budget.
+    ///
+    /// This modifier has no effect on [`Never`](Self::Never), which has no
+    /// restart attempts to limit.
     #[must_use]
     pub const fn limit(mut self, new_max_restarts: usize, new_within: Duration) -> Self {
         match self {
@@ -180,6 +189,9 @@ impl RestartPolicy {
     }
 
     /// Sets the delay between restart attempts.
+    ///
+    /// This modifier has no effect on [`Never`](Self::Never), which has no
+    /// restart attempts to delay.
     #[must_use]
     pub const fn backoff(mut self, new_backoff: Backoff) -> Self {
         match self {
@@ -227,6 +239,8 @@ impl RestartPolicy {
     }
 
     /// Returns the maximum eligible exits in the restart window.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn max_restarts(self) -> Option<usize> {
         match self {
             Self::Always { max_restarts, .. } | Self::OnFailure { max_restarts, .. } => {
@@ -237,6 +251,8 @@ impl RestartPolicy {
     }
 
     /// Returns the sliding restart-budget window.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn within(self) -> Option<Duration> {
         match self {
             Self::Always { within, .. } | Self::OnFailure { within, .. } => Some(within),
@@ -245,6 +261,8 @@ impl RestartPolicy {
     }
 
     /// Returns the delay applied before each replacement incarnation.
+    ///
+    /// Returns `None` for [`Never`](Self::Never).
     pub const fn backoff_policy(self) -> Option<Backoff> {
         match self {
             Self::Always { backoff, .. } | Self::OnFailure { backoff, .. } => Some(backoff),

@@ -69,9 +69,11 @@ The contract you take on:
   `shutdown_token()`, and `scope()` are all available on `RawContext`, so a
   custom loop gives up none of the toolkit.
 - If the supervisor should hold later ordered siblings until you have
-  finished initializing, override `readiness_gated()` to return `true` and
-  call `ctx.mark_ready()` when ready — the raw analogue of a task's
-  `wait_for_ready`.
+  finished initializing, override `manual_readiness()` to return a deadline
+  and call `ctx.mark_ready()` when ready — the raw analogue of a task's
+  `manual_readiness`. Missing the deadline fails the incarnation under its
+  restart policy; shutdown disarms the startup deadline so the actor keeps its
+  configured cooperative shutdown grace.
 
 ## Hosting an actor without a tree
 
@@ -82,7 +84,7 @@ Enable the opt-in `host` Cargo feature for this integration surface.
 [`raw::ActorHost`] you drive yourself:
 
 ```rust
-use kokage::{CancellationToken, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
+use kokage::{CancellationToken, Shutdown, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
 
 struct Worker;
 

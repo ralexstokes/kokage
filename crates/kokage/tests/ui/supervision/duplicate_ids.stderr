@@ -1,5 +1,0 @@
-error: duplicate supervision child id `first`
- --> tests/ui/supervision/duplicate_ids.rs:4:24
-  |
-4 |     #[supervision(id = "first")]
-  |                        ^^^^^^^

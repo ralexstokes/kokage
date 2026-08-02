@@ -1,10 +1,19 @@
 mod support;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
+#[cfg(feature = "host")]
+use kokage::raw::ActorRunError;
 use kokage::{
     ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
     SupervisorError, TaskSpec,
+    observe::ExitStatus,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -173,7 +182,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
     let mut graph = Tree::new();
     graph.add_actor_spec(ActorSpec::new("FailsOnStart", || FailsOnStart));
     let handle = graph
-        .default_restart(RestartPolicy::never())
+        .default_child_restart(RestartPolicy::never())
         .spawn()
         .unwrap();
     assert!(matches!(
@@ -373,7 +382,7 @@ async fn is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
     let handle = graph
-        .default_restart(RestartPolicy::never())
+        .default_child_restart(RestartPolicy::never())
         .spawn()
         .unwrap();
     handle.scope().wait_started().await.unwrap();
@@ -503,7 +512,7 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
         .mailbox_shutdown(MailboxShutdown::Discard),
     );
     let handle = graph
-        .default_restart(RestartPolicy::never())
+        .default_child_restart(RestartPolicy::never())
         .spawn()
         .unwrap();
 
@@ -546,7 +555,7 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
         .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
     );
     let handle = graph
-        .default_restart(RestartPolicy::never())
+        .default_child_restart(RestartPolicy::never())
         .spawn()
         .unwrap();
 
@@ -585,7 +594,7 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
     let mut graph = Tree::new();
     graph.add_actor_spec(ActorSpec::new("PromptRaw", || PromptRaw));
     let handle = graph
-        .default_restart(RestartPolicy::never())
+        .default_child_restart(RestartPolicy::never())
         .spawn()
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
@@ -599,6 +608,169 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
             .is_some_and(|exit| exit.is_completed())
     );
     handle.shutdown().await.unwrap();
+}
+
+struct BoundedRawReadiness {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl RawActor for BoundedRawReadiness {
+    type Msg = ();
+
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(Duration::from_millis(10))
+    }
+
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::future::pending::<()>().await;
+        }
+        ctx.mark_ready();
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_manual_readiness_timeout_restarts_then_accepts_mark_ready() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut graph = Tree::new();
+    graph.add_actor_spec(ActorSpec::new("BoundedRawReadiness", {
+        let attempts = Arc::clone(&attempts);
+        move || BoundedRawReadiness {
+            attempts: Arc::clone(&attempts),
+        }
+    }));
+
+    let handle = graph.spawn().unwrap();
+    handle.scope().wait_started().await.unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let snapshot = handle.scope().snapshot();
+    let previous_exit = snapshot
+        .child("BoundedRawReadiness")
+        .and_then(|child| child.state.last_exit())
+        .expect("replacement retains the readiness timeout");
+    assert_eq!(
+        previous_exit.readiness_timeout(),
+        Some(Duration::from_millis(10))
+    );
+    handle.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+#[cfg(feature = "host")]
+async fn ordinary_task_propagating_actor_timeout_remains_an_ordinary_failure() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut tree = Tree::new();
+    let task = tree.add_task_spec(
+        TaskSpec::new("host-wrapper", {
+            let attempts = Arc::clone(&attempts);
+            move |ctx| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    ctx.mark_ready();
+                    ActorSpec::new("NestedHost", move || BoundedRawReadiness {
+                        attempts: Arc::clone(&attempts),
+                    })
+                    .into_host()
+                    .run_once(std::future::pending::<()>(), Shutdown::abort())
+                    .await?;
+                    Ok(())
+                }
+            }
+        })
+        .manual_readiness(Duration::from_secs(1))
+        .restart(RestartPolicy::never()),
+    );
+
+    let running = tree.spawn().unwrap();
+    task.wait_started()
+        .await
+        .expect("the wrapper task reports its own readiness");
+    let exit = task
+        .wait()
+        .await
+        .expect("the wrapper task exit is retained");
+
+    assert_eq!(exit.readiness_timeout(), None);
+    assert!(matches!(
+        exit,
+        ExitStatus::Failed { message, cancelled: false }
+            if message.contains("actor `NestedHost` did not report readiness")
+    ));
+    running.shutdown().await.unwrap();
+}
+
+struct SlowShutdownRawReadiness {
+    started: mpsc::UnboundedSender<()>,
+}
+
+impl RawActor for SlowShutdownRawReadiness {
+    type Msg = ();
+
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(Duration::from_millis(10))
+    }
+
+    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+        let _ = self.started.send(());
+        ctx.shutdown_token().cancelled().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_actor_shutdown_disarms_a_short_manual_readiness_deadline() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let mut graph = Tree::new();
+    graph.add_actor_spec(
+        ActorSpec::new("SlowShutdownRawReadiness", move || {
+            SlowShutdownRawReadiness {
+                started: started_tx.clone(),
+            }
+        })
+        .shutdown(Shutdown::graceful_for(Duration::from_millis(50))),
+    );
+
+    let running = graph.spawn().unwrap();
+    let scope = running.scope();
+    started_rx.recv().await.expect("actor starts");
+    running.shutdown().await.unwrap();
+
+    let snapshot = scope.snapshot();
+    let exit = snapshot
+        .child("SlowShutdownRawReadiness")
+        .and_then(|child| child.state.last_exit())
+        .expect("shutdown records the pre-ready actor exit");
+    assert!(matches!(exit, ExitStatus::Completed { cancelled: true }));
+}
+
+#[tokio::test(start_paused = true)]
+#[cfg(feature = "host")]
+async fn directly_hosted_raw_manual_readiness_timeout_is_typed() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let host = ActorSpec::new("BoundedRawReadiness", {
+        let attempts = Arc::clone(&attempts);
+        move || BoundedRawReadiness {
+            attempts: Arc::clone(&attempts),
+        }
+    })
+    .into_host();
+
+    let error = host
+        .run_once(std::future::pending::<()>(), Shutdown::abort())
+        .await
+        .expect_err("manual readiness expires");
+    assert!(matches!(
+        error,
+        ActorRunError::ReadinessTimedOut {
+            actor_id, timeout, ..
+        }
+            if actor_id == "BoundedRawReadiness" && timeout == Duration::from_millis(10)
+    ));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
 /// Overrides nothing: exercises the [`Actor`] trait's default drain policy.
@@ -626,7 +798,7 @@ impl Actor for DefaultPolicy {
 }
 
 #[test]
-fn the_default_shutdown_drains() {
+fn the_shutdown_default_drains() {
     assert_eq!(
         Shutdown::default(),
         Shutdown::graceful_for(std::time::Duration::from_secs(5))

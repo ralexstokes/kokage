@@ -433,7 +433,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
         .expect("supervisor builds")
         .spawn();
     let handle = running.handle();
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.subscribe_lifecycle();
     common::recv_event(&mut started_rx).await;
 
     assert_eq!(
@@ -468,7 +468,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
         .expect("dynamic supervisor builds")
         .spawn();
     let handle = handle_owner.handle();
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.subscribe_lifecycle();
 
     handle
         .dynamic()
@@ -569,7 +569,7 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .await
         .expect("keeper added");
     common::recv_event(&mut started_rx).await;
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.subscribe_lifecycle();
 
     let err = handle
         .dynamic()
@@ -646,7 +646,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_preempts_zero_delay_restart() {
     let supervisor = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1)))
         .child(TaskSpec::new("flaky", |_ctx| async move {
             Err(common::test_error("restart immediately"))
         }))
@@ -695,7 +695,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
 
     let saw_cancel_for_keeper = saw_cancel.clone();
     let supervisor = Supervisor::ordered()
-        .default_restart(common::restart_with_backoff(
+        .default_child_restart(common::restart_with_backoff(
             8,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(200)),
@@ -790,7 +790,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
     common::wait_started(&handle, "ordered shutdown children startup")
         .await
         .expect("children started");
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.subscribe_lifecycle();
 
     let shutdown = tokio::spawn({
         let handle = handle.clone();

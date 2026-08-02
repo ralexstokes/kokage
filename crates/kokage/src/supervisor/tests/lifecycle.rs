@@ -126,7 +126,7 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
     let handle = builder.handle();
     let baseline = handle.snapshot();
     let declared = baseline.child("worker").expect("worker is projected");
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
 
     let added = next_matching(&mut watch, |event| {
@@ -166,7 +166,7 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
         .restart(restart),
     );
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
     let mut transitions = Vec::new();
 
@@ -240,7 +240,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let nested = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
@@ -254,10 +254,10 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         .build()
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
         .child_spec(ChildSpec::supervisor("nested", nested));
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle();
+    let mut watch = handle.subscribe_lifecycle();
     let running = builder.build().expect("supervisor builds").spawn();
 
     let first = next_matching(&mut watch, |event| {
@@ -338,7 +338,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
         .child("worker")
         .expect("worker is declared")
         .lineage;
-    let mut watch = middle.watch_lifecycle();
+    let mut watch = middle.subscribe_lifecycle();
 
     crash_worker.notify_one();
     let restarted = next_matching(&mut watch, |event| {
@@ -381,7 +381,7 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .build()
         .expect("supervisor builds")
         .spawn();
-    let mut watch = running.handle().watch_lifecycle().direct_children();
+    let mut watch = running.handle().subscribe_lifecycle().direct_children();
     running
         .handle()
         .dynamic()
@@ -443,10 +443,10 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
                 Ok(())
             }
         })
-        .wait_for_ready(),
+        .manual_readiness(WAIT),
     );
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
 
     timeout(Duration::from_millis(100), async {
@@ -464,6 +464,39 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     })
     .await;
     assert!(started.seq().is_some());
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_readiness_timeout_emits_a_failed_exit_without_started() {
+    let builder = Supervisor::ordered().child(
+        TaskSpec::new("worker", |_| async {
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+        .restart(RestartPolicy::never())
+        .manual_readiness(Duration::from_millis(10)),
+    );
+    let handle = builder.handle();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
+    let running = builder.build().expect("supervisor builds").spawn();
+
+    let added = next_matching(&mut watch, |event| {
+        child_added(event) && child_id_is(event, "worker")
+    })
+    .await;
+    let exited = next_matching(&mut watch, |event| {
+        child_exited(event) && child_id_is(event, "worker")
+    })
+    .await;
+    assert!(matches!(
+        child_kind(&exited),
+        Some(ChildEventKind::Exited { exit, .. })
+            if !exit.cancelled()
+                && exit.readiness_timeout() == Some(Duration::from_millis(10))
+    ));
+    assert_eq!(exited.seq(), added.seq().map(|seq| seq + 1));
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -489,7 +522,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
         .await
         .expect("worker is added");
     handle.wait_started().await.expect("worker starts");
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let removal = tokio::spawn(async move { dynamic.remove_child("worker").await });
 
     let removed = next_matching(&mut watch, |event| {
@@ -510,12 +543,12 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
 #[tokio::test]
 async fn restart_intensity_failure_is_an_in_band_scope_event() {
     let builder = Supervisor::ordered()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("always-fails", |_| async {
             Err(failure("no restart budget"))
         }));
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle();
+    let mut watch = handle.subscribe_lifecycle();
     let running = builder.build().expect("supervisor builds").spawn();
 
     let intensity = next_matching(&mut watch, |event| {
@@ -543,7 +576,7 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
         }));
     }
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
     running
         .handle()
@@ -578,7 +611,7 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
 async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
     let builder = Supervisor::dynamic();
     let handle = builder.handle();
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
     next_matching(&mut watch, |event| {
         matches!(event.kind, LifecycleEventKind::SupervisorStarted)
@@ -654,7 +687,7 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
         .build()
         .expect("root supervisor builds")
         .spawn();
-    let mut direct = running.handle().watch_lifecycle().direct_children();
+    let mut direct = running.handle().subscribe_lifecycle().direct_children();
     let root_dynamic = running.handle().dynamic().expect("root is a dynamic scope");
     root_dynamic
         .add_child_spec(ChildSpec::supervisor("nested", nested))
@@ -716,7 +749,7 @@ async fn lifecycle_sequences_are_gap_free_under_concurrent_dynamic_churn() {
         .expect("supervisor builds")
         .spawn();
     let handle = running.handle();
-    let mut watch = handle.watch_lifecycle().direct_children();
+    let mut watch = handle.subscribe_lifecycle().direct_children();
     let baseline = handle.snapshot().lifecycle_seq;
     let dynamic = handle.dynamic().expect("scope is dynamic");
     let mut churn = tokio::task::JoinSet::new();
@@ -764,14 +797,14 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         .spawn();
     let root = running.handle();
     let dynamic = root.dynamic().expect("root is dynamic");
-    let mut root_watch = root.watch_lifecycle();
+    let mut root_watch = root.subscribe_lifecycle();
 
     let first_builder = Supervisor::ordered().child(TaskSpec::new("leaf", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
     let first_handle = first_builder.handle();
-    let mut first_watch = first_handle.watch_lifecycle();
+    let mut first_watch = first_handle.subscribe_lifecycle();
     dynamic
         .add_child_spec(ChildSpec::supervisor(
             "nested",
@@ -858,7 +891,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let root = running.handle();
     root.wait_started().await.expect("root starts");
     let leaf = root.supervisor("leaf").expect("leaf handle exists");
-    let mut watch = leaf.watch_lifecycle();
+    let mut watch = leaf.subscribe_lifecycle();
 
     complete_leaf.notify_one();
     next_matching(&mut watch, |event| {
@@ -911,7 +944,7 @@ async fn never_policy_nested_stop_closes_its_watch() {
     let root = running.handle();
     root.wait_started().await.expect("root starts");
     let nested = root.supervisor("nested").expect("nested handle exists");
-    let mut watch = nested.watch_lifecycle();
+    let mut watch = nested.subscribe_lifecycle();
 
     crash.notify_one();
     next_matching(&mut watch, |event| {
@@ -933,7 +966,7 @@ async fn parent_stop_closes_nested_watch_while_handle_is_retained() {
     let root = running.handle();
     root.wait_started().await.expect("root starts");
     let nested = root.supervisor("nested").expect("nested handle exists");
-    let mut watch = nested.watch_lifecycle();
+    let mut watch = nested.subscribe_lifecycle();
 
     running.shutdown_and_wait().await.expect("clean shutdown");
     wait_closed(&mut watch, "root terminality to close descendant watch").await;
@@ -956,7 +989,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
     root.wait_started().await.expect("root starts");
     let middle = root.supervisor("middle").expect("middle handle exists");
     let leaf = middle.supervisor("leaf").expect("leaf handle exists");
-    let mut watch = leaf.watch_lifecycle();
+    let mut watch = leaf.subscribe_lifecycle();
 
     crash_leaf.notify_one();
     let first_exit = next_matching(&mut watch, |event| {
@@ -1035,7 +1068,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
         .await
         .expect("orphan is added");
     let orphan = middle.supervisor("orphan").expect("orphan handle exists");
-    let mut watch = orphan.watch_lifecycle();
+    let mut watch = orphan.subscribe_lifecycle();
     let mut middle_snapshots = middle.subscribe_snapshots();
 
     crash_middle.notify_one();
@@ -1078,8 +1111,8 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     root.wait_started().await.expect("root starts");
     let head = root.supervisor("head").expect("head handle exists");
     let tail = root.supervisor("tail").expect("tail handle exists");
-    let mut head_watch = head.watch_lifecycle();
-    let mut tail_watch = tail.watch_lifecycle();
+    let mut head_watch = head.subscribe_lifecycle();
+    let mut tail_watch = tail.subscribe_lifecycle();
 
     complete_head.notify_one();
     next_matching(&mut head_watch, |event| {
@@ -1191,8 +1224,8 @@ async fn direct_children_is_a_depth_filter_on_the_recursive_vocabulary() {
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered().child_spec(ChildSpec::supervisor("nested", nested));
     let handle = builder.handle();
-    let mut tree = handle.watch_lifecycle();
-    let mut direct = handle.watch_lifecycle().direct_children();
+    let mut tree = handle.subscribe_lifecycle();
+    let mut direct = handle.subscribe_lifecycle().direct_children();
     let running = builder.build().expect("supervisor builds").spawn();
 
     let leaf = next_matching(&mut tree, |event| {

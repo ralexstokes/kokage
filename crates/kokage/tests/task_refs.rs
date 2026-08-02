@@ -47,6 +47,27 @@ async fn one_shot_ref_retains_removed_task_exit() {
 }
 
 #[tokio::test]
+async fn one_shot_panic_is_terminal_and_removed() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let task = running_tree
+        .scope()
+        .spawn_once("panicking-job", |_| async {
+            panic!("one-shot panic");
+        })
+        .await
+        .expect("task is inserted");
+
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("removed task panic is retained")
+        .expect("task exit is available");
+    assert!(exit.is_panicked());
+    assert!(task.snapshot().is_none());
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
 async fn spawn_once_accepts_a_consuming_factory() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let (observed_tx, observed_rx) = oneshot::channel();
@@ -87,8 +108,8 @@ async fn configured_one_shot_retains_a_consuming_factory() {
                 Ok(())
             })
             .shutdown(Shutdown::abort())
-            .wait_for_ready()
-            .retain_when_done(),
+            .manual_readiness(WAIT)
+            .retain_on_terminal_exit(),
         )
         .await
         .expect("configured one-shot task is inserted");
@@ -105,7 +126,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     );
     let snapshot = task.snapshot().expect("terminal membership is retained");
     assert_eq!(snapshot.restart_policy, RestartPolicy::never());
-    assert!(!snapshot.remove_when_done);
+    assert!(!snapshot.remove_on_terminal_exit);
 
     assert!(matches!(
         scope.spawn_once("configured-job", |_| async { Ok(()) }).await,
@@ -113,7 +134,7 @@ async fn configured_one_shot_retains_a_consuming_factory() {
             if id == "configured-job"
     ));
     scope
-        .remove_task(&task)
+        .remove(&task)
         .await
         .expect("retained terminal membership is removed explicitly");
     assert!(task.snapshot().is_none());
@@ -129,6 +150,111 @@ async fn configured_one_shot_retains_a_consuming_factory() {
             .expect("replacement remains observable")
             .is_completed()
     );
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn retained_one_shot_failures_are_visible_to_scope_snapshot_observers() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let scope = running_tree.scope();
+    let mut snapshots = scope.subscribe_snapshots();
+    let failed = scope
+        .spawn_once_spec(
+            OneShotTaskSpec::new("failed-job", |_| async {
+                Err(std::io::Error::other("retained one-shot failure").into())
+            })
+            .retain_on_terminal_exit(),
+        )
+        .await
+        .expect("failing one-shot task is inserted");
+    let panicked = scope
+        .spawn_once_spec(
+            OneShotTaskSpec::new("panicked-job", |_| async {
+                panic!("retained one-shot panic");
+            })
+            .retain_on_terminal_exit(),
+        )
+        .await
+        .expect("panicking one-shot task is inserted");
+
+    let snapshot = timeout(
+        WAIT,
+        snapshots.wait_for(|snapshot| {
+            let failed_is_visible = snapshot.child("failed-job").is_some_and(|child| {
+                child.state.is_terminal()
+                    && child
+                        .state
+                        .last_exit()
+                        .and_then(|exit| exit.failure_message())
+                        .is_some_and(|message| message.contains("retained one-shot failure"))
+            });
+            let panic_is_visible = snapshot.child("panicked-job").is_some_and(|child| {
+                child.state.is_terminal()
+                    && child.state.last_exit().is_some_and(ExitStatus::is_panicked)
+            });
+            failed_is_visible && panic_is_visible
+        }),
+    )
+    .await
+    .expect("retained failures reach a scope snapshot observer")
+    .expect("snapshot stream remains open");
+    assert!(
+        snapshot
+            .child("failed-job")
+            .is_some_and(|child| !child.remove_on_terminal_exit)
+    );
+    assert!(
+        snapshot
+            .child("panicked-job")
+            .is_some_and(|child| !child.remove_on_terminal_exit)
+    );
+    assert!(
+        failed
+            .wait()
+            .await
+            .expect("failed outcome is retained")
+            .is_failure()
+    );
+    assert!(
+        panicked
+            .wait()
+            .await
+            .expect("panicked outcome is retained")
+            .is_panicked()
+    );
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_shot_manual_readiness_timeout_is_failed_and_removed() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let task = running_tree
+        .scope()
+        .spawn_once_spec(
+            OneShotTaskSpec::new("bounded-job", |_| async {
+                std::future::pending::<()>().await;
+                Ok(())
+            })
+            .manual_readiness(Duration::from_millis(10)),
+        )
+        .await
+        .expect("one-shot task is inserted");
+
+    assert_eq!(
+        task.wait_started().await,
+        Err(TaskError::ReadinessTimedOut {
+            task_id: "bounded-job".to_owned(),
+            timeout: Duration::from_millis(10),
+        })
+    );
+    let exit = task
+        .wait()
+        .await
+        .expect("terminal timeout remains observable");
+    assert_eq!(exit.readiness_timeout(), Some(Duration::from_millis(10)));
+    assert!(task.snapshot().is_none());
 
     running_tree.shutdown().await.expect("tree stops");
 }
@@ -352,7 +478,7 @@ async fn explicit_readiness_failure_is_reported() {
     let mut tree = Tree::new();
     let task = tree.add_task_spec(
         TaskSpec::new("job", |_| async { Ok(()) })
-            .wait_for_ready()
+            .manual_readiness(WAIT)
             .restart(RestartPolicy::never()),
     );
     let running_tree = tree.spawn().expect("tree builds");

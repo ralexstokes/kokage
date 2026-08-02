@@ -1,6 +1,9 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{
+    Arc, Mutex, PoisonError,
+    atomic::{AtomicBool, Ordering},
+};
 
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use crate::supervisor::{CancellationToken, SupervisorHandle};
 
@@ -12,7 +15,11 @@ pub(crate) struct ChildReady {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ReadySignal(Arc<Mutex<Option<ReadySignalInner>>>);
+pub(crate) struct ReadySignal {
+    inner: Arc<Mutex<Option<ReadySignalInner>>>,
+    sent: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
 
 #[derive(Debug)]
 struct ReadySignalInner {
@@ -22,15 +29,32 @@ struct ReadySignalInner {
 
 impl ReadySignal {
     pub(crate) fn new(sender: mpsc::UnboundedSender<ChildReady>, ready: ChildReady) -> Self {
-        Self(Arc::new(Mutex::new(Some(ReadySignalInner {
-            sender,
-            ready,
-        }))))
+        Self {
+            inner: Arc::new(Mutex::new(Some(ReadySignalInner { sender, ready }))),
+            sent: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
     }
 
     fn send(&self) {
-        if let Some(signal) = self.0.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        if let Some(signal) = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            self.sent.store(true, Ordering::Release);
             let _ = signal.sender.send(signal.ready);
+            self.notify.notify_one();
+        }
+    }
+
+    pub(crate) async fn wait(&self) {
+        loop {
+            if self.sent.load(Ordering::Acquire) {
+                return;
+            }
+            self.notify.notified().await;
         }
     }
 }
@@ -111,7 +135,7 @@ impl TaskContext {
     ///
     /// The first call for an explicitly readiness-gated task transitions it
     /// from starting to running. Further calls, and calls made by tasks
-    /// without [`TaskSpec::wait_for_ready`](crate::TaskSpec::wait_for_ready),
+    /// without [`TaskSpec::manual_readiness`](crate::TaskSpec::manual_readiness),
     /// are harmless.
     pub fn mark_ready(&self) {
         if let Some(ready) = &self.ready {

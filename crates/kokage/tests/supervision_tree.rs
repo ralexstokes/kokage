@@ -53,7 +53,8 @@ impl RawActor for Parked {
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = Tree::new();
-    let ingest = builder.add_actor_spec(ActorSpec::new("ingest", || Worker).remove_when_done());
+    let ingest =
+        builder.add_actor_spec(ActorSpec::new("ingest", || Worker).remove_on_terminal_exit());
     let parse = builder.add_actor_spec(ActorSpec::new("parse", || Worker));
     (builder, ingest, parse)
 }
@@ -63,8 +64,8 @@ fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let mut tree = Tree::new()
         .strategy(Strategy::RestForOne)
-        .default_restart(RestartPolicy::always())
-        .default_mailbox_shutdown(MailboxShutdown::Discard);
+        .default_child_restart(RestartPolicy::always())
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     tree.add_subtree("workers", Tree::new().strategy(Strategy::OneForAll));
     tree.add_task_spec(
         TaskSpec::new("clock", |ctx| async move {
@@ -84,9 +85,12 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::RestForOne);
-    assert_eq!(outline.default_restart, RestartPolicy::always());
-    assert_eq!(outline.default_shutdown, Shutdown::default());
-    assert_eq!(outline.default_mailbox_shutdown, MailboxShutdown::Discard);
+    assert_eq!(outline.default_child_restart, RestartPolicy::always());
+    assert_eq!(outline.default_child_shutdown, Shutdown::default());
+    assert_eq!(
+        outline.default_actor_mailbox_shutdown,
+        MailboxShutdown::Discard
+    );
     assert_eq!(outline.child_ids(), ["workers", "clock", "ingest", "parse"]);
 
     let ChildOutline::Scope {
@@ -135,7 +139,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 
 #[test]
 fn tree_debug_includes_nested_declarations_without_serde() {
-    let mut workers = Tree::new().default_mailbox_shutdown(MailboxShutdown::Discard);
+    let mut workers = Tree::new().default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     workers.add_actor("press", || Worker);
     let mut tree = Tree::new();
     tree.add_subtree("workers", workers);
@@ -143,7 +147,7 @@ fn tree_debug_includes_nested_declarations_without_serde() {
     let debug = format!("{tree:#?}");
     assert!(debug.contains("workers"));
     assert!(debug.contains("press"));
-    assert!(debug.contains("default_mailbox_shutdown: Discard"));
+    assert!(debug.contains("default_actor_mailbox_shutdown: Discard"));
 }
 
 #[test]
@@ -151,8 +155,8 @@ fn tree_debug_includes_nested_declarations_without_serde() {
 fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     let explicit_shutdown = Shutdown::graceful_for(Duration::from_millis(17));
     let mut tree = Tree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort());
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort());
     tree.add_task_spec(TaskSpec::new("inherited", |_| async { Ok(()) }));
     tree.add_task_spec(
         TaskSpec::new("explicit", |_| async { Ok(()) })
@@ -187,7 +191,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         std::future::pending::<()>().await;
         Ok(())
     }));
-    let mut declared = Tree::new().default_restart(RestartPolicy::always());
+    let mut declared = Tree::new().default_child_restart(RestartPolicy::always());
     declared.add_subtree_spec(
         "declared",
         SubtreeSpec::from(stubborn)
@@ -248,7 +252,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
     assert_eq!(inserted.restart_policy, RestartPolicy::never());
     timeout(
         Duration::from_millis(250),
-        dynamic.scope().remove_child_named("inserted"),
+        dynamic.scope().remove_named("inserted"),
     )
     .await
     .expect("subtree abort policy bounds dynamic removal")
@@ -308,7 +312,7 @@ fn tree_placement_rejects_zero_actor_mailbox_capacity() {
 
 #[test]
 fn tree_placement_rejects_zero_scope_mailbox_capacity() {
-    let mut tree = Tree::new().mailbox_capacity(0);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(0);
     tree.add_actor_spec(ActorSpec::new("worker", || Worker));
     let result = tree.spawn();
 
@@ -326,7 +330,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let first_actor = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
     let direct_actor = direct.actor_ref();
-    let mut tree = Tree::new().mailbox_capacity(9);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(9);
     tree.add_actor_spec(first);
     tree.add_actor_spec(direct);
     let running_tree = tree.spawn().expect("tree builds");
@@ -347,7 +351,7 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     let nested_ref = nested.actor_ref();
     let mut nested_tree = Tree::new();
     nested_tree.add_actor_spec(nested);
-    let mut tree = Tree::new().mailbox_capacity(9);
+    let mut tree = Tree::new().default_actor_mailbox_capacity(9);
     tree.add_subtree("nested", nested_tree);
     let running_tree = tree.spawn().expect("tree builds");
     running_tree
@@ -367,7 +371,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let leader = ActorSpec::new("leader", || Worker);
     let leader_ref = leader.actor_ref();
     let mut owned = Tree::new()
-        .mailbox_capacity(9)
+        .default_actor_mailbox_capacity(9)
         .strategy(Strategy::OneForAll);
     owned.add_actor_spec(leader);
     owned.add_subtree("children", DynamicTree::new());
@@ -388,7 +392,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 
 #[test]
 fn pre_spawn_projection_preserves_declared_restart_policies() {
-    let mut tree = Tree::new().default_restart(RestartPolicy::always());
+    let mut tree = Tree::new().default_child_restart(RestartPolicy::always());
     tree.add_actor_spec(ActorSpec::new("explicit", || Worker).restart(RestartPolicy::never()));
     tree.add_actor_spec(ActorSpec::new("inherited", || Worker));
     let snapshot = tree.scope().snapshot();
@@ -440,10 +444,10 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
 }
 
 #[tokio::test]
-async fn static_tree_actor_can_remove_itself_when_done() {
+async fn static_tree_actor_can_remove_itself_on_terminal_exit() {
     let spec = ActorSpec::new("finite", || Finite)
         .restart(RestartPolicy::never())
-        .remove_when_done();
+        .remove_on_terminal_exit();
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -452,9 +456,9 @@ async fn static_tree_actor_can_remove_itself_when_done() {
             .snapshot()
             .child("finite")
             .expect("finite actor is projected")
-            .remove_when_done
+            .remove_on_terminal_exit
     );
-    let mut snapshots = tree.scope().snapshots();
+    let mut snapshots = tree.scope().subscribe_snapshots();
     let running_tree = tree.spawn().expect("tree builds");
 
     tokio::time::timeout(
@@ -482,16 +486,16 @@ async fn static_tree_actor_can_remove_itself_when_done() {
 fn dynamic_outlines_include_future_member_policy_defaults() {
     let standard = DynamicTree::new().outline();
     let customized = DynamicTree::new()
-        .default_restart(RestartPolicy::never())
-        .default_shutdown(Shutdown::abort())
-        .default_mailbox_shutdown(MailboxShutdown::Discard)
+        .default_child_restart(RestartPolicy::never())
+        .default_child_shutdown(Shutdown::abort())
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard)
         .outline();
 
     assert_ne!(standard, customized);
-    assert_eq!(customized.default_restart, RestartPolicy::never());
-    assert_eq!(customized.default_shutdown, Shutdown::abort());
+    assert_eq!(customized.default_child_restart, RestartPolicy::never());
+    assert_eq!(customized.default_child_shutdown, Shutdown::abort());
     assert_eq!(
-        customized.default_mailbox_shutdown,
+        customized.default_actor_mailbox_shutdown,
         MailboxShutdown::Discard
     );
 }
@@ -546,8 +550,8 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     let ingest = ActorSpec::new("ingest", || Worker);
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
-    let mut children =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let mut children = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     children.add_task_spec(
         TaskSpec::new("fatal", move |_| {
             let fail = Arc::clone(&fail_child);
@@ -559,7 +563,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
         .restart(RestartPolicy::always().limit(0, Duration::from_secs(60)))
         .shutdown(Shutdown::abort()),
     );
-    let mut owned = Tree::new().default_restart(RestartPolicy::never());
+    let mut owned = Tree::new().default_child_restart(RestartPolicy::never());
     owned.add_actor_spec(ingest);
     owned.add_subtree("children", children);
     let mut tree = Tree::new();
@@ -574,7 +578,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     fail.notify_one();
     handle
         .scope()
-        .snapshots()
+        .subscribe_snapshots()
         .wait_for(|snapshot| {
             snapshot
                 .child("owned")
@@ -616,16 +620,35 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let (graph, _ingest, _parse) = two_actor_tree();
     let mut graph = graph
         .strategy(Strategy::RestForOne)
-        .default_mailbox_shutdown(MailboxShutdown::Discard);
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard);
     graph.add_subtree(
         "workers",
         DynamicTree::new()
-            .default_restart(RestartPolicy::never())
-            .default_shutdown(Shutdown::abort()),
+            .default_child_restart(RestartPolicy::never())
+            .default_child_shutdown(Shutdown::abort()),
     );
-    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
+    assert!(json.contains("\"remove_on_terminal_exit\""));
+    assert!(!json.contains("\"remove_when_done\""));
+    for key in [
+        "default_child_restart",
+        "default_child_shutdown",
+        "default_actor_mailbox_shutdown",
+    ] {
+        assert!(json.contains(&format!("\"{key}\"")), "missing {key}");
+    }
+    for key in [
+        "default_restart",
+        "default_shutdown",
+        "default_mailbox_shutdown",
+    ] {
+        assert!(
+            !json.contains(&format!("\"{key}\"")),
+            "retired key {key} was serialized"
+        );
+    }
     assert!(
         json.contains("\"Task\""),
         "task outline uses its public tag"
@@ -633,19 +656,22 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let decoded: kokage::observe::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
-    assert_eq!(decoded.default_mailbox_shutdown, MailboxShutdown::Discard);
+    assert_eq!(
+        decoded.default_actor_mailbox_shutdown,
+        MailboxShutdown::Discard
+    );
     let ChildOutline::Scope {
         outline: workers, ..
     } = decoded.child("workers").expect("dynamic scope survives")
     else {
         panic!("expected dynamic scope");
     };
-    assert_eq!(workers.default_restart, RestartPolicy::never());
-    assert_eq!(workers.default_shutdown, Shutdown::abort());
+    assert_eq!(workers.default_child_restart, RestartPolicy::never());
+    assert_eq!(workers.default_child_shutdown, Shutdown::abort());
     assert!(matches!(
         decoded.child("clock"),
         Some(ChildOutline::Task {
-            remove_when_done: true,
+            remove_on_terminal_exit: true,
             ..
         })
     ));
@@ -653,10 +679,95 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         decoded.child("ingest"),
         Some(ChildOutline::Actor {
             mailbox_shutdown: MailboxShutdown::Discard,
-            remove_when_done: true,
+            remove_on_terminal_exit: true,
             ..
         })
     ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_outline_rejects_retired_scope_default_keys() {
+    let json = serde_json::to_string(&Tree::new().outline()).expect("outline serializes");
+    for (current, retired) in [
+        ("default_child_restart", "default_restart"),
+        ("default_child_shutdown", "default_shutdown"),
+        ("default_actor_mailbox_shutdown", "default_mailbox_shutdown"),
+    ] {
+        let retired_json = json.replacen(current, retired, 1);
+        let error = serde_json::from_str::<kokage::observe::SupervisionOutline>(&retired_json)
+            .expect_err("retired scope default keys must not deserialize");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected error for {retired}: {error}"
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_outline_requires_the_current_terminal_membership_key() {
+    fn nested_child_fields<'a>(
+        outline: &'a mut serde_json::Value,
+        variant: &str,
+    ) -> &'a mut serde_json::Map<String, serde_json::Value> {
+        outline["children"]
+            .as_array_mut()
+            .expect("children serialize as an array")
+            .iter_mut()
+            .find_map(|child| child.get_mut("Scope"))
+            .and_then(|scope| scope.get_mut("outline"))
+            .and_then(|outline| outline.get_mut("children"))
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("nested scope serializes its children")
+            .iter_mut()
+            .find_map(|child| child.get_mut(variant))
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap_or_else(|| panic!("nested outline contains a {variant} child"))
+    }
+
+    let (mut workers, _ingest, _parse) = two_actor_tree();
+    workers
+        .add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
+    let mut graph = Tree::new();
+    graph.add_subtree("workers", workers);
+    let outline = serde_json::to_value(graph.outline()).expect("outline serializes");
+
+    for variant in ["Actor", "Task"] {
+        let mut extended = outline.clone();
+        nested_child_fields(&mut extended, variant)
+            .insert("future_observation".to_owned(), serde_json::json!(true));
+        serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
+            .unwrap_or_else(|error| panic!("future {variant} fields remain compatible: {error}"));
+
+        let mut dual_key = outline.clone();
+        nested_child_fields(&mut dual_key, variant)
+            .insert("remove_when_done".to_owned(), serde_json::json!(false));
+        let decoded = serde_json::from_value::<kokage::observe::SupervisionOutline>(dual_key)
+            .unwrap_or_else(|error| {
+                panic!("unknown retired {variant} key is tolerated beside the current key: {error}")
+            });
+        let mut reencoded = serde_json::to_value(decoded).expect("outline serializes again");
+        let fields = nested_child_fields(&mut reencoded, variant);
+        assert_eq!(fields["remove_on_terminal_exit"], true);
+        assert!(fields.get("remove_when_done").is_none());
+
+        let mut old_only = outline.clone();
+        let fields = nested_child_fields(&mut old_only, variant);
+        let policy = fields
+            .remove("remove_on_terminal_exit")
+            .expect("current terminal membership key is serialized");
+        fields.insert("remove_when_done".to_owned(), policy);
+
+        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(old_only)
+            .expect_err("an old-only payload must lack the required current key");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `remove_on_terminal_exit`"),
+            "unexpected error for {variant}: {error}"
+        );
+    }
 }
 
 #[cfg(feature = "serde")]
@@ -671,7 +782,7 @@ fn policy_enums_use_their_direct_wire_shape() {
             .expect("restart policy deserializes"),
         RestartPolicy::on_failure()
     );
-    assert!(restart.get("remove_when_done").is_none());
+    assert!(restart.get("remove_on_terminal_exit").is_none());
     assert_eq!(
         serde_json::to_value(RestartPolicy::never()).expect("never serializes"),
         serde_json::json!({ "condition": "Never" })

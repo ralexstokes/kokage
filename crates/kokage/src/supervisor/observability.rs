@@ -181,6 +181,17 @@ impl SupervisorObservability {
                         strategy = self.strategy_label,
                         "child exited"
                     ),
+                    ExitKind::ReadinessTimedOut(timeout) => warn!(
+                        supervisor_name = %self.supervisor_name,
+                        supervisor_path = %self.supervisor_path,
+                        child_id = %id,
+                        child_path = %self.resolve_child_path(id, child_path),
+                        generation = *generation,
+                        status = status_label,
+                        readiness_timeout = ?timeout,
+                        strategy = self.strategy_label,
+                        "child exited"
+                    ),
                     ExitKind::Panicked | ExitKind::Aborted { .. } => warn!(
                         supervisor_name = %self.supervisor_name,
                         supervisor_path = %self.supervisor_path,
@@ -338,6 +349,7 @@ fn exit_status_label(status: &ExitKind) -> &'static str {
     match status {
         ExitKind::Completed => "completed",
         ExitKind::Failed(_) => "failed",
+        ExitKind::ReadinessTimedOut(_) => "readiness_timed_out",
         ExitKind::Panicked => "panicked",
         ExitKind::Aborted { after_grace: false } => "aborted",
         ExitKind::Aborted { after_grace: true } => "shutdown_timed_out",

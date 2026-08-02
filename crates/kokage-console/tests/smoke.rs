@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningDynamicTree, TaskSpec,
+    Actor, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, RunningTree, TaskSpec,
     observe::ScopedActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
@@ -60,7 +60,11 @@ fn actor_stats() -> Vec<ScopedActorStats> {
 
 async fn spawn_console_with_stats(
     stats: impl Fn() -> Vec<ScopedActorStats> + Send + Sync + 'static,
-) -> (ConsoleHandle, RunningDynamicTree, RunningDynamicTree) {
+) -> (
+    ConsoleHandle,
+    RunningTree<DynamicScopeRef>,
+    RunningTree<DynamicScopeRef>,
+) {
     let snapshots = DynamicTree::new()
         .spawn()
         .expect("test snapshot tree spawns");
@@ -77,8 +81,8 @@ async fn spawn_console_with_stats(
         .expect("test lifecycle tree spawns");
     let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
-        .snapshots(snapshots_handle.snapshots())
-        .lifecycle(move || lifecycle_source.lifecycle_events())
+        .snapshots(snapshots_handle.subscribe_snapshots())
+        .lifecycle(move || lifecycle_source.subscribe_lifecycle())
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
         .spawn()
@@ -88,7 +92,11 @@ async fn spawn_console_with_stats(
     (handle, snapshots, lifecycle)
 }
 
-async fn spawn_console() -> (ConsoleHandle, RunningDynamicTree, RunningDynamicTree) {
+async fn spawn_console() -> (
+    ConsoleHandle,
+    RunningTree<DynamicScopeRef>,
+    RunningTree<DynamicScopeRef>,
+) {
     spawn_console_with_stats(actor_stats).await
 }
 
@@ -227,8 +235,8 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
     let snapshots_handle = snapshots.scope();
     let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
-        .snapshots(snapshots_handle.snapshots())
-        .lifecycle(move || lifecycle_source.lifecycle_events())
+        .snapshots(snapshots_handle.subscribe_snapshots())
+        .lifecycle(move || lifecycle_source.subscribe_lifecycle())
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
         .spawn()
@@ -316,8 +324,8 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     let snapshots_handle = snapshots.scope();
     let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
-        .snapshots(snapshots_handle.snapshots())
-        .lifecycle(move || lifecycle_source.lifecycle_events())
+        .snapshots(snapshots_handle.subscribe_snapshots())
+        .lifecycle(move || lifecycle_source.subscribe_lifecycle())
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
         .spawn()
@@ -331,12 +339,12 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 #[tokio::test]
 async fn non_loopback_bind_requires_token() {
     let snapshots = DynamicTree::new();
-    let snapshot_rx = snapshots.scope().snapshots();
+    let snapshot_rx = snapshots.scope().subscribe_snapshots();
     let lifecycle = DynamicTree::new();
     let lifecycle_handle = lifecycle.scope();
     let error = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
-        .lifecycle(move || lifecycle_handle.lifecycle_events())
+        .lifecycle(move || lifecycle_handle.subscribe_lifecycle())
         .bind(([0, 0, 0, 0], 9100))
         .spawn()
         .await
@@ -355,7 +363,7 @@ async fn builder_reports_missing_observability_sources() {
     assert!(matches!(missing_snapshots, ConsoleError::MissingSnapshots));
 
     let snapshots = DynamicTree::new();
-    let snapshot_rx = snapshots.scope().snapshots();
+    let snapshot_rx = snapshots.scope().subscribe_snapshots();
     let missing_lifecycle = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
         .spawn()

@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tree.add_task_spec(sink);
     let running_tree = tree.spawn()?;
     let scope = running_tree.scope();
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
     let restarted = timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| {
@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|child| child.id.as_str())
         .collect();
     println!("all pipeline stages restarted together: {restarted_stage_names:?}");
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

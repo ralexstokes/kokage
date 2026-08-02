@@ -20,8 +20,8 @@ use crate::supervisor::{
 /// membership remains immutable. Create one with [`Supervisor::ordered`].
 pub struct OrderedSupervisorBuilder {
     strategy: Strategy,
-    default_restart: RestartPolicy,
-    default_shutdown: Shutdown,
+    default_child_restart: RestartPolicy,
+    default_child_shutdown: Shutdown,
     children: Vec<Arc<ChildDefinition>>,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
@@ -32,8 +32,8 @@ pub struct OrderedSupervisorBuilder {
 /// and stop children concurrently. Children can be added and removed through
 /// the resulting supervisor's handle. Create one with [`Supervisor::dynamic`].
 pub struct DynamicSupervisorBuilder {
-    default_restart: RestartPolicy,
-    default_shutdown: Shutdown,
+    default_child_restart: RestartPolicy,
+    default_child_shutdown: Shutdown,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
 
@@ -43,8 +43,8 @@ impl OrderedSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
             strategy: Strategy::default(),
-            default_restart: RestartPolicy::default(),
-            default_shutdown: Shutdown::default(),
+            default_child_restart: RestartPolicy::default(),
+            default_child_shutdown: Shutdown::default(),
             children: Vec::new(),
             channels: None,
         };
@@ -57,8 +57,8 @@ impl OrderedSupervisorBuilder {
         SupervisorConfig {
             kind: ScopeKind::Ordered,
             strategy: self.strategy,
-            default_restart: self.default_restart,
-            default_shutdown: self.default_shutdown,
+            default_child_restart: self.default_child_restart,
+            default_child_shutdown: self.default_child_shutdown,
             children: self.children.clone(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
         }
@@ -101,16 +101,16 @@ impl OrderedSupervisorBuilder {
     /// Sets the restart policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
-    pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
-        self.default_restart = restart;
+    pub fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+        self.default_child_restart = restart;
         self
     }
 
     /// Sets the shutdown policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
-    pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
-        self.default_shutdown = shutdown;
+    pub fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+        self.default_child_shutdown = shutdown;
         self
     }
 
@@ -142,7 +142,7 @@ impl OrderedSupervisorBuilder {
     /// - Two children share the same id.
     /// - Any restart intensity or backoff configuration is invalid.
     pub fn build(mut self) -> Result<Supervisor, BuildError> {
-        self.default_restart.validate()?;
+        self.default_child_restart.validate()?;
         let mut ids = HashSet::new();
         for child in &self.children {
             if child.id.is_empty() {
@@ -156,7 +156,7 @@ impl OrderedSupervisorBuilder {
 
         for child in &mut self.children {
             ChildDefinition::make_mut_preserving_supervisor_identity(child)
-                .apply_defaults(self.default_restart, self.default_shutdown);
+                .apply_defaults(self.default_child_restart, self.default_child_shutdown);
         }
 
         let config = self.config();
@@ -172,8 +172,8 @@ impl OrderedSupervisorBuilder {
 impl DynamicSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
-            default_restart: RestartPolicy::default(),
-            default_shutdown: Shutdown::default(),
+            default_child_restart: RestartPolicy::default(),
+            default_child_shutdown: Shutdown::default(),
             channels: None,
         };
         let config = builder.config();
@@ -185,8 +185,8 @@ impl DynamicSupervisorBuilder {
         SupervisorConfig {
             kind: ScopeKind::Dynamic,
             strategy: Strategy::OneForOne,
-            default_restart: self.default_restart,
-            default_shutdown: self.default_shutdown,
+            default_child_restart: self.default_child_restart,
+            default_child_shutdown: self.default_child_shutdown,
             children: Vec::new(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
         }
@@ -207,22 +207,22 @@ impl DynamicSupervisorBuilder {
     /// Sets the restart policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
-    pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
-        self.default_restart = restart;
+    pub fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+        self.default_child_restart = restart;
         self
     }
 
     /// Sets the shutdown policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
-    pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
-        self.default_shutdown = shutdown;
+    pub fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+        self.default_child_shutdown = shutdown;
         self
     }
 
     /// Validates the configuration and returns an empty dynamic supervisor.
     pub fn build(mut self) -> Result<Supervisor, BuildError> {
-        self.default_restart.validate()?;
+        self.default_child_restart.validate()?;
         let config = self.config();
         let channels = self
             .channels
@@ -263,8 +263,8 @@ mod tests {
         let inherited_shutdown = Shutdown::graceful_for(Duration::from_millis(20));
         let explicit_shutdown = Shutdown::graceful_for(Duration::from_secs(2));
         let supervisor = Supervisor::ordered()
-            .default_restart(RestartPolicy::always())
-            .default_shutdown(inherited_shutdown)
+            .default_child_restart(RestartPolicy::always())
+            .default_child_shutdown(inherited_shutdown)
             .child(TaskSpec::new("inherited", |_| async { Ok(()) }))
             .child(
                 TaskSpec::new("explicit", |_| async { Ok(()) })
@@ -291,8 +291,8 @@ mod tests {
         let nested_channels = Arc::clone(&nested.channels);
 
         let supervisor = Supervisor::ordered()
-            .default_restart(RestartPolicy::always())
-            .default_shutdown(inherited_shutdown)
+            .default_child_restart(RestartPolicy::always())
+            .default_child_shutdown(inherited_shutdown)
             .child_spec(ChildSpec::supervisor("nested", nested))
             .build()
             .expect("valid parent supervisor");

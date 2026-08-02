@@ -5,17 +5,19 @@ use std::{
     future::Future,
     ops::Deref,
     sync::{Arc, Mutex, PoisonError, Weak},
+    time::Duration,
 };
 
 use crate::{
     ActorFactory, ActorRef, ActorSpec, ExitResult,
     actor::{
-        ActorNode, ActorOptionsValidationError, RawActor, RunnableActor, RunnableActorBuilder,
-        ScopedActorStats,
+        ActorNode, ActorOptionsValidationError, ActorRunError, RawActor, RunnableActor,
+        RunnableActorBuilder, ScopedActorStats,
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildSnapshot,
+        ActorChildReadinessTimedOut, BuildError, CancellationToken, ChildEventKind,
+        ChildMembershipView, ChildObservationUpdate, ChildObservationWatch, ChildSnapshot,
         ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
         ExitStatus, Guard, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
         LifecycleWatch, MailboxShutdown, OneShotTaskSpec, RestartPolicy, RunningSupervisor,
@@ -32,24 +34,24 @@ pub(crate) struct ActorRuntimeState {
 #[derive(Debug)]
 struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
-    default_restart: RestartPolicy,
-    default_shutdown: Shutdown,
-    default_mailbox_shutdown: MailboxShutdown,
+    default_child_restart: RestartPolicy,
+    default_child_shutdown: Shutdown,
+    default_actor_mailbox_shutdown: MailboxShutdown,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
                 actor_builder,
-                default_restart,
-                default_shutdown,
-                default_mailbox_shutdown,
+                default_child_restart,
+                default_child_shutdown,
+                default_actor_mailbox_shutdown,
             }),
         }
     }
@@ -57,24 +59,24 @@ impl ActorRuntimeState {
     pub(crate) fn configure(
         &self,
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
-            default_restart,
-            default_shutdown,
-            default_mailbox_shutdown,
+            default_child_restart,
+            default_child_shutdown,
+            default_actor_mailbox_shutdown,
         };
     }
 
     fn actor_defaults(&self) -> (RestartPolicy, Shutdown, MailboxShutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         (
-            config.default_restart,
-            config.default_shutdown,
-            config.default_mailbox_shutdown,
+            config.default_child_restart,
+            config.default_child_shutdown,
+            config.default_actor_mailbox_shutdown,
         )
     }
 
@@ -134,7 +136,7 @@ struct DynamicChildOptions {
     restart: RestartPolicy,
     shutdown: Shutdown,
     mailbox_shutdown: MailboxShutdown,
-    remove_when_done: bool,
+    remove_on_terminal_exit: bool,
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
@@ -183,6 +185,91 @@ where
     guard_from_tokens(cancellation, finished)
 }
 
+fn spawn_child_observation_to<M, F>(
+    mut observation: ChildObservationWatch,
+    target: ActorRef<M>,
+    mut map: F,
+) -> Guard
+where
+    M: Send + 'static,
+    F: FnMut(ChildObservationUpdate) -> M + Send + 'static,
+{
+    let cancellation = CancellationToken::new();
+    let (finished, finished_on_drop) = CompletionOnDrop::armed();
+    let task_cancellation = cancellation.clone();
+    let task = tokio::spawn(async move {
+        let _finished_on_drop = finished_on_drop;
+        let mut target_incarnation = None;
+        loop {
+            let observed_incarnation = target_incarnation.clone();
+            let update = tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => return,
+                incarnation = target.wait_for_incarnation_after(observed_incarnation.as_ref()) => {
+                    let Ok(incarnation) = incarnation else { return; };
+                    let target_restarted = target_incarnation.is_some();
+                    target_incarnation = Some(incarnation);
+                    if !target_restarted {
+                        continue;
+                    }
+
+                    let reset = observation.current_reset();
+                    let accepted = tokio::select! {
+                        biased;
+                        () = task_cancellation.cancelled() => return,
+                        () = target.wait_terminated() => return,
+                        sent = target.send_to_incarnation(map(reset)) => {
+                            let Ok(mailbox) = sent else { return; };
+                            mailbox
+                        }
+                    };
+                    target_incarnation = Some(accepted);
+                    continue;
+                }
+                update = observation.next() => update,
+            };
+            let Some(update) = update else {
+                return;
+            };
+            let update_is_reset = matches!(&update, ChildObservationUpdate::Reset { .. });
+
+            let accepted = tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => return,
+                () = target.wait_terminated() => return,
+                sent = target.send_to_incarnation(map(update)) => {
+                    let Ok(mailbox) = sent else { return; };
+                    mailbox
+                }
+            };
+            let target_restarted = target_incarnation
+                .as_ref()
+                .is_some_and(|previous| !previous.same_channel(&accepted));
+            target_incarnation = Some(accepted);
+
+            if target_restarted && !update_is_reset {
+                // The first update may be what discovers a fresh mailbox. A
+                // complete reset immediately replaces any partial reducer
+                // state that update could have created in the new incarnation.
+                let reset = observation.current_reset();
+                let accepted = tokio::select! {
+                    biased;
+                    () = task_cancellation.cancelled() => return,
+                    () = target.wait_terminated() => return,
+                    sent = target.send_to_incarnation(map(reset)) => {
+                        let Ok(mailbox) = sent else { return; };
+                        mailbox
+                    }
+                };
+                target_incarnation = Some(accepted);
+            }
+        }
+    });
+
+    std::mem::drop(task);
+    guard_from_tokens(cancellation, finished)
+}
+
 impl LifecycleWatch {
     /// Forwards child transitions from this stream into `target` using its
     /// ordinary mailbox policy.
@@ -204,6 +291,27 @@ impl LifecycleWatch {
     }
 }
 
+impl ChildObservationWatch {
+    /// Forwards transitions and recovery resets into `target` using its
+    /// ordinary mailbox policy.
+    ///
+    /// The pump follows the target through ordinary actor restarts and observes
+    /// its mailbox binding independently from source updates. As soon as a
+    /// replacement incarnation binds, the pump sends it a complete reset
+    /// (`dropped == 0`), even when the observed scope is quiet. Delivery
+    /// remains at-most-once: an update accepted by one incarnation is never
+    /// replayed to its replacement. The pump stops when the returned guard is
+    /// dropped or cancelled, when this stream ends, or when the target
+    /// permanently terminates.
+    pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(ChildObservationUpdate) -> M + Send + 'static,
+    {
+        spawn_child_observation_to(self, target.clone(), map)
+    }
+}
+
 /// Error returned when a [`TaskRef`] can no longer observe its task membership.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -213,6 +321,15 @@ pub enum TaskError {
     StoppedBeforeReady {
         /// Id of the task that stopped.
         task_id: String,
+    },
+    /// The task reached a terminal exit after missing its manual-readiness
+    /// deadline.
+    #[error("task `{task_id}` did not report readiness within {timeout:?}")]
+    ReadinessTimedOut {
+        /// Id of the task that missed its readiness deadline.
+        task_id: String,
+        /// Configured manual-readiness bound.
+        timeout: Duration,
     },
     /// The task membership ended without an observable exit.
     #[error("task `{task_id}` is no longer available")]
@@ -283,8 +400,12 @@ impl TaskRef {
     /// Waits until this task reports startup readiness.
     ///
     /// Ordinary tasks are ready as soon as their future is spawned. A task
-    /// configured with [`TaskSpec::wait_for_ready`] becomes ready when it calls
-    /// [`crate::TaskContext::mark_ready`].
+    /// configured with [`TaskSpec::manual_readiness`] becomes ready when it calls
+    /// [`crate::TaskContext::mark_ready`]. The wait follows any replacement
+    /// scheduled by the restart policy. If the task reaches a terminal exit
+    /// first, this returns [`TaskError::StoppedBeforeReady`], or
+    /// [`TaskError::ReadinessTimedOut`] when the terminal exit was a missed
+    /// readiness deadline.
     pub async fn wait_started(&self) -> Result<(), TaskError> {
         self.ensure_tracking();
         let mut state = self.inner.state.subscribe();
@@ -295,6 +416,12 @@ impl TaskRef {
             }
             if let Some(outcome) = current.outcome {
                 return match outcome {
+                    Ok(ExitStatus::ReadinessTimedOut { timeout, .. }) => {
+                        Err(TaskError::ReadinessTimedOut {
+                            task_id: self.id().to_owned(),
+                            timeout,
+                        })
+                    }
                     Ok(_) => Err(TaskError::StoppedBeforeReady {
                         task_id: self.id().to_owned(),
                     }),
@@ -487,74 +614,144 @@ fn task_is_revivable_by_group(snapshot: &SupervisorSnapshot, child: &ChildSnapsh
 /// Owns a spawned supervision tree.
 ///
 /// Use [`scope`](Self::scope) for observation and control through a cheaply
-/// cloneable, non-owning [`ScopeRef`]. Dropping a `ScopeRef` is inert and does
-/// not keep this owner alive; dropping this owner requests graceful shutdown.
+/// cloneable, non-owning scope reference. Ordered trees use the default
+/// [`ScopeRef`] parameter, while dynamic trees use [`DynamicScopeRef`].
+/// Generic helpers can name the sealed [`RunningScope`] bound to accept either
+/// form without admitting arbitrary scope types.
+/// Dropping a scope reference is inert and does not keep this owner alive;
+/// dropping this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
-pub struct RunningTree {
+pub struct RunningTree<S: RunningScope = ScopeRef> {
     supervisor: RunningSupervisor,
-    scope: ScopeRef,
+    scope: S,
 }
 
-/// Owns a spawned dynamic supervision tree.
+mod sealed {
+    use super::{
+        ActorRef, ControlError, DynamicScopeRef, DynamicSupervisorHandle, ScopeRef, TaskRef,
+    };
+
+    pub trait RunningScopeSealed: Clone {
+        fn from_scope(scope: ScopeRef) -> Self;
+    }
+
+    impl RunningScopeSealed for ScopeRef {
+        fn from_scope(scope: ScopeRef) -> Self {
+            scope
+        }
+    }
+
+    impl RunningScopeSealed for DynamicScopeRef {
+        fn from_scope(scope: ScopeRef) -> Self {
+            DynamicScopeRef::new(scope)
+        }
+    }
+
+    pub trait Sealed {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+            dynamic: &DynamicSupervisorHandle,
+        ) -> Result<(String, u64), ControlError>;
+    }
+
+    impl<M> Sealed for ActorRef<M> {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+            dynamic: &DynamicSupervisorHandle,
+        ) -> Result<(String, u64), ControlError> {
+            scope.resolve_actor_membership(dynamic, self)
+        }
+    }
+
+    impl Sealed for TaskRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+            _dynamic: &DynamicSupervisorHandle,
+        ) -> Result<(String, u64), ControlError> {
+            if !scope.supervisor.same_identity(&self.inner.scope.supervisor) {
+                return Err(ControlError::UnknownChildId(self.id().to_owned()));
+            }
+            Ok((self.id().to_owned(), self.inner.lineage))
+        }
+    }
+
+    impl Sealed for ScopeRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+            dynamic: &DynamicSupervisorHandle,
+        ) -> Result<(String, u64), ControlError> {
+            if let Some(membership) = self.parent_membership.as_ref() {
+                if !scope.supervisor.same_identity(&membership.parent) {
+                    return Err(ControlError::UnknownChildId(membership.id.to_string()));
+                }
+                return Ok((membership.id.to_string(), membership.lineage));
+            }
+
+            scope.resolve_subtree_membership(dynamic, self)
+        }
+    }
+
+    impl Sealed for DynamicScopeRef {
+        fn resolve_membership(
+            &self,
+            scope: &DynamicScopeRef,
+            dynamic: &DynamicSupervisorHandle,
+        ) -> Result<(String, u64), ControlError> {
+            self.scope.resolve_membership(scope, dynamic)
+        }
+    }
+}
+
+/// A scope capability that can be owned by a [`RunningTree`].
 ///
-/// This is the dynamic counterpart to [`RunningTree`]. Its root
-/// [`scope`](Self::scope) carries the dynamic-membership capability directly,
-/// while dropping the owner still requests graceful shutdown.
-#[must_use = "dropping the running tree requests graceful shutdown"]
-pub struct RunningDynamicTree {
-    inner: RunningTree,
-}
+/// This sealed marker trait is implemented only by [`ScopeRef`] and
+/// [`DynamicScopeRef`]. It can be named by downstream generic helpers and
+/// wrappers that accept either running-tree form, but it cannot be implemented
+/// outside Kokage.
+pub trait RunningScope: sealed::RunningScopeSealed {}
 
-impl RunningTree {
+impl RunningScope for ScopeRef {}
+impl RunningScope for DynamicScopeRef {}
+
+impl<S: RunningScope> RunningTree<S> {
     pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
         let scope = ScopeRef::new(supervisor.handle(), actors);
+        let scope = S::from_scope(scope);
         Self { supervisor, scope }
     }
 
-    /// Returns the running tree's non-owning root scope reference.
-    pub fn scope(&self) -> ScopeRef {
-        self.scope.clone()
-    }
-
     /// Requests graceful shutdown and waits for completion, consuming the owner.
+    ///
+    /// This owner method keeps the concise `shutdown` name because consuming
+    /// the [`RunningTree`] makes the wait explicit. The cloneable, non-owning
+    /// [`ScopeRef`] instead uses [`ScopeRef::shutdown_and_wait`] to distinguish
+    /// waiting from [`ScopeRef::request_shutdown`].
     pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
     /// Waits for the running tree to stop, consuming the owner.
+    ///
+    /// Unlike a nested [`ScopeRef::wait_stopped`] that follows a stable scope
+    /// identity across parent-driven restarts, a `RunningTree` owns one root
+    /// runtime and cannot be reincarnated by a parent.
     pub async fn wait(self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
 }
 
-impl RunningDynamicTree {
-    pub(crate) fn new(inner: RunningTree) -> Self {
-        Self { inner }
-    }
-
-    /// Returns the dynamic root scope reference.
-    pub fn scope(&self) -> DynamicScopeRef {
-        DynamicScopeRef::new(self.inner.scope())
-    }
-
-    /// Requests graceful shutdown and waits for completion, consuming the owner.
-    pub async fn shutdown(self) -> Result<(), SupervisorError> {
-        self.inner.shutdown().await
-    }
-
-    /// Waits for the tree to stop, consuming the owner.
-    pub async fn wait(self) -> Result<(), SupervisorError> {
-        self.inner.wait().await
+impl<S: RunningScope> RunningTree<S> {
+    /// Returns the running tree's non-owning root scope reference.
+    pub fn scope(&self) -> S {
+        self.scope.clone()
     }
 }
 
-impl std::fmt::Debug for RunningDynamicTree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunningDynamicTree").finish_non_exhaustive()
-    }
-}
-
-impl std::fmt::Debug for RunningTree {
+impl<S: RunningScope> std::fmt::Debug for RunningTree<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunningTree").finish_non_exhaustive()
     }
@@ -620,7 +817,12 @@ impl ScopeRef {
     }
 
     pub(crate) fn task_ref(&self, id: impl Into<Arc<str>>, lineage: u64) -> TaskRef {
-        TaskRef::new(self.clone(), id, lineage, self.supervisor.watch_lifecycle())
+        TaskRef::new(
+            self.clone(),
+            id,
+            lineage,
+            self.supervisor.subscribe_lifecycle(),
+        )
     }
 
     #[cfg(any(feature = "host", test))]
@@ -645,22 +847,25 @@ impl ScopeRef {
             .clone()
     }
 
-    /// Requests a graceful shutdown of the supervisor without waiting for it.
+    /// Requests graceful shutdown of this scope without waiting for it.
     pub fn request_shutdown(&self) {
         self.supervisor.shutdown();
     }
 
-    /// Requests a graceful shutdown and waits for the supervisor to stop.
+    /// Requests graceful shutdown and waits for this scope to stop.
     ///
-    /// Awaiting this from an actor callback in the same scope can block on that
-    /// callback returning. The cycle ends only if the actor's shutdown grace
-    /// expires and aborts it. An actor in the scope cannot receive this result:
-    /// its own exit is part of the shutdown condition. Call
-    /// [`request_shutdown`](Self::request_shutdown) from that actor and observe
-    /// completion from outside the scope. A bounded
-    /// [`Context::offload`](crate::Context::offload) is appropriate only when
-    /// shutting down a different scope that can stop while the actor remains live.
-    pub async fn shutdown(&self) -> Result<(), SupervisorError> {
+    /// Awaiting this from an actor callback in the same scope deadlocks that
+    /// callback: its own exit is part of the shutdown condition. The cycle
+    /// ends only when the actor's shutdown policy aborts the callback, so the
+    /// actor cannot receive this result. Call
+    /// [`Context::request_scope_shutdown`](crate::Context::request_scope_shutdown)
+    /// from that actor and observe completion from outside the scope. An
+    /// offload cannot deliver this same-scope result either: the actor must
+    /// exit before shutdown completes, and its offloads are cancelled while
+    /// it stops. A bounded [`Context::offload`](crate::Context::offload) is
+    /// appropriate only when shutting down a different scope that can stop
+    /// while the actor remains live.
+    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
@@ -671,10 +876,9 @@ impl ScopeRef {
 
     /// Projects this scope to its dynamic-membership capability.
     ///
-    /// Prefer handles returned directly by [`DynamicTree::scope`](crate::DynamicTree::scope),
-    /// [`RunningDynamicTree::scope`], or
-    /// [`DynamicScopeRef::add_dynamic_subtree`]. This projection is the escape
-    /// hatch for scopes discovered through untyped tree traversal.
+    /// Prefer handles returned directly by [`DynamicTree::scope`](crate::DynamicTree::scope)
+    /// or [`RunningTree::scope`]. This projection is the escape hatch for
+    /// dynamic scopes discovered through untyped tree traversal.
     pub fn dynamic(&self) -> Option<DynamicScopeRef> {
         (self.kind() == ScopeKind::Dynamic).then(|| DynamicScopeRef::new(self.clone()))
     }
@@ -696,15 +900,25 @@ impl ScopeRef {
         )
     }
 
-    /// Waits for the supervisor to stop.
+    /// Waits for this stable scope identity to stop without requesting shutdown.
     ///
-    /// Awaiting this from an actor callback in the same scope can deadlock when
-    /// stopping the scope depends on that callback returning. An actor in the
-    /// scope cannot receive this result because its own exit is part of the
-    /// wait condition. Observe termination from outside the scope instead. A
-    /// bounded [`Context::offload`](crate::Context::offload) is appropriate only
-    /// when waiting on a different scope that can stop while the actor remains live.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    /// A nested scope can have multiple runtime incarnations when its parent
+    /// restarts it. This wait follows those restart gaps and resolves only
+    /// when the parent determines that the identity cannot be restarted again.
+    /// It returns the final incarnation's completion result. Root scopes have
+    /// only one incarnation.
+    ///
+    /// Awaiting this from an actor callback in the same scope deadlocks because
+    /// the actor's own exit is part of the wait condition. If shutdown is
+    /// requested, the actor's grace may eventually abort the callback, but the
+    /// actor can never receive this result. An
+    /// [`Context::offload`](crate::Context::offload) avoids blocking the
+    /// callback, but cannot deliver the result: the actor must exit before the
+    /// wait resolves, and its offloads are cancelled while it stops. Observe
+    /// termination from outside the scope instead. A bounded offload is
+    /// appropriate only when waiting on a different scope that can stop while
+    /// the actor remains live.
+    pub async fn wait_stopped(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
 
@@ -719,13 +933,12 @@ impl ScopeRef {
         self.supervisor.wait_started().await
     }
 
-    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    /// Returns a snapshot and self-recovering direct-child update stream.
     ///
-    /// Initialize state from [`LifecycleObservation::snapshot`], then consume
-    /// events whose direct-child sequence exceeds the snapshot's
-    /// [`SupervisorSnapshot::lifecycle_seq`].
+    /// Initialize state from [`LifecycleObservation::snapshot`], then apply
+    /// every transition or complete reset returned by its event stream.
     pub fn observe_children(&self) -> LifecycleObservation {
-        self.supervisor.observe_lifecycle()
+        self.supervisor.observe_children()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
@@ -734,8 +947,8 @@ impl ScopeRef {
     /// direct-child state-plus-stream setup. This lower-level method is useful
     /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
-    pub fn lifecycle_events(&self) -> LifecycleWatch {
-        self.supervisor.watch_lifecycle()
+    pub fn subscribe_lifecycle(&self) -> LifecycleWatch {
+        self.supervisor.subscribe_lifecycle()
     }
 
     /// Returns a clone of the latest supervisor snapshot.
@@ -791,7 +1004,7 @@ impl ScopeRef {
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
-    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
         self.supervisor.subscribe_snapshots()
     }
 }
@@ -801,17 +1014,24 @@ impl DynamicScopeRef {
         debug_assert_eq!(scope.kind(), ScopeKind::Dynamic);
         Self { scope }
     }
+}
 
-    /// Returns this capability as an ordinary non-mutating scope reference.
-    pub fn as_scope(&self) -> &ScopeRef {
-        &self.scope
-    }
-
-    /// Converts this capability into an ordinary scope reference.
-    pub fn into_scope(self) -> ScopeRef {
-        self.scope
+impl From<DynamicScopeRef> for ScopeRef {
+    fn from(scope: DynamicScopeRef) -> Self {
+        scope.scope
     }
 }
+
+/// A stable handle that identifies one exact dynamic child membership.
+///
+/// This sealed trait is implemented by [`ActorRef`], [`TaskRef`], [`ScopeRef`],
+/// and [`DynamicScopeRef`]. It cannot be implemented outside Kokage.
+pub trait ChildHandle: sealed::Sealed {}
+
+impl<M> ChildHandle for ActorRef<M> {}
+impl ChildHandle for TaskRef {}
+impl ChildHandle for ScopeRef {}
+impl ChildHandle for DynamicScopeRef {}
 
 impl Deref for DynamicScopeRef {
     type Target = ScopeRef;
@@ -819,6 +1039,28 @@ impl Deref for DynamicScopeRef {
     fn deref(&self) -> &Self::Target {
         &self.scope
     }
+}
+
+fn pre_insert_subtree_membership(
+    attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
+    actors: &Arc<ActorRuntimeState>,
+    subtree: &ScopeRef,
+) -> Option<(String, u64)> {
+    attached_children.into_iter().find_map(|attached| {
+        let [identity] = attached.path() else {
+            return None;
+        };
+        let attachment = attached.attachment();
+        if !attachment.belongs_to(actors)
+            || !matches!(attachment.kind, RuntimeAttachmentKind::Subtree(_))
+            || !attached
+                .supervisor()
+                .is_some_and(|member| member.same_identity(&subtree.supervisor))
+        {
+            return None;
+        }
+        Some((identity.id.clone(), identity.lineage))
+    })
 }
 
 fn runtime_subtree_membership(
@@ -861,9 +1103,9 @@ impl DynamicScopeRef {
     /// Builds and adds an actor-aware runtime subtree.
     ///
     /// The returned handle observes and controls the new subtree, and recursive
-    /// [`ScopeRef::actor_stats`] include it. Use
-    /// [`add_dynamic_subtree`](Self::add_dynamic_subtree) when the supplied tree
-    /// is dynamic and its mutation capability should be retained directly.
+    /// [`ScopeRef::actor_stats`] include it. When the supplied tree is dynamic,
+    /// obtain its [`DynamicScopeRef`] before moving it into this method if its
+    /// mutation capability should be retained directly.
     /// Removing the child detaches its actor metadata with the supervisor
     /// membership; retained subtree handles then report
     /// [`ControlError::Unavailable`] from dynamic control operations.
@@ -925,17 +1167,6 @@ impl DynamicScopeRef {
         .ok_or(ControlError::Unavailable)
     }
 
-    /// Builds and adds a dynamic runtime subtree, retaining its mutation capability.
-    pub async fn add_dynamic_subtree(
-        &self,
-        id: impl Into<String>,
-        tree: crate::DynamicTree,
-    ) -> Result<DynamicScopeRef, ControlError> {
-        self.add_subtree(id, tree)
-            .await
-            .and_then(|scope| scope.dynamic().ok_or(ControlError::Unavailable))
-    }
-
     /// Adds a supervised task child with default configuration to this scope.
     pub async fn add_task<F, Fut>(
         &self,
@@ -949,7 +1180,7 @@ impl DynamicScopeRef {
         self.add_task_spec(TaskSpec::new(id, task)).await
     }
 
-    /// Spawns finite one-shot work and removes its membership after completion.
+    /// Spawns finite one-shot work and removes its membership after terminal exit.
     ///
     /// This is the concise one-shot counterpart to [`add_task`](Self::add_task).
     /// The factory is `FnOnce`, so the task can consume owned inputs. The task
@@ -981,7 +1212,7 @@ impl DynamicScopeRef {
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled. Task children do
     /// not appear in [`ScopeRef::actor_stats`], but remain visible through
-    /// snapshots and lifecycle watches.
+    /// snapshots and lifecycle event streams.
     ///
     /// # Errors
     ///
@@ -991,7 +1222,7 @@ impl DynamicScopeRef {
         let id: Arc<str> = Arc::from(task.id());
         let events = self
             .supervisor
-            .watch_lifecycle()
+            .subscribe_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child(task).await?;
         Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
@@ -1002,7 +1233,7 @@ impl DynamicScopeRef {
         let id: Arc<str> = Arc::from(task.id());
         let events = self
             .supervisor
-            .watch_lifecycle()
+            .subscribe_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child_spec(task).await?;
         Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
@@ -1025,7 +1256,7 @@ impl DynamicScopeRef {
     /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The returned ref identifies the exact membership and can be passed to
-    /// [`DynamicScopeRef::remove_actor`]. See [`crate::ActorFactory`] for the
+    /// [`DynamicScopeRef::remove`]. See [`crate::ActorFactory`] for the
     /// incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
@@ -1049,13 +1280,15 @@ impl DynamicScopeRef {
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
-        let (default_restart, default_shutdown, default_mailbox_shutdown) =
+        let (default_child_restart, default_child_shutdown, default_actor_mailbox_shutdown) =
             self.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
-            restart: spec.restart.unwrap_or(default_restart),
-            shutdown: spec.shutdown.unwrap_or(default_shutdown),
-            mailbox_shutdown: spec.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
-            remove_when_done: spec.remove_when_done,
+            restart: spec.restart.unwrap_or(default_child_restart),
+            shutdown: spec.shutdown.unwrap_or(default_child_shutdown),
+            mailbox_shutdown: spec
+                .mailbox_shutdown
+                .unwrap_or(default_actor_mailbox_shutdown),
+            remove_on_terminal_exit: spec.remove_on_terminal_exit,
         };
         let actor = self.actors.make_actor(spec);
         self.add_constructed_actor(
@@ -1084,7 +1317,7 @@ impl DynamicScopeRef {
                 options.restart,
                 options.shutdown,
                 options.mailbox_shutdown,
-                options.remove_when_done,
+                options.remove_on_terminal_exit,
             ),
         );
         dynamic.add_child_spec(child).await?;
@@ -1092,16 +1325,57 @@ impl DynamicScopeRef {
         Ok(actor_ref)
     }
 
-    /// Removes the exact actor membership identified by `actor`.
+    fn resolve_actor_membership<M>(
+        &self,
+        dynamic: &DynamicSupervisorHandle,
+        actor: &ActorRef<M>,
+    ) -> Result<(String, u64), ControlError> {
+        __private::dynamic_attached_children::<RuntimeAttachment>(dynamic)
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                let attachment = attached.attachment();
+                if !attachment.belongs_to(&self.actors) {
+                    return None;
+                }
+                let RuntimeAttachmentKind::Actor(member) = &attachment.kind else {
+                    return None;
+                };
+                Arc::ptr_eq(member.identity(), actor.identity())
+                    .then(|| (identity.id.clone(), identity.lineage))
+            })
+            .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))
+    }
+
+    fn resolve_subtree_membership(
+        &self,
+        dynamic: &DynamicSupervisorHandle,
+        subtree: &ScopeRef,
+    ) -> Result<(String, u64), ControlError> {
+        pre_insert_subtree_membership(
+            __private::dynamic_attached_children::<RuntimeAttachment>(dynamic),
+            &self.actors,
+            subtree,
+        )
+        .ok_or(ControlError::UnknownChildHandle)
+    }
+
+    /// Removes the exact child membership identified by `child`.
     ///
-    /// A stale ref never removes a same-id replacement. Use
-    /// [`remove_child_named`](Self::remove_child_named) when only the id is
-    /// available and targeting whichever membership currently owns it is
-    /// intentional.
+    /// A stale handle never removes a same-id replacement. Actor handles are
+    /// resolved against the scope's current runtime attachments, and task
+    /// handles carry their membership identity directly. Subtree handles
+    /// returned by insertion carry that identity; a scope retained before its
+    /// tree was moved into [`add_subtree`](Self::add_subtree) is resolved by its
+    /// stable supervisor identity. Use [`remove_named`](Self::remove_named)
+    /// when only the id is available and targeting whichever membership
+    /// currently owns it is intentional.
     ///
     /// Removal marks the membership as removing and starts its configured
-    /// shutdown. When cooperative shutdown completes within its grace period,
-    /// an [`Actor`](crate::Actor) stops its normal receive loop, closes external
+    /// shutdown. For an actor whose cooperative shutdown completes within its
+    /// grace period, the [`Actor`](crate::Actor) stops its normal receive loop, closes external
     /// intake, applies its [`Shutdown`](crate::Shutdown), runs `on_stop`,
     /// makes the mailbox binding terminal, and is then detached. Immediate
     /// abort, or expiry of the cooperative grace period, can skip any remaining
@@ -1129,74 +1403,26 @@ impl DynamicScopeRef {
     ///
     /// # Errors
     ///
-    /// A stopped scope returns [`ControlError::Unavailable`], and
-    /// operation failures are reported through the remaining variants.
-    pub async fn remove_actor<M>(&self, actor: &ActorRef<M>) -> Result<(), ControlError> {
+    /// A stopped scope returns [`ControlError::Unavailable`] before the handle
+    /// is inspected. A stale or foreign handle with a known membership id
+    /// returns [`ControlError::UnknownChildId`]. A pre-insertion scope handle
+    /// that does not identify a current subtree returns
+    /// [`ControlError::UnknownChildHandle`]. Other operation failures are
+    /// reported through the remaining variants.
+    pub async fn remove(&self, child: &impl ChildHandle) -> Result<(), ControlError> {
         let dynamic = self.dynamic_supervisor()?;
-        let membership = __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
-            .into_iter()
-            .find_map(|attached| {
-                let [identity] = attached.path() else {
-                    return None;
-                };
-                let attachment = attached.attachment();
-                if !attachment.belongs_to(&self.actors) {
-                    return None;
-                }
-                let RuntimeAttachmentKind::Actor(member) = &attachment.kind else {
-                    return None;
-                };
-                Arc::ptr_eq(member.identity(), actor.identity())
-                    .then(|| (identity.id.clone(), identity.lineage))
-            })
-            .ok_or_else(|| ControlError::UnknownChildId(actor.id().to_owned()))?;
+        let membership = sealed::Sealed::resolve_membership(child, self, &dynamic)?;
         dynamic
             .remove_child_membership(membership.0, membership.1)
             .await
     }
 
-    /// Removes the exact task membership identified by `task`.
-    ///
-    /// A stale ref never removes a same-id replacement.
-    pub async fn remove_task(&self, task: &TaskRef) -> Result<(), ControlError> {
-        if !self.supervisor.same_identity(&task.inner.scope.supervisor) {
-            return Err(ControlError::UnknownChildId(task.id().to_owned()));
-        }
-        self.dynamic_supervisor()?
-            .remove_child_membership(task.id(), task.inner.lineage)
-            .await
-    }
-
-    /// Removes the exact direct subtree membership identified by `subtree`.
-    ///
-    /// A stale or foreign scope handle never removes a same-id replacement.
-    ///
-    /// # Errors
-    ///
-    /// A stopped parent returns [`ControlError::Unavailable`]. A handle that
-    /// does not identify a current direct child of this scope returns
-    /// [`ControlError::UnknownChildId`].
-    pub async fn remove_subtree(&self, subtree: &ScopeRef) -> Result<(), ControlError> {
-        let dynamic = self.dynamic_supervisor()?;
-        let Some(membership) = subtree.parent_membership.as_ref() else {
-            return Err(ControlError::UnknownChildId("<root>".to_owned()));
-        };
-        if !self.supervisor.same_identity(&membership.parent) {
-            return Err(ControlError::UnknownChildId(membership.id.to_string()));
-        }
-        dynamic
-            .remove_child_membership(membership.id.to_string(), membership.lineage)
-            .await
-    }
-
     /// Removes whichever current child membership owns `id`.
     ///
-    /// Prefer [`remove_actor`](Self::remove_actor),
-    /// [`remove_task`](Self::remove_task), or
-    /// [`remove_subtree`](Self::remove_subtree) when the insertion handle is
-    /// available. This name-based operation is the escape hatch for external
+    /// Prefer [`remove`](Self::remove) when the insertion handle is available.
+    /// This name-based operation is the escape hatch for external
     /// registries and operator input.
-    pub async fn remove_child_named(&self, id: impl Into<String>) -> Result<(), ControlError> {
+    pub async fn remove_named(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.remove_child(id).await
     }
 }
@@ -1239,7 +1465,7 @@ pub(crate) struct ActorChildOptions {
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: Shutdown,
     pub(crate) mailbox_shutdown: MailboxShutdown,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
 }
 
 impl ActorChildOptions {
@@ -1247,13 +1473,13 @@ impl ActorChildOptions {
         restart: RestartPolicy,
         shutdown: Shutdown,
         mailbox_shutdown: MailboxShutdown,
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     ) -> Self {
         Self {
             restart,
             shutdown,
             mailbox_shutdown,
-            remove_when_done,
+            remove_on_terminal_exit,
         }
     }
 }
@@ -1267,7 +1493,7 @@ pub(crate) fn actor_child_spec(
         restart,
         shutdown,
         mailbox_shutdown,
-        remove_when_done,
+        remove_on_terminal_exit,
     } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
@@ -1294,16 +1520,21 @@ pub(crate) fn actor_child_spec(
                     || ctx.mark_ready(),
                 )
                 .await
-                .map_err(Into::into)
+                .map_err(|error| match error {
+                    ActorRunError::ReadinessTimedOut { timeout, .. } => {
+                        Box::new(ActorChildReadinessTimedOut(timeout)) as crate::BoxError
+                    }
+                    error => Box::new(error) as crate::BoxError,
+                })
         }
     })
     .into_spec()
     .attachment(attachment)
-    .wait_for_ready()
+    .automatic_readiness()
     .restart(restart)
     .shutdown(shutdown);
-    if remove_when_done {
-        child.remove_when_done()
+    if remove_on_terminal_exit {
+        child.remove_on_terminal_exit()
     } else {
         child
     }
@@ -1319,16 +1550,18 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         Actor, ActorSpec, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-        ExitResult, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef, Tree,
+        ExitResult, RestartPolicy, RunningTree, ScopeRef, Tree,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
         let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
         let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
-        let dynamic_spawn: fn(DynamicTree) -> Result<RunningDynamicTree, BuildError> =
+        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree<DynamicScopeRef>, BuildError> =
             DynamicTree::spawn;
         let dynamic_scope: fn(&DynamicTree) -> DynamicScopeRef = DynamicTree::scope;
 
@@ -1354,6 +1587,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pre_insert_subtree_lookup_rejects_non_subtree_attachments() {
+        let root = DynamicTree::new().spawn().expect("dynamic runtime builds");
+        let dynamic = root.scope();
+        dynamic
+            .add_actor("worker", || FailsOnMessage)
+            .await
+            .expect("actor added");
+        let dynamic_handle = dynamic
+            .dynamic_supervisor()
+            .expect("dynamic supervisor is available");
+        let actor_attachment = crate::supervisor::__private::dynamic_attached_children::<
+            super::RuntimeAttachment,
+        >(&dynamic_handle)
+        .into_iter()
+        .next()
+        .expect("actor attachment is visible");
+
+        let target = Tree::new().spawn().expect("target runtime builds");
+        let target_scope = target.scope();
+        let forged = crate::supervisor::__private::AttachedChild::new(
+            actor_attachment.path().to_vec(),
+            Arc::clone(actor_attachment.attachment()),
+            Some(target_scope.supervisor.clone()),
+        );
+
+        assert!(
+            super::pre_insert_subtree_membership(vec![forged], &dynamic.actors, &target_scope,)
+                .is_none(),
+            "an actor attachment must not resolve as a subtree even when its supervisor matches"
+        );
+
+        root.shutdown().await.expect("dynamic runtime stops");
+        target.shutdown().await.expect("target runtime stops");
+    }
+
+    #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
         let static_spec =
             ActorSpec::new("static", || FailsOnMessage).restart(RestartPolicy::never());
@@ -1366,7 +1635,7 @@ mod tests {
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.scope().snapshots();
+        let mut static_snapshots = static_runtime.scope().subscribe_snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
@@ -1394,7 +1663,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.scope().snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.scope().subscribe_snapshots();
         dynamic_ref
             .send(())
             .await
@@ -1421,7 +1690,7 @@ mod tests {
             .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
                     .restart(RestartPolicy::never())
-                    .remove_when_done(),
+                    .remove_on_terminal_exit(),
             )
             .await
             .expect("dynamic actor is inserted");
@@ -1430,7 +1699,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = running_tree.scope().snapshots();
+        let mut snapshots = running_tree.scope().subscribe_snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots
@@ -1459,7 +1728,7 @@ mod tests {
             .lineage;
 
         dynamic
-            .remove_child_named("workers")
+            .remove_named("workers")
             .await
             .expect("first subtree removed");
         dynamic

@@ -28,6 +28,7 @@ pub const SHORT_GRACE: Duration = Duration::from_millis(50);
 pub enum ExitStatusView {
     Completed,
     Failed(String),
+    ReadinessTimedOut(Duration),
     Panicked,
     Aborted { after_grace: bool },
 }
@@ -37,6 +38,7 @@ impl From<ExitStatus> for ExitStatusView {
         match exit {
             ExitStatus::Completed { .. } => Self::Completed,
             ExitStatus::Failed { message, .. } => Self::Failed(message),
+            ExitStatus::ReadinessTimedOut { timeout, .. } => Self::ReadinessTimedOut(timeout),
             ExitStatus::Panicked { .. } => Self::Panicked,
             ExitStatus::Aborted { after_grace, .. } => Self::Aborted { after_grace },
         }
@@ -218,7 +220,7 @@ pub struct EventWatch {
 
 pub fn event_watch(handle: &SupervisorHandle) -> EventWatch {
     EventWatch {
-        lifecycle: handle.watch_lifecycle(),
+        lifecycle: handle.subscribe_lifecycle(),
         pending: VecDeque::new(),
     }
 }

@@ -91,7 +91,7 @@ impl Session {
         input: PendingInput,
         ctx: &mut Context<'_, Self>,
     ) -> ExitResult {
-        ctx.clear_timeout(IDLE_SWEEP_TIMER);
+        ctx.clear_timer(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
             self.heartbeat = Some(ctx.interval_to(
                 &self.progress,
@@ -253,7 +253,7 @@ impl Actor for Session {
                     return Ok(());
                 }
                 self.transcript_len += 1;
-                ctx.clear_timeout(IDLE_SWEEP_TIMER);
+                ctx.clear_timer(IDLE_SWEEP_TIMER);
                 let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);

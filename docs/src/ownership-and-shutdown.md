@@ -7,8 +7,10 @@ down.
 
 ## The owner and the references
 
-`Tree::spawn` returns a [`RunningTree`], while `DynamicTree::spawn` returns a
-[`RunningDynamicTree`] — the unique **owner** of the whole supervision tree.
+Both `Tree::spawn` and `DynamicTree::spawn` return a [`RunningTree`] — the
+unique **owner** of the whole supervision tree. Each spawn method fixes the
+root-scope type: `ScopeRef` for an ordered tree and `DynamicScopeRef` for a
+dynamic tree.
 Ownership here is literal Rust ownership:
 
 - Keep it alive for as long as the application should run.
@@ -28,11 +30,26 @@ actor. `running_tree.scope()` gives you a cloneable root ref for observation and
 control. `scope.subtree("press-room")` navigates down, and trees hand refs out
 even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
 means nothing. What it does carry is *control capability*: observation
-(snapshots, lifecycle watches, stats — see [Observability](observability.md))
-and targeted shutdown. A [`DynamicScopeRef`] additionally carries membership
-mutation. `scope.shutdown().await` on a subtree stops just that compartment,
-whose parent then sees a completed child; `scope.request_shutdown()` is the
-non-waiting form suitable inside that scope.
+(snapshots, lifecycle event streams, stats — see
+[Observability](observability.md)) and targeted shutdown. A [`DynamicScopeRef`]
+additionally carries membership mutation. [`scope.shutdown_and_wait().await`]
+on a subtree stops just that compartment, whose parent then sees a completed
+child. [`scope.wait_stopped()`] only waits for a stop requested elsewhere,
+while [`scope.request_shutdown()`] requests shutdown without waiting. Nested
+scope references identify stable memberships rather than individual runtime
+incarnations: `wait_stopped()` follows parent-driven restarts and returns only
+when the scope identity is terminal, with the final incarnation's result.
+
+An actor must not await either waiting method on its own enclosing scope: the
+actor's exit is itself part of the condition being awaited. During shutdown,
+that cycle lasts until the actor's shutdown policy aborts its callback, so the
+actor can never observe the result. Moving the same wait into an offload avoids
+blocking the callback, but still cannot deliver the result: the actor must exit
+before the wait resolves, and its offloads are cancelled while it stops. Use
+[`ctx.request_scope_shutdown()`] inside an actor and observe the scope's
+completion from outside it. Waiting on a different scope is safe when that
+scope can stop independently of the actor. The same non-waiting helper is
+available on [`RawContext`] and [`StopContext`].
 
 ## Shutdown policies: how children stop
 
@@ -60,7 +77,7 @@ Watch a drain do its job:
 ```rust
 use std::time::Duration;
 
-use kokage::prelude::*;
+use kokage::{MailboxShutdown, Shutdown, prelude::*};
 
 struct Press;
 
@@ -94,9 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Set timing per child (`ActorSpec::shutdown`, `TaskSpec::shutdown`), per scope
-default (`default_shutdown`), or on a subtree's edge
+default (`default_child_shutdown`), or on a subtree's edge
 (`SubtreeSpec::shutdown`). Mailbox behavior is actor-only: set a scope's actor
-default with `default_mailbox_shutdown`, then override individual declarations
+default with `default_actor_mailbox_shutdown`, then override individual declarations
 with `ActorSpec::mailbox_shutdown`. Inside an actor, `ctx.is_draining()` reports
 whether queued work is being drained, and hand-written raw-actor loops can check their
 [`raw::RawContext::shutdown_token`].
@@ -163,7 +180,6 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 `RunningTree` remains the single authority over the actor tree itself.
 
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
-[`RunningDynamicTree`]: https://stokes.io/kokage/api/kokage/struct.RunningDynamicTree.html
 [`SupervisorError`]: https://stokes.io/kokage/api/kokage/enum.SupervisorError.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`DynamicScopeRef`]: https://stokes.io/kokage/api/kokage/struct.DynamicScopeRef.html
@@ -173,3 +189,9 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 [`raw::RawContext::shutdown_token`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html#method.shutdown_token
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
 [`CancellationToken`]: https://stokes.io/kokage/api/kokage/struct.CancellationToken.html
+[`scope.shutdown_and_wait().await`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.shutdown_and_wait
+[`scope.wait_stopped()`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.wait_stopped
+[`scope.request_shutdown()`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.request_shutdown
+[`ctx.request_scope_shutdown()`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.request_scope_shutdown
+[`RawContext`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html
+[`StopContext`]: https://stokes.io/kokage/api/kokage/struct.StopContext.html

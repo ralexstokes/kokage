@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
+    Backoff, MailboxShutdown, RestartPolicy, Strategy,
     observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -10,18 +11,19 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
-            DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-            MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
-            SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef,
-            TaskSpec, TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, Guard,
+            Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext, TaskRef, TaskSpec,
+            TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
-            OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError, TaskError,
+            ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
+            CancellationToken, ChildHandle, ControlError, MailboxShutdown, MonitorEvent,
+            MonitorEventKind, OffloadDeadline, OneShotTaskSpec, ReplyError, ReplyReceiver,
+            RestartPolicy, RunningScope, SendError, SendErrorKind, Shutdown, Strategy, SubtreeSpec,
+            SupervisorError, TaskError,
         };
     }
 
@@ -38,10 +40,10 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot,
-            ChildStateView, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-            LifecycleWatch, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot,
-            SupervisorStateView,
+            ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
+            ChildObservationWatch, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
+            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
+            ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};
@@ -193,7 +195,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.scope().lifecycle_events();
+    let mut events = handle.scope().subscribe_lifecycle();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -271,7 +273,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
         }
     }));
     let handle = tree.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
     let running_tree = tree.spawn().expect("task tree spawns");
 
     assert_eq!(
@@ -353,6 +355,12 @@ fn task_policy_types_cover_common_configuration() {
         RestartPolicy::on_failure()
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
+    );
+    assert_eq!(
+        RestartPolicy::never()
+            .limit(9, Duration::from_secs(9))
+            .backoff(Backoff::fixed(Duration::from_millis(50))),
+        RestartPolicy::Never
     );
     let policy = RestartPolicy::on_failure();
     let RestartPolicy::OnFailure {

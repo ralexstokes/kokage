@@ -102,8 +102,8 @@ impl ConsoleBuilder {
         let lifecycle = scope.clone();
         let stats = scope.clone();
         Self::new()
-            .snapshots(scope.snapshots())
-            .lifecycle(move || lifecycle.lifecycle_events())
+            .snapshots(scope.subscribe_snapshots())
+            .lifecycle(move || lifecycle.subscribe_lifecycle())
             .actor_stats(move || stats.actor_stats())
     }
 

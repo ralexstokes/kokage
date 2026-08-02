@@ -96,7 +96,7 @@ where
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child(id)
@@ -297,7 +297,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     dynamic_scope
-        .remove_actor(&dynamic)
+        .remove(&dynamic)
         .await
         .expect("nested actor removed through runtime handle");
     assert!(
@@ -309,7 +309,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     );
 
     raw_members
-        .remove_child_named("raw")
+        .remove_named("raw")
         .await
         .expect("raw supervisor removed");
 
@@ -362,12 +362,16 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 #[tokio::test]
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
-    let middle = support::dynamic_root(&root)
-        .add_dynamic_subtree("middle", DynamicTree::new())
+    let middle_tree = DynamicTree::new();
+    let middle = middle_tree.scope();
+    support::dynamic_root(&root)
+        .add_subtree("middle", middle_tree)
         .await
         .expect("middle subtree added");
-    let leaf = middle
-        .add_dynamic_subtree("leaf", DynamicTree::new())
+    let leaf_tree = DynamicTree::new();
+    let leaf = leaf_tree.scope();
+    middle
+        .add_subtree("leaf", leaf_tree)
         .await
         .expect("leaf subtree added");
     let actor = leaf
@@ -379,7 +383,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     assert_eq!(root.scope().actor_stats().len(), 1);
     assert!(middle.subtree("leaf").is_some());
     support::dynamic_root(&root)
-        .remove_child_named("middle")
+        .remove_named("middle")
         .await
         .expect("middle subtree removed");
     assert!(root.scope().subtree("middle").is_none());
@@ -411,8 +415,10 @@ async fn subtree_validation_phases_report_rejected() {
         ControlError::Rejected(BuildError::DuplicateChildId("duplicate".to_owned()))
     );
 
-    let first = support::dynamic_root(&root)
-        .add_dynamic_subtree("workers", DynamicTree::new())
+    let first_tree = DynamicTree::new();
+    let first = first_tree.scope();
+    support::dynamic_root(&root)
+        .add_subtree("workers", first_tree)
         .await
         .expect("first subtree added");
     first
@@ -505,7 +511,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     });
 
     support::dynamic_root(&handle)
-        .remove_child_named("worker")
+        .remove_named("worker")
         .await
         .expect("tracked actor removed through runtime handle");
     support::dynamic_root(&handle)
@@ -537,8 +543,8 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     nested_graph.define(static_ref_slot, || FailOnMessage);
     let mut nested_graph = nested_graph.build();
     nested_graph.add_subtree("dynamic", DynamicTree::new());
-    let nested_graph =
-        nested_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let nested_graph = nested_graph
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = Tree::new();
     tree.add_subtree("workers", nested_graph);
     let handle = tree.spawn().expect("nested runtime builds");
@@ -644,7 +650,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = graph.build();
     graph.add_subtree("dynamic", DynamicTree::new());
     let graph =
-        graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+        graph.default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let subtree = support::dynamic_root(&root)
         .add_subtree("workers", graph)
         .await
@@ -686,8 +692,8 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     parent_graph.define(fuse_slot, || FailOnMessage);
     let mut parent_graph = parent_graph.build();
     parent_graph.add_subtree("dynamic", DynamicTree::new());
-    let parent_graph =
-        parent_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let parent_graph = parent_graph
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = Tree::new();
     tree.add_subtree("parent", parent_graph);
     let root = tree.spawn().expect("runtime builds");
@@ -815,7 +821,7 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
     });
 
     let handle = tree.spawn().expect("runtime builds");
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let sender = tokio::spawn(async move {
         worker_ref
             .send("run-path".to_owned())
@@ -863,7 +869,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
     let control = handle.scope();
 
     control
-        .snapshots()
+        .subscribe_snapshots()
         .wait_for(|snapshot| {
             snapshot
                 .children
@@ -872,7 +878,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         })
         .await
         .expect("runtime reported running");
-    let _lifecycle = control.lifecycle_events();
+    let _lifecycle = control.subscribe_lifecycle();
     assert_eq!(control.snapshot().children.len(), 1);
 
     worker_ref
@@ -880,7 +886,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .await
         .expect("message sent through cloned ref");
 
-    let mut snapshots = control.snapshots();
+    let mut snapshots = control.subscribe_snapshots();
     let completed = snapshots
         .wait_for(|snapshot| {
             snapshot
@@ -969,7 +975,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
         .expect("sidecar started");
     timeout(
         Duration::from_secs(1),
-        handle.scope().snapshots().wait_for(|snapshot| {
+        handle.scope().subscribe_snapshots().wait_for(|snapshot| {
             snapshot
                 .child("actor")
                 .is_some_and(|child| child.state.is_running())
@@ -999,7 +1005,7 @@ async fn snapshot_wait_reports_all_children_running_after_spawn() {
         .spawn()
         .expect("runtime builds");
 
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let all_running = snapshots.wait_for(|snapshot| {
         snapshot.children.len() == 2
             && snapshot
@@ -1041,11 +1047,11 @@ async fn snapshot_child_wait_arms_before_the_future_is_polled() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
-    let mut snapshots = handle.scope().snapshots();
+    let mut snapshots = handle.scope().subscribe_snapshots();
     let baseline = handle
         .scope()
         .snapshot()
@@ -1088,7 +1094,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::always().limit(1, Duration::from_secs(60)))
+        .default_child_restart(RestartPolicy::always().limit(1, Duration::from_secs(60)))
         .spawn()
         .expect("runtime builds");
 
@@ -1157,7 +1163,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     let graph = builder.build();
 
     let handle = graph
-        .default_restart(RestartPolicy::always())
+        .default_child_restart(RestartPolicy::always())
         .spawn()
         .expect("runtime builds");
 
@@ -1305,7 +1311,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
     handle.scope().request_shutdown();
     let shutdown = tokio::spawn({
         let handle = handle.scope();
-        async move { handle.wait().await }
+        async move { handle.wait_stopped().await }
     });
     tokio::task::yield_now().await;
     release_gate.notify_one();
@@ -1348,10 +1354,10 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
     });
     let handle = builder
         .build()
-        .default_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
+        .default_child_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
         .spawn()
         .expect("runtime builds");
-    let mut lifecycle = handle.scope().lifecycle_events();
+    let mut lifecycle = handle.scope().subscribe_lifecycle();
     let scope = handle.scope();
 
     timeout(Duration::from_secs(1), started.notified())
@@ -1428,10 +1434,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("runtime-added actor reported in runtime stats");
     assert_eq!(extra_stats.stats.messages_accepted, 1);
 
-    dynamic
-        .remove_child_named("extra")
-        .await
-        .expect("actor removed");
+    dynamic.remove_named("extra").await.expect("actor removed");
     let stats = handle.scope().actor_stats();
     assert!(
         stats.iter().all(|stats| stats.stats.actor_id != "extra"),

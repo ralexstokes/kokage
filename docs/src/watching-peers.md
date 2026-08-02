@@ -15,7 +15,7 @@ like everything else. The event carries the stable `actor_id` once; match its
 [`MonitorEventKind`] for the transition:
 
 ```rust
-use kokage::prelude::*;
+use kokage::{MonitorEvent, MonitorEventKind, prelude::*};
 use tokio::sync::mpsc;
 
 struct Press;

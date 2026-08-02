@@ -31,10 +31,12 @@
 //!
 //! # Supervision shape
 //!
-//! A nested `Supervision` declaration defines the tree and generates matching
-//! typed handles. It reserves every ref before the factories are wired, so the
-//! cyclic core needs no application-owned slots. Actor ids are local to their
-//! containing supervision scope.
+//! Ordinary trees define the topology, and actor placement returns stable refs
+//! for actors already declared. `ActorSlot` reserves only the forward refs
+//! needed before their factories are placed, including refs across nested
+//! scopes, so the cyclic core remains fully typed. Every reserved slot must be
+//! defined: an undefined slot is a runtime wiring error whose ref waits forever.
+//! Actor ids are local to their containing supervision scope.
 //!
 //! ```text
 //! root (OneForOne)
@@ -56,7 +58,7 @@
 //! └── core      OneForOne
 //!               journal · budget · guard · tool_host · router
 //!               (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
-//!                is the cycle that justifies the derive)
+//!                is the cycle that requires refs-first slot wiring)
 //! ```
 //!
 //! # Data flow
@@ -131,13 +133,16 @@ use std::{
     time::Duration,
 };
 
-use kokage::{DynamicScopeRef, Guard as OperationGuard, Mailbox, ScopeRef, Strategy, prelude::*};
+use kokage::{
+    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEventKind,
+    ScopeRef, Strategy, Tree, prelude::*,
+};
 use tokio::time::Instant;
 
-use budget::{Budget, BudgetFactory};
+use budget::BudgetFactory;
 use chat::ChatSim;
-use gateway::{Inbound, InboundFactory, Outbound, OutboundFactory, Progress, ProgressFactory};
-use guard::{Guard, GuardFactory};
+use gateway::{InboundFactory, OutboundFactory, ProgressFactory};
+use guard::GuardFactory;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
@@ -153,42 +158,6 @@ type AnyError = Box<dyn Error + Send + Sync>;
 
 /// Gateway actors use a shallower mailbox than the core scope's default.
 const GATEWAY_MAILBOX: usize = 32;
-
-#[derive(kokage::Supervision)]
-#[supervision(strategy = Strategy::RestForOne)]
-struct GatewayTree {
-    #[supervision(mailbox = Mailbox::queue(GATEWAY_MAILBOX))]
-    outbound: Outbound,
-    #[supervision(
-        mailbox = Mailbox::latest_by_key(
-            GATEWAY_MAILBOX,
-            |message: &ProgressMsg| message.chat(),
-        )
-    )]
-    progress: Progress,
-    #[supervision(mailbox = Mailbox::queue(GATEWAY_MAILBOX))]
-    inbound: Inbound,
-}
-
-#[derive(kokage::Supervision)]
-struct CoreTree {
-    #[supervision(message_size = messages::journal_message_size)]
-    journal: Journal,
-    budget: Budget,
-    guard: Guard,
-    tool_host: ToolHost,
-    router: router::Router,
-}
-
-#[derive(kokage::Supervision)]
-struct ControlPlane {
-    #[supervision(dynamic)]
-    sessions: kokage::DynamicScope,
-    #[supervision(scope)]
-    gateway: GatewayTree,
-    #[supervision(scope)]
-    core: CoreTree,
-}
 
 struct App {
     running_tree: kokage::RunningTree,
@@ -234,60 +203,83 @@ async fn build_app() -> Result<App, AnyError> {
     let gate = Arc::new(AtomicBool::new(true));
     let proof = Proof::default();
     let session_epoch = Arc::new(AtomicU64::new(0));
-    let (tree, handles) = ControlPlane::tree(|handles| ControlPlaneFactories {
-        gateway: GatewayTreeFactories {
-            outbound: OutboundFactory { chat: chat.clone() },
-            progress: ProgressFactory { chat: chat.clone() },
-            inbound: InboundFactory {
+    let journal_slot = ActorSlot::<JournalMsg>::new("journal");
+    let journal = journal_slot.actor_ref();
+    let guard_slot = ActorSlot::<GuardMsg>::new("guard");
+    let guard = guard_slot.actor_ref();
+    let router_slot = ActorSlot::<RouterMsg>::new("router");
+    let router = router_slot.actor_ref();
+
+    let sessions_tree = DynamicTree::new();
+    let sessions = sessions_tree.scope();
+    let mut tree = Tree::new();
+    tree.add_subtree("sessions", sessions_tree);
+
+    let mut gateway_tree = Tree::new().strategy(Strategy::RestForOne);
+    let outbound = gateway_tree.add_actor_spec(
+        ActorSpec::new("outbound", OutboundFactory { chat: chat.clone() })
+            .mailbox(Mailbox::queue(GATEWAY_MAILBOX)),
+    );
+    let progress = gateway_tree.add_actor_spec(
+        ActorSpec::new("progress", ProgressFactory { chat: chat.clone() }).mailbox(
+            Mailbox::latest_by_key(GATEWAY_MAILBOX, |message: &ProgressMsg| message.chat()),
+        ),
+    );
+    gateway_tree.add_actor_spec(
+        ActorSpec::new(
+            "inbound",
+            InboundFactory {
                 chat: chat.clone(),
-                journal: handles.core.journal.clone(),
-                router: handles.core.router.clone(),
+                journal: journal.clone(),
+                router: router.clone(),
             },
+        )
+        .mailbox(Mailbox::queue(GATEWAY_MAILBOX)),
+    );
+
+    let mut core_tree = Tree::new();
+    core_tree.add_actor_spec(
+        journal_slot
+            .define(Journal::default)
+            .message_size(messages::journal_message_size),
+    );
+    let budget = core_tree.add_actor_spec(ActorSpec::new(
+        "budget",
+        BudgetFactory {
+            guard: guard.clone(),
         },
-        core: CoreTreeFactories {
-            journal: Journal::default,
-            budget: BudgetFactory {
-                guard: handles.core.guard.clone(),
-            },
-            guard: GuardFactory {
-                budget: handles.core.budget.clone(),
-                router: handles.core.router.clone(),
-                model: model.clone(),
-                gate: gate.clone(),
-            },
-            tool_host: ToolHost::default,
-            // Router state dies with a router incarnation; its generated
-            // sessions handle and this allocator do not. Keeping both in the
-            // durable factory lets a reborn router reach the same mount without
-            // re-minting ids that still exist.
-            router: RouterFactory {
-                mount: handles.sessions.clone(),
-                journal: handles.core.journal.clone(),
-                budget: handles.core.budget.clone(),
-                tool_host: handles.core.tool_host.clone(),
-                guard: handles.core.guard.clone(),
-                outbound: handles.gateway.outbound.clone(),
-                progress: handles.gateway.progress.clone(),
-                gate: gate.clone(),
-                model: model_client.clone(),
-                session_epoch: session_epoch.clone(),
-                proof: proof.clone(),
-            },
-        },
-    });
+    ));
+    core_tree.add_actor_spec(guard_slot.define(GuardFactory {
+        budget: budget.clone(),
+        router: router.clone(),
+        model: model.clone(),
+        gate: gate.clone(),
+    }));
+    let tool_host = core_tree.add_actor_spec(ActorSpec::new("tool_host", ToolHost::default));
+    // Router state dies with a router incarnation; its sessions handle and
+    // this allocator do not. Keeping both in the durable factory lets a reborn
+    // router reach the same mount without re-minting ids that still exist.
+    core_tree.add_actor_spec(router_slot.define(RouterFactory {
+        mount: sessions.clone(),
+        journal: journal.clone(),
+        budget: budget.clone(),
+        tool_host: tool_host.clone(),
+        guard: guard.clone(),
+        outbound: outbound.clone(),
+        progress: progress.clone(),
+        gate: gate.clone(),
+        model: model_client.clone(),
+        session_epoch: session_epoch.clone(),
+        proof: proof.clone(),
+    }));
+
+    let gateway = tree.add_subtree("gateway", gateway_tree);
+    let core = tree.add_subtree("core", core_tree);
     let running_tree = tree.spawn()?;
-    let gateway = handles.gateway.scope();
-    let core = handles.core.scope();
-    let sessions = handles.sessions.clone();
-    let router = handles.core.router.clone();
-    let journal = handles.core.journal.clone();
-    let budget = handles.core.budget.clone();
-    let guard = handles.core.guard.clone();
-    let tool_host = handles.core.tool_host.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch =
         gateway
-            .lifecycle_events()
+            .subscribe_lifecycle()
             .direct_children()
             .forward_to(&guard, move |event| {
                 if let Some(total) = lifecycle_total_restarts(&event) {
@@ -321,7 +313,9 @@ async fn phase_0(app: &App) -> Result<(), AnyError> {
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
-    println!("PHASE 0 OK — RawActor readiness_gated + mark_ready; pre-spawn dynamic subtree mount");
+    println!(
+        "PHASE 0 OK — RawActor manual_readiness + mark_ready; pre-spawn dynamic subtree mount"
+    );
     Ok(())
 }
 

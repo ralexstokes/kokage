@@ -1,0 +1,24 @@
+error[E0432]: unresolved imports `kokage::prelude::Backoff`, `kokage::prelude::CallError`, `kokage::prelude::ChildHandle`, `kokage::prelude::ControlError`, `kokage::prelude::MailboxShutdown`, `kokage::prelude::MonitorEvent`, `kokage::prelude::MonitorEventKind`, `kokage::prelude::OneShotTaskSpec`, `kokage::prelude::RestartPolicy`, `kokage::prelude::RunningScope`, `kokage::prelude::SendError`, `kokage::prelude::SendErrorKind`, `kokage::prelude::Shutdown`, `kokage::prelude::Strategy`
+ --> tests/ui/prelude/explicit-specialized-imports.rs:2:5
+  |
+2 |     Backoff, CallError, ChildHandle, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
+  |     ^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^ no `MonitorEventKind` in `prelude`
+  |     |        |          |            |             |                |
+  |     |        |          |            |             |                no `MonitorEvent` in `prelude`
+  |     |        |          |            |             no `MailboxShutdown` in `prelude`
+  |     |        |          |            no `ControlError` in `prelude`
+  |     |        |          no `ChildHandle` in `prelude`
+  |     |        no `CallError` in `prelude`
+  |     no `Backoff` in `prelude`
+3 |     OneShotTaskSpec, RestartPolicy, RunningScope, SendError, SendErrorKind, Shutdown, Strategy,
+  |     ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^  ^^^^^^^^
+  |     |                |              |
+  |     |                |              no `RunningScope` in `prelude`
+  |     |                no `RestartPolicy` in `prelude`
+  |     no `OneShotTaskSpec` in `prelude`
+  |
+help: a similar name exists in the module
+  |
+3 -     OneShotTaskSpec, RestartPolicy, RunningScope, SendError, SendErrorKind, Shutdown, Strategy,
+3 +     OneShotTaskSpec, RestartPolicy, RunningTree, SendError, SendErrorKind, Shutdown, Strategy,
+  |

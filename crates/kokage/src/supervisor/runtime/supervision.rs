@@ -14,7 +14,7 @@ use tracing::{debug, trace};
 
 use crate::supervisor::{
     CancellationToken,
-    child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
+    child::{ChildDefinition, ChildKind, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitKind, RuntimeEvent},
@@ -297,8 +297,8 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) default_restart: RestartPolicy,
-    pub(crate) default_shutdown: Shutdown,
+    pub(crate) default_child_restart: RestartPolicy,
+    pub(crate) default_child_shutdown: Shutdown,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
@@ -447,8 +447,8 @@ impl SupervisorRuntime {
             meta: RuntimeMeta {
                 strategy: config.strategy,
                 kind,
-                default_restart: config.default_restart,
-                default_shutdown: config.default_shutdown,
+                default_child_restart: config.default_child_restart,
+                default_child_shutdown: config.default_child_shutdown,
                 path_prefix,
                 observability,
                 parent_link,
@@ -721,7 +721,7 @@ impl SupervisorRuntime {
         {
             return Ok(());
         }
-        let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
+        let readiness_gated = entry.runtime.definition.readiness.is_gated();
         let (old_generation, new_generation) = self.spawn_child(item.key)?;
         if self.meta.kind == ScopeKind::Ordered && readiness_gated {
             self.start_sequence
@@ -919,7 +919,11 @@ impl SupervisorRuntime {
         }
         // Skipped by the group respawn and never restarted afterwards; if
         // this supervisor is the root, that judgment is final.
-        if self.children[key].runtime.definition.remove_when_done {
+        if self.children[key]
+            .runtime
+            .definition
+            .remove_on_terminal_exit
+        {
             self.finalize_removed_child(key, false);
         } else {
             self.mark_child_terminal(key);
@@ -954,8 +958,10 @@ impl SupervisorRuntime {
     fn add_child(&mut self, mut child: crate::supervisor::child::ChildSpec) -> CommandResult<u64> {
         self.assert_dynamic_membership();
 
-        ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
-            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner).apply_defaults(
+            self.meta.default_child_restart,
+            self.meta.default_child_shutdown,
+        );
 
         if child.id().is_empty() {
             return Err(ControlError::Rejected(
@@ -1003,8 +1009,10 @@ impl SupervisorRuntime {
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
-        ChildDefinition::make_mut_preserving_supervisor_identity(&mut spec.inner)
-            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        ChildDefinition::make_mut_preserving_supervisor_identity(&mut spec.inner).apply_defaults(
+            self.meta.default_child_restart,
+            self.meta.default_child_shutdown,
+        );
         let id = spec.id().to_owned();
         if id.is_empty() {
             return Err(ControlError::Rejected(
@@ -1397,7 +1405,7 @@ impl SupervisorRuntime {
             if self.children[classified.key]
                 .runtime
                 .definition
-                .remove_when_done
+                .remove_on_terminal_exit
             {
                 let startup_result = if startup_aborted {
                     self.terminal_start_member(classified.key, lineage)
@@ -1994,7 +2002,7 @@ impl SupervisorRuntime {
                 },
                 restart_count: entry.runtime.restart_tracker.total_restarts(),
                 restart_policy: entry.runtime.definition.restart,
-                remove_when_done: entry.runtime.definition.remove_when_done,
+                remove_on_terminal_exit: entry.runtime.definition.remove_on_terminal_exit,
                 next_restart_in: entry
                     .runtime
                     .next_restart_deadline
@@ -2394,7 +2402,7 @@ mod tests {
                     ctx.shutdown_token().cancelled().await;
                     Ok(())
                 })
-                .wait_for_ready(),
+                .manual_readiness(Duration::from_secs(5)),
             )
             .build()
             .expect("valid supervisor config");

@@ -154,7 +154,7 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
     })
     .restart(RestartPolicy::never());
     let handle_owner = Supervisor::dynamic()
-        .default_restart(RestartPolicy::always())
+        .default_child_restart(RestartPolicy::always())
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -196,7 +196,7 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
         .add_child(
             TaskSpec::new("temporary", |_ctx| async move { Ok(()) })
                 .restart(RestartPolicy::never())
-                .remove_when_done(),
+                .remove_on_terminal_exit(),
         )
         .await
         .expect("temporary child added");
@@ -227,6 +227,66 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
 }
 
 #[tokio::test]
+async fn terminal_failures_and_panics_remove_opted_in_dynamic_children() {
+    let supervisor = Supervisor::dynamic()
+        .build()
+        .expect("empty supervisor builds");
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
+    let mut events = common::event_watch(&handle);
+
+    let terminal_tasks = [
+        (
+            "failed",
+            ExitStatusView::Failed("terminal failure".to_owned()),
+            TaskSpec::new("failed", |_ctx| async move {
+                Err(common::test_error("terminal failure"))
+            })
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
+        ),
+        (
+            "panicked",
+            ExitStatusView::Panicked,
+            TaskSpec::new("panicked", |_ctx| async move {
+                panic!("terminal panic");
+            })
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
+        ),
+    ];
+
+    for (expected_id, expected_status, task) in terminal_tasks {
+        handle
+            .dynamic()
+            .expect("dynamic supervisor")
+            .add_child(task)
+            .await
+            .expect("terminal child added");
+
+        let mut exit = None;
+        loop {
+            match common::recv_supervisor_event(&mut events).await {
+                ObservedEvent::ChildExited { id, status, .. } if id == expected_id => {
+                    exit = Some(status);
+                }
+                ObservedEvent::ChildRemoved { id, .. } if id == expected_id => {
+                    assert_eq!(exit, Some(expected_status));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(handle.snapshot().child(expected_id).is_none());
+    }
+
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown should succeed");
+}
+
+#[tokio::test]
 async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
     let trigger = Arc::new(Notify::new());
     let supervisor = Supervisor::ordered()
@@ -237,7 +297,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 Ok(())
             })
             .restart(RestartPolicy::never())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .child(
             TaskSpec::new("trigger", {
@@ -296,7 +356,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .child(TaskSpec::new("trigger", {
             let fail_trigger = fail_trigger.clone();
@@ -365,7 +425,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .child(
             TaskSpec::new("trigger", {
@@ -876,7 +936,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic()
-            .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1))),
+            .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1))),
         [
             TaskSpec::new("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -1157,7 +1217,7 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_child_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(60),
             crate::supervisor::Backoff::fixed(std::time::Duration::from_secs(30)),
@@ -1214,7 +1274,7 @@ async fn remove_child_preempts_zero_delay_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(
+        Supervisor::dynamic().default_child_restart(
             crate::supervisor::RestartPolicy::on_failure()
                 .limit(8, std::time::Duration::from_secs(1)),
         ),
@@ -1269,7 +1329,7 @@ async fn remove_child_preempts_zero_delay_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle_owner = Supervisor::dynamic()
-        .default_restart(
+        .default_child_restart(
             crate::supervisor::RestartPolicy::on_failure()
                 .limit(8, std::time::Duration::from_secs(1)),
         )
@@ -1344,7 +1404,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let backoff = std::time::Duration::from_millis(80);
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().default_restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_child_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(1),
             crate::supervisor::Backoff::fixed(backoff),

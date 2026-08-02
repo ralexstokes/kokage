@@ -168,7 +168,7 @@ pub struct ActorSpec<M: Send + 'static> {
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
     pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
 }
 
 impl<M: Send + 'static> ActorSpec<M> {
@@ -187,7 +187,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             restart: None,
             shutdown: None,
             mailbox_shutdown: None,
-            remove_when_done: false,
+            remove_on_terminal_exit: false,
         }
     }
 
@@ -236,11 +236,11 @@ impl<M: Send + 'static> ActorSpec<M> {
         self
     }
 
-    /// Marks finite dynamic work as non-restarting and removable on completion.
+    /// Marks finite dynamic work as non-restarting and removable on terminal exit.
     #[must_use]
     pub fn temporary(mut self) -> Self {
         self.restart = Some(RestartPolicy::never());
-        self.remove_when_done = true;
+        self.remove_on_terminal_exit = true;
         self
     }
 
@@ -248,9 +248,15 @@ impl<M: Send + 'static> ActorSpec<M> {
     ///
     /// By default a terminal child remains visible as an inactive membership.
     /// This setting is independent of the selected [`RestartPolicy`].
+    /// It does not turn an otherwise eligible restart into a terminal exit;
+    /// exhausting the restart budget still fails the enclosing scope.
+    /// Here, terminal means an exit a running supervisor evaluates and declines
+    /// to restart. The option is not applied during supervisor shutdown, and a
+    /// non-`Never` child completing during a group-restart drain is respawned
+    /// with the group.
     #[must_use]
-    pub fn remove_when_done(mut self) -> Self {
-        self.remove_when_done = true;
+    pub fn remove_on_terminal_exit(mut self) -> Self {
+        self.remove_on_terminal_exit = true;
         self
     }
 
@@ -291,7 +297,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             restart,
             shutdown,
             mailbox_shutdown,
-            remove_when_done,
+            remove_on_terminal_exit,
         } = self;
         let deferred = DeferredActor(Box::new(DeferredActorSpec {
             actor_id,
@@ -305,7 +311,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             restart,
             shutdown,
             mailbox_shutdown,
-            remove_when_done,
+            remove_on_terminal_exit,
         }
     }
 }
@@ -317,7 +323,7 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("mailbox_shutdown", &self.mailbox_shutdown)
-            .field("remove_when_done", &self.remove_when_done)
+            .field("remove_on_terminal_exit", &self.remove_on_terminal_exit)
             .finish_non_exhaustive()
     }
 }
@@ -329,7 +335,7 @@ pub(crate) struct ActorNode {
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
     pub(crate) mailbox_shutdown: Option<MailboxShutdown>,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
 }
 
 impl ActorNode {
@@ -364,7 +370,7 @@ impl fmt::Debug for ActorNode {
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("mailbox_shutdown", &self.mailbox_shutdown)
-            .field("remove_when_done", &self.remove_when_done)
+            .field("remove_on_terminal_exit", &self.remove_on_terminal_exit)
             .finish()
     }
 }
@@ -420,7 +426,7 @@ impl<M: Send + 'static> ActorSlot<M> {
             restart: None,
             shutdown: None,
             mailbox_shutdown: None,
-            remove_when_done: false,
+            remove_on_terminal_exit: false,
         }
     }
 }
@@ -535,10 +541,10 @@ mod tests {
         let spec = spec
             .restart(RestartPolicy::never())
             .shutdown(Shutdown::abort())
-            .remove_when_done();
+            .remove_on_terminal_exit();
         assert_eq!(spec.restart, Some(RestartPolicy::never()));
         assert_eq!(spec.shutdown, Some(Shutdown::abort()));
-        assert!(spec.remove_when_done);
+        assert!(spec.remove_on_terminal_exit);
 
         let slot = ActorSlot::<OpaqueMessage>::new("slot");
         let _actor_ref = slot.actor_ref();
@@ -553,7 +559,7 @@ mod tests {
             Some(Shutdown::graceful_for(Duration::from_secs(1)))
         );
         assert_eq!(spec.mailbox_shutdown, Some(MailboxShutdown::Discard));
-        assert!(!spec.remove_when_done);
+        assert!(!spec.remove_on_terminal_exit);
     }
 
     #[test]
@@ -561,7 +567,7 @@ mod tests {
         let spec = ActorSpec::new("temporary", || OpaqueActor).temporary();
 
         assert_eq!(spec.restart, Some(RestartPolicy::never()));
-        assert!(spec.remove_when_done);
+        assert!(spec.remove_on_terminal_exit);
     }
 
     #[test]

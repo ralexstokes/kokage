@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with owning [`RunningTree`] and
-//! [`RunningDynamicTree`] values plus non-owning scope references.
+//! async scheduler (Tokio today), with owning [`RunningTree`] values plus
+//! non-owning scope references.
 //!
 //! Add each actor's id and factory directly to a [`Tree`], then spawn it.
 //! Use [`ActorSpec`] when a declaration needs explicit policy overrides:
@@ -42,10 +42,11 @@
 //! configure and place the resulting specs in the desired scopes. Actor ids
 //! are local to their containing scope, so sibling scopes may reuse an id.
 //!
-//! The [`prelude`] re-exports the common composition, actor, and task surface plus
-//! snapshot observation. Raw actor execution types live in [`raw`],
-//! lifecycle-history types live in [`observe`], and less common actor and
-//! supervisor types stay at the crate root.
+//! The [`prelude`] re-exports the normal composition, actor, and restarting-task
+//! surface. Raw actor execution types live in [`raw`], lifecycle and topology
+//! observation types live in [`observe`], and policy configuration,
+//! specialized errors, monitors, and one-shot task declarations stay at the
+//! crate root.
 //!
 //! # Core types
 //!
@@ -54,7 +55,7 @@
 //! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
 //! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
-//! | [`RunningTree`] / [`RunningDynamicTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
+//! | [`RunningTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
 //! | [`ScopeRef`] / [`DynamicScopeRef`] | Cheaply cloneable, non-owning scope references; only the dynamic form carries membership mutation. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`raw::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -115,6 +116,10 @@
 //! alongside membership, restart, and supervisor transitions. The mechanisms
 //! remain separate so each keeps the identity,
 //! ordering, and delivery contract appropriate to its audience.
+//! [`ScopeRef::observe_children`] is the reducer-oriented projection: it
+//! aligns a snapshot with direct-child transitions, suppresses transitions
+//! already represented by that snapshot, and recovers queue overflow or scope
+//! reincarnation with a complete [`observe::ChildObservationUpdate::Reset`].
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
@@ -124,15 +129,12 @@
 //! and lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
 //! operation; retain it or call [`Guard::detach`] to keep the scoped work alive.
 //!
-//! # Static declarations
+//! # Actor factories
 //!
-//! Enable the opt-in `derive` feature to generate static declarations:
-//! `#[derive(ActorFactory)]` produces reusable actor factories, while
-//! `#[derive(Supervision)]` lowers one nested struct declaration into an
-//! ordinary [`Tree`] plus a matching bundle of actor and scope handles.
-//! Derive macros are intentionally not part of [`prelude`]; import
-//! [`ActorFactory`] or [`Supervision`] from the crate root, or use their fully
-//! qualified `kokage` paths.
+//! Enable the opt-in `derive` feature to use `#[derive(ActorFactory)]` for
+//! reusable actor factories. The derive macro is intentionally not part of
+//! [`prelude`]; import [`ActorFactory`] from the crate root, or use its fully
+//! qualified `kokage` path.
 //!
 //! # Cyclic wiring
 //!
@@ -202,7 +204,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | no | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
+//! | `derive` | no | Re-exports `#[derive(ActorFactory)]`. |
 //! | `host` | no | Direct single-actor hosting through `ActorSpec::into_host` and `raw::ActorHost`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 //! | `serde` | no | Serialization support for outlines, actor stats, and view types. |
@@ -235,46 +237,48 @@ pub mod observe {
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
         supervisor::{
-            ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot, ChildStateView,
-            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
-            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
-            SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildEvent, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
+            ChildObservationWatch, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
+            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
+            SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }
 
 /// Common imports for `kokage` consumers.
 ///
-/// This prelude covers the actor traits and contexts, static and dynamic tree
-/// composition, child declarations, common supervision policies and errors,
-/// and actor-owned operations. Cyclic-wiring declarations and specialized
-/// errors remain at the crate root; snapshots and lifecycle types live in
-/// [`observe`], and raw actor hosting lives in [`raw`].
+/// This prelude covers the actor traits, references, contexts, and protocol
+/// vocabulary; static and dynamic tree composition; ordinary actor and
+/// restarting-task declarations; basic messaging and ownership; and keyed
+/// handler timers.
 ///
-/// With the `derive` feature enabled, derive macros are explicit root imports
-/// rather than prelude members. Import `ActorFactory` or `Supervision` for an
-/// unqualified derive, or use the fully qualified `kokage` path.
+/// Policy configuration, concrete errors, peer-monitor event types, one-shot
+/// task declarations, and cyclic-wiring declarations remain explicit imports
+/// from the crate root. Snapshots and lifecycle types live in [`observe`], and
+/// raw actor hosting lives in [`raw`].
+///
+/// With the `derive` feature enabled, `ActorFactory` is an explicit root import
+/// rather than a prelude member. Import it for an unqualified derive, or use
+/// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
-        DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
-        OneShotTaskSpec, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
-        SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec,
+        Actor, ActorRef, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, Guard,
+        Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext, TaskRef, TaskSpec,
         TimerKey, Tree,
     };
 }
 
 #[cfg(feature = "derive")]
-pub use kokage_derive::{ActorFactory, Supervision};
+pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
     ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeRef, TaskError, TaskRef};
-#[cfg(feature = "derive")]
-pub use supervision::{DynamicScope, Supervision, SupervisionFactories};
+pub use runtime::{
+    ChildHandle, DynamicScopeRef, RunningScope, RunningTree, ScopeRef, TaskError, TaskRef,
+};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, MailboxShutdown,

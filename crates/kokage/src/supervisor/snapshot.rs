@@ -162,8 +162,9 @@ pub struct SupervisorSnapshot {
     /// published.
     ///
     /// For a gap-free direct-child state-plus-stream view, use
-    /// [`ScopeRef::observe_children`](crate::ScopeRef::observe_children), then
-    /// discard watched events whose `seq` is less than or equal to this value.
+    /// [`ScopeRef::observe_children`](crate::ScopeRef::observe_children). Its
+    /// specialized watch uses this value internally to suppress transitions
+    /// already reflected by the initial snapshot and later recovery resets.
     /// A pre-spawn snapshot projects statically configured children before
     /// their first `Added` transition; reducers should apply `Added` as an
     /// idempotent membership upsert.
@@ -195,8 +196,7 @@ pub struct ChildSnapshot {
     #[cfg_attr(feature = "serde", serde(default))]
     pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub remove_when_done: bool,
+    pub remove_on_terminal_exit: bool,
     /// Time remaining until the next scheduled restart, if a backoff delay is
     /// pending.
     pub next_restart_in: Option<Duration>,
@@ -267,7 +267,7 @@ impl ChildSnapshot {
             membership: ChildMembershipView::Active,
             restart_count: 0,
             restart_policy: RestartPolicy::default(),
-            remove_when_done: false,
+            remove_on_terminal_exit: false,
             next_restart_in: None,
             supervisor: None,
         }
@@ -304,6 +304,14 @@ pub enum ExitStatus {
         /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
+    /// The child did not report manual startup readiness within its declared
+    /// bound.
+    ReadinessTimedOut {
+        /// Configured manual-readiness bound.
+        timeout: Duration,
+        /// Whether shutdown was requested for this generation.
+        cancelled: bool,
+    },
     /// The child task panicked.
     Panicked {
         /// Whether shutdown was requested for this generation.
@@ -323,6 +331,7 @@ impl ExitStatus {
         match status {
             ExitKind::Completed => Self::Completed { cancelled },
             ExitKind::Failed(message) => Self::Failed { message, cancelled },
+            ExitKind::ReadinessTimedOut(timeout) => Self::ReadinessTimedOut { timeout, cancelled },
             ExitKind::Panicked => Self::Panicked { cancelled },
             ExitKind::Aborted { after_grace } => Self::Aborted {
                 after_grace,
@@ -349,6 +358,15 @@ impl ExitStatus {
         }
     }
 
+    /// Returns the configured bound when this exit was caused by a missed
+    /// manual-readiness deadline.
+    pub fn readiness_timeout(&self) -> Option<Duration> {
+        match self {
+            Self::ReadinessTimedOut { timeout, .. } => Some(*timeout),
+            _ => None,
+        }
+    }
+
     /// Returns whether the child task panicked.
     pub fn is_panicked(&self) -> bool {
         matches!(self, Self::Panicked { .. })
@@ -371,6 +389,7 @@ impl ExitStatus {
         match self {
             Self::Completed { cancelled }
             | Self::Failed { cancelled, .. }
+            | Self::ReadinessTimedOut { cancelled, .. }
             | Self::Panicked { cancelled }
             | Self::Aborted { cancelled, .. } => *cancelled,
         }
@@ -644,7 +663,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_when_done_round_trips() {
+    fn remove_on_terminal_exit_is_required_while_unknown_fields_are_tolerated() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -654,11 +673,40 @@ mod tests {
                 previous_exit: None,
             },
         );
-        snapshot.remove_when_done = true;
+        snapshot.remove_on_terminal_exit = true;
         let value = serde_json::to_value(&snapshot).expect("child snapshot serializes");
-        assert_eq!(value["remove_when_done"], true);
+        assert_eq!(value["remove_on_terminal_exit"], true);
         let decoded: ChildSnapshot =
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
-        assert!(decoded.remove_when_done);
+        assert!(decoded.remove_on_terminal_exit);
+
+        let mut extended = value.clone();
+        extended
+            .as_object_mut()
+            .expect("child snapshot serializes as an object")
+            .insert("future_observation".to_owned(), serde_json::json!(true));
+        serde_json::from_value::<ChildSnapshot>(extended)
+            .expect("future child snapshot fields remain forward compatible");
+
+        let mut dual_key = value.clone();
+        dual_key
+            .as_object_mut()
+            .expect("child snapshot serializes as an object")
+            .insert("remove_when_done".to_owned(), serde_json::json!(false));
+        let decoded: ChildSnapshot = serde_json::from_value(dual_key)
+            .expect("unknown retired key is tolerated when the current key is present");
+        assert!(decoded.remove_on_terminal_exit);
+
+        let old_only = value
+            .to_string()
+            .replacen("remove_on_terminal_exit", "remove_when_done", 1);
+        let error = serde_json::from_str::<ChildSnapshot>(&old_only)
+            .expect_err("an old-only payload must lack the required current key");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `remove_on_terminal_exit`"),
+            "unexpected error: {error}"
+        );
     }
 }

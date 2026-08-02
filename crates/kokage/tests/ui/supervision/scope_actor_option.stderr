@@ -1,6 +1,0 @@
-error: a nested scope configures its contents on its own derived struct; only `id`, `restart`, and `shutdown` configure its parent edge
- --> tests/ui/supervision/scope_actor_option.rs:3:5
-  |
-3 | /     #[supervision(scope, mailbox = kokage::Mailbox::queue(8))]
-4 | |     child: Child,
-  | |________________^

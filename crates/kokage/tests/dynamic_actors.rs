@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-    MonitorEventKind, RestartPolicy, RunningDynamicTree, ScopeRef, SendError, SendErrorKind,
-    Shutdown, StopContext, SupervisorError, TaskSpec, Tree,
+    MonitorEventKind, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
+    StopContext, SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, ExitStatus, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -140,7 +140,7 @@ impl RawActor for Watcher {
 
 async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.snapshots();
+        let mut snapshots = handle.subscribe_snapshots();
         loop {
             if snapshots.latest().child(id).is_some() == present {
                 return;
@@ -161,7 +161,7 @@ async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
 // and only then is the surviving entry a retention decision.
 async fn wait_for_retained_terminal_child(handle: &DynamicScopeRef, id: &str) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.snapshots();
+        let mut snapshots = handle.subscribe_snapshots();
         loop {
             if snapshots
                 .latest()
@@ -184,7 +184,7 @@ async fn wait_for_retained_terminal_child(handle: &DynamicScopeRef, id: &str) {
         .await
         .expect("settling actor added");
     handle
-        .remove_child_named("settle")
+        .remove_named("settle")
         .await
         .expect("settling actor removed");
     wait_for_child(handle, "settle", false).await;
@@ -220,13 +220,13 @@ async fn wait_runtime_started(handle: &ScopeRef, phase: &str) {
 }
 
 async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
-    timeout(Duration::from_secs(2), handle.shutdown())
+    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_running_tree(running_tree: RunningDynamicTree, phase: &str) {
+async fn shutdown_running_tree(running_tree: RunningTree<DynamicScopeRef>, phase: &str) {
     timeout(Duration::from_secs(2), running_tree.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -340,7 +340,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert_eq!(sink.stats().actor_id, "sink");
 
     support::dynamic_root(&running_tree)
-        .remove_child_named("sink")
+        .remove_named("sink")
         .await
         .expect("sink removed");
     assert!(matches!(
@@ -514,9 +514,9 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = running_tree.scope().snapshots();
+    let mut snapshots = running_tree.scope().subscribe_snapshots();
     let remover = support::dynamic_root(&running_tree);
-    let removal = tokio::spawn(async move { remover.remove_child_named("removable").await });
+    let removal = tokio::spawn(async move { remover.remove_named("removable").await });
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
@@ -636,9 +636,9 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = running_tree.scope().snapshots();
+    let mut snapshots = running_tree.scope().subscribe_snapshots();
     let remover = support::dynamic_root(&running_tree);
-    let removal = tokio::spawn(async move { remover.remove_child_named("discarding").await });
+    let removal = tokio::spawn(async move { remover.remove_named("discarding").await });
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
@@ -722,7 +722,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("temporary actor added");
@@ -784,7 +784,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("transient actor added");
@@ -831,8 +831,8 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let running_tree = DynamicTree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort())
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
@@ -877,8 +877,8 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 #[tokio::test]
 async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     let running_tree = DynamicTree::new()
-        .default_restart(RestartPolicy::always())
-        .default_shutdown(Shutdown::abort())
+        .default_child_restart(RestartPolicy::always())
+        .default_child_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
@@ -906,7 +906,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
         .expect("pending actor added");
     timeout(
         Duration::from_millis(100),
-        support::dynamic_root(&running_tree).remove_child_named("inherited-shutdown"),
+        support::dynamic_root(&running_tree).remove_named("inherited-shutdown"),
     )
     .await
     .expect("supplied abort default makes removal immediate")
@@ -960,7 +960,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("transient actor added");
@@ -1022,7 +1022,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
 }
 
 #[tokio::test]
-async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
+async fn remove_on_terminal_exit_does_not_remove_an_actor_that_restarts() {
     let running_tree = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -1036,13 +1036,13 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                 }
             })
             .restart(RestartPolicy::on_failure())
-            .remove_when_done(),
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("restartable actor added");
 
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = running_tree.scope().snapshots();
+        let mut snapshots = running_tree.scope().subscribe_snapshots();
         loop {
             if snapshots
                 .latest()
@@ -1066,7 +1066,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
             .snapshot()
             .child("restart-once")
             .expect("restarting actor keeps its membership")
-            .remove_when_done,
+            .remove_on_terminal_exit,
         "a live snapshot reports the spec-level retention declaration"
     );
 
@@ -1156,7 +1156,7 @@ impl Actor for GatedMailboxProbe {
 #[tokio::test]
 async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
     let running_tree = DynamicTree::new()
-        .default_mailbox_shutdown(MailboxShutdown::Discard)
+        .default_actor_mailbox_shutdown(MailboxShutdown::Discard)
         .spawn()
         .expect("dynamic tree builds");
     let scope = support::dynamic_root(&running_tree);
@@ -1218,7 +1218,7 @@ async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
         .expect("drain count queued");
 
     let scope = running_tree.scope();
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
     scope.request_shutdown();
     timeout(
         Duration::from_secs(2),
@@ -1267,17 +1267,25 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 }
 
 #[tokio::test]
-async fn runtime_added_actor_can_override_mailbox_capacity() {
+async fn runtime_added_actors_use_scope_default_and_explicit_mailbox_capacities() {
     let running_tree = DynamicTree::new()
+        .default_actor_mailbox_capacity(4)
         .spawn()
         .expect("graphless runtime builds");
-    let sink = support::dynamic_root(&running_tree)
+    let scope = support::dynamic_root(&running_tree);
+    let inherited = scope
+        .add_actor_spec(ActorSpec::new("inherited", Drain::<u64>::new))
+        .await
+        .expect("actor with the scope default is added");
+    let overridden = scope
         .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(9)))
         .await
         .expect("actor with a capacity override is added");
 
-    sink.send(1).await.expect("message accepted");
-    assert_eq!(sink.stats().mailbox_capacity, 9);
+    inherited.send(1).await.expect("message accepted");
+    overridden.send(1).await.expect("message accepted");
+    assert_eq!(inherited.stats().mailbox_capacity, 4);
+    assert_eq!(overridden.stats().mailbox_capacity, 9);
 
     shutdown_running_tree(running_tree, "mailbox capacity override test shutdown").await;
 }
@@ -1444,7 +1452,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 
     assert!(matches!(
         support::dynamic_root(&running_tree)
-            .remove_child_named("dynamic")
+            .remove_named("dynamic")
             .await,
         Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
             if actor_id == "dynamic"

@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{ChildSpec, RestartPolicy, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{
+    ChildSpec, ExitStatus, RestartPolicy, Shutdown, Strategy, Supervisor, TaskSpec,
+};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::common;
@@ -35,7 +37,7 @@ async fn sequential_start_waits_for_explicit_readiness() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let second = TaskSpec::new("second", {
         let order = Arc::clone(&order);
         move |ctx| {
@@ -48,7 +50,7 @@ async fn sequential_start_waits_for_explicit_readiness() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
 
     let handle_owner = Supervisor::ordered()
         .child(first)
@@ -71,6 +73,123 @@ async fn sequential_start_waits_for_explicit_readiness() {
     common::shutdown_and_wait(&handle, "sequential readiness test shutdown")
         .await
         .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_readiness_timeout_is_a_restartable_startup_failure() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let task = TaskSpec::new("bounded", {
+        let attempts = Arc::clone(&attempts);
+        move |ctx| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if attempt == 0 {
+                    std::future::pending::<()>().await;
+                }
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .manual_readiness(Duration::from_millis(10));
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    common::wait_started(&handle, "replacement task readiness")
+        .await
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    common::shutdown_and_wait(&handle, "bounded readiness restart shutdown")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_manual_readiness_timeout_aborts_startup() {
+    let task = TaskSpec::new("bounded", |_| async {
+        std::future::pending::<()>().await;
+        Ok(())
+    })
+    .restart(RestartPolicy::never())
+    .manual_readiness(Duration::from_millis(10));
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    assert!(matches!(
+        common::wait_started(&handle, "terminal readiness timeout").await,
+        Err(crate::supervisor::SupervisorError::StartupAborted(_))
+    ));
+    let snapshot = handle.snapshot();
+    let exit = snapshot
+        .child("bounded")
+        .and_then(|child| child.state.last_exit())
+        .expect("timed-out startup records an exit");
+    assert_eq!(exit.readiness_timeout(), Some(Duration::from_millis(10)));
+    common::shutdown_and_wait(&handle, "terminal readiness timeout shutdown")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn manual_readiness_reported_at_the_deadline_wins_over_timeout() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let timeout = Duration::from_millis(10);
+    let task = TaskSpec::new("boundary", {
+        let attempts = Arc::clone(&attempts);
+        move |ctx| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(timeout).await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .manual_readiness(timeout);
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    common::wait_started(&handle, "deadline readiness")
+        .await
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    common::shutdown_and_wait(&handle, "deadline readiness shutdown")
+        .await
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_disarms_a_short_manual_readiness_deadline() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let task = TaskSpec::new("slow-stop", move |ctx| {
+        let started_tx = started_tx.clone();
+        async move {
+            let _ = started_tx.send(());
+            ctx.shutdown_token().cancelled().await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok(())
+        }
+    })
+    .shutdown(Shutdown::graceful_for(Duration::from_millis(50)))
+    .manual_readiness(Duration::from_millis(10));
+
+    let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
+    let handle = owner.handle();
+    started_rx.recv().await.expect("task begins waiting");
+    common::shutdown_and_wait(&handle, "short readiness deadline shutdown")
+        .await
+        .unwrap();
+
+    let snapshot = handle.snapshot();
+    let exit = snapshot
+        .child("slow-stop")
+        .and_then(|child| child.state.last_exit())
+        .expect("shutdown records the pre-ready exit");
+    assert!(matches!(exit, ExitStatus::Completed { cancelled: true }));
 }
 
 #[tokio::test]
@@ -103,7 +222,7 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let second = TaskSpec::new("second", {
         let order = Arc::clone(&order);
         move |ctx| {
@@ -116,7 +235,7 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -165,7 +284,7 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
         Err(std::io::Error::other("init failed").into())
     })
     .restart(RestartPolicy::never())
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let later = TaskSpec::new("later", {
         let later_started = Arc::clone(&later_started);
         move |ctx| {
@@ -178,7 +297,7 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
 
     let handle_owner = Supervisor::ordered()
         .child(failed)
@@ -217,7 +336,7 @@ async fn sequential_start_resumes_after_pre_ready_restart() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let later = TaskSpec::new("later", {
         let later_started = Arc::clone(&later_started);
         move |ctx| {
@@ -230,7 +349,7 @@ async fn sequential_start_resumes_after_pre_ready_restart() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .child(flaky)
         .child(later)
@@ -306,7 +425,7 @@ async fn nested_supervisor_gates_later_parent_siblings() {
                     }
                 }
             })
-            .wait_for_ready(),
+            .manual_readiness(Duration::from_secs(5)),
         )
         .build()
         .unwrap();
@@ -324,7 +443,7 @@ async fn nested_supervisor_gates_later_parent_siblings() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .child_spec(ChildSpec::supervisor("nested", nested))
         .child(later)
@@ -364,7 +483,9 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     for index in 0..4 {
         let attempts = Arc::clone(&noisy_attempts);
         let nested = Supervisor::ordered()
-            .default_restart(RestartPolicy::on_failure().limit(100_000, Duration::from_secs(60)))
+            .default_child_restart(
+                RestartPolicy::on_failure().limit(100_000, Duration::from_secs(60)),
+            )
             .child(TaskSpec::new("flapping", move |_ctx| {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 async move { Err(std::io::Error::other("emit another nested update").into()) }
@@ -389,7 +510,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let later = TaskSpec::new("later", {
         let later_started = Arc::clone(&later_started);
         move |ctx| {
@@ -402,7 +523,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
 
     let handle_owner = root.child(gated).child(later).build().unwrap().spawn();
     let handle = handle_owner.handle();
@@ -447,7 +568,7 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let middle = TaskSpec::new("middle", {
         let order = Arc::clone(&order);
         let fail = Arc::clone(&fail);
@@ -472,7 +593,7 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let last = TaskSpec::new("last", {
         let order = Arc::clone(&order);
         move |ctx| {
@@ -485,7 +606,7 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(anchor)
@@ -545,7 +666,7 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let second = TaskSpec::new("second", {
         let second_runs = Arc::clone(&second_runs);
         move |ctx| {
@@ -559,7 +680,7 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
         }
     })
     .restart(RestartPolicy::never())
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(first)
@@ -594,12 +715,12 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let failed = TaskSpec::new("failed", |_| async {
         Err(std::io::Error::other("nested init failed").into())
     })
     .restart(RestartPolicy::never())
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let nested = Supervisor::ordered()
         .child(sibling)
         .child(failed)
@@ -642,7 +763,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
         }
     })
     .restart(RestartPolicy::never())
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let failing = TaskSpec::new("failing", {
         let attempts = Arc::clone(&attempts);
         let trigger = Arc::clone(&trigger);
@@ -660,7 +781,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
             }
         }
     })
-    .wait_for_ready();
+    .manual_readiness(Duration::from_secs(5));
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(failing)

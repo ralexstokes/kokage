@@ -75,9 +75,9 @@ impl Default for Shutdown {
 ///
 /// This policy is actor-only. Configure an individual actor through
 /// [`ActorSpec`](crate::ActorSpec), or actors directly inside a scope through
-/// [`Tree::default_mailbox_shutdown`](crate::Tree::default_mailbox_shutdown)
+/// [`Tree::default_actor_mailbox_shutdown`](crate::Tree::default_actor_mailbox_shutdown)
 /// and
-/// [`DynamicTree::default_mailbox_shutdown`](crate::DynamicTree::default_mailbox_shutdown).
+/// [`DynamicTree::default_actor_mailbox_shutdown`](crate::DynamicTree::default_actor_mailbox_shutdown).
 /// It does not live on [`TaskSpec`](crate::TaskSpec) or
 /// [`SubtreeSpec`](crate::SubtreeSpec), so queue behavior cannot be configured
 /// where no mailbox exists.

@@ -21,7 +21,7 @@ use {
 };
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.snapshots();
+    let snapshots = handle.subscribe_snapshots();
     let child = handle
         .snapshot()
         .child(id)
@@ -147,7 +147,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
         },
     ));
     let handle = builder
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -219,7 +219,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
         }
     }));
     let handle = builder
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 

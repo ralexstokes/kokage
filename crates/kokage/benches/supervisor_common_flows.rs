@@ -108,12 +108,15 @@ async fn spawn_shutdown_flow(children: usize) {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn one_for_one_restart_flow() {
@@ -147,7 +150,7 @@ async fn one_for_one_restart_flow() {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut snapshots = handle.snapshots();
+    let mut snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child("flaky")
@@ -165,7 +168,10 @@ async fn one_for_one_restart_flow() {
     black_box(attempts.load(Ordering::Relaxed));
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn one_for_all_restart_flow() {
@@ -198,12 +204,15 @@ async fn one_for_all_restart_flow() {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn dynamic_add_remove_flow() {
@@ -211,7 +220,7 @@ async fn dynamic_add_remove_flow() {
         .spawn()
         .expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.subscribe_lifecycle();
 
     handle
         .add_task_spec(TaskSpec::new("seed", |ctx| async move {
@@ -233,13 +242,16 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "dynamic").await;
 
     handle
-        .remove_child_named("dynamic")
+        .remove_named("dynamic")
         .await
         .expect("dynamic child should be removable");
     wait_for_named_child_removed(&mut events, "dynamic").await;
 
     handle.request_shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    handle
+        .wait_stopped()
+        .await
+        .expect("shutdown should succeed");
 }
 
 async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {

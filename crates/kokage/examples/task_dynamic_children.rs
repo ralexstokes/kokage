@@ -5,7 +5,7 @@ use tokio::time::{Duration, sleep, timeout};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_tree = DynamicTree::new().spawn()?;
     let scope = running_tree.scope();
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
 
     scope
         .add_task("api", |ctx| async move {
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    scope.remove_task(&cache_warmer).await?;
+    scope.remove(&cache_warmer).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -58,15 +58,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("cache-warmer removed at runtime");
 
-    let nested = scope
-        .add_dynamic_subtree("nested", DynamicTree::new())
-        .await?;
+    let nested_tree = DynamicTree::new();
+    let nested = nested_tree.scope();
+    scope.add_subtree("nested", nested_tree).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("nested", |child| child.state.is_running()),
     )
     .await??;
-    let mut nested_snapshots = nested.snapshots();
+    let mut nested_snapshots = nested.subscribe_snapshots();
     nested
         .add_task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested.remove_task(&nested_cache).await?;
+    nested.remove(&nested_cache).await?;
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),
@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested-cache removed from nested supervisor");
 
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

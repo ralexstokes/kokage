@@ -82,7 +82,8 @@ impl Actor for MailboxOneShot {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.send_after("tick", Duration::from_millis(20)).detach();
+        ctx.send_after_to(&ctx.myself(), "tick", Duration::from_millis(20))
+            .detach();
         Ok(())
     }
 
@@ -93,7 +94,7 @@ impl Actor for MailboxOneShot {
 }
 
 #[tokio::test(start_paused = true)]
-async fn context_send_after_delivers_once_through_the_self_mailbox() {
+async fn context_send_after_to_can_deliver_once_through_the_self_mailbox() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (tree, actor_ref) = build_runtime(move || MailboxOneShot {
         observed: observed_tx.clone(),
@@ -181,7 +182,7 @@ impl Actor for CancelledTimer {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(CANCELLED, "cancelled", Duration::from_millis(20));
-        ctx.clear_timeout(CANCELLED);
+        ctx.clear_timer(CANCELLED);
         Ok(())
     }
 
@@ -219,7 +220,7 @@ impl Actor for ReplaceableTimeout {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.clear_timeout(REPLACEABLE);
+        ctx.clear_timer(REPLACEABLE);
         ctx.set_timeout(REPLACEABLE, "old", Duration::from_millis(20));
         ctx.set_timeout(REPLACEABLE, "new", Duration::from_millis(40));
         Ok(())
@@ -265,13 +266,18 @@ struct OrderedTimeout {
     release: Arc<Notify>,
     observed: mpsc::UnboundedSender<OrderedMsg>,
     replace: bool,
+    repeat: bool,
 }
 
 impl Actor for OrderedTimeout {
     type Msg = OrderedMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.set_timeout(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        if self.repeat {
+            ctx.set_interval(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        } else {
+            ctx.set_timeout(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        }
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(())
@@ -280,7 +286,7 @@ impl Actor for OrderedTimeout {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.send(message).expect("observer alive");
         match message {
-            OrderedMsg::Clear => ctx.clear_timeout(ORDERED),
+            OrderedMsg::Clear => ctx.clear_timer(ORDERED),
             OrderedMsg::Replace if self.replace => {
                 ctx.set_timeout(ORDERED, OrderedMsg::New, Duration::from_millis(40));
             }
@@ -302,6 +308,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
             release: release.clone(),
             observed: observed_tx.clone(),
             replace: false,
+            repeat: false,
         }
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -326,6 +333,42 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn queued_pre_fire_message_retracts_an_elapsed_interval() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let (tree, actor_ref) = build_runtime({
+        let release = release.clone();
+        move || OrderedTimeout {
+            started: started_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+            replace: false,
+            repeat: true,
+        }
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+    started_rx.recv().await.expect("actor started");
+
+    actor_ref
+        .send(OrderedMsg::Clear)
+        .await
+        .expect("clear queued");
+    advance(Duration::from_millis(20)).await;
+    release.notify_one();
+
+    assert_eq!(observed_rx.recv().await, Some(OrderedMsg::Clear));
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "elapsed interval survived a pre-fire clear"
+    );
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
 async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
@@ -337,6 +380,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
             release: release.clone(),
             observed: observed_tx.clone(),
             replace: true,
+            repeat: false,
         }
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -375,7 +419,7 @@ impl Actor for KeyedTimeouts {
         ctx.set_timeout(first, "first", Duration::from_millis(20));
         ctx.set_timeout(second, "second", Duration::from_millis(40));
         let absent = TimerKey::new("absent");
-        ctx.clear_timeout(absent);
+        ctx.clear_timer(absent);
         Ok(())
     }
 
@@ -401,19 +445,18 @@ async fn keyed_timeouts_replace_per_key_and_remain_independent() {
 }
 
 struct FarFutureTimers {
-    timers: Vec<Guard>,
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
 const FAR_FUTURE_TIMEOUT: TimerKey = TimerKey::new("far-future");
+const FAR_FUTURE_INTERVAL: TimerKey = TimerKey::new("far-future-interval");
 
 impl Actor for FarFutureTimers {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
-        self.timers
-            .push(ctx.interval("never-interval", Duration::MAX));
+        ctx.set_interval(FAR_FUTURE_INTERVAL, "never-interval", Duration::MAX);
         Ok(())
     }
 
@@ -427,7 +470,6 @@ impl Actor for FarFutureTimers {
 async fn far_future_delays_saturate_instead_of_panicking() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (tree, actor_ref) = build_runtime(move || FarFutureTimers {
-        timers: Vec::new(),
         observed: observed_tx.clone(),
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -446,34 +488,34 @@ async fn far_future_delays_saturate_instead_of_panicking() {
 
 struct IntervalActor {
     observed: mpsc::UnboundedSender<usize>,
-    timer: Option<Guard>,
     ticks: usize,
 }
+
+const SELF_INTERVAL: TimerKey = TimerKey::new("self-interval");
 
 impl Actor for IntervalActor {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        ctx.set_interval(SELF_INTERVAL, (), Duration::from_millis(10));
         Ok(())
     }
 
-    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+    async fn handle(&mut self, (): Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.ticks += 1;
         self.observed.send(self.ticks).expect("observer alive");
         if self.ticks == 3 {
-            self.timer.as_ref().expect("timer armed").cancel();
+            ctx.clear_timer(SELF_INTERVAL);
         }
         Ok(())
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn self_interval_repeats_until_cancelled() {
+async fn keyed_interval_repeats_until_cleared_without_mailbox_acceptance() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (tree, _) = build_runtime(move || IntervalActor {
+    let (tree, actor_ref) = build_runtime(move || IntervalActor {
         observed: observed_tx.clone(),
-        timer: None,
         ticks: 0,
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -487,6 +529,173 @@ async fn self_interval_repeats_until_cancelled() {
             .is_err(),
         "interval continued after cancellation"
     );
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 0);
+    assert_eq!(stats.messages_received, 3);
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
+struct ReplacedTimerKinds {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+const REPLACED_TIMER_KIND: TimerKey = TimerKey::new("replaced-timer-kind");
+
+impl Actor for ReplacedTimerKinds {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_timeout(REPLACED_TIMER_KIND, "old-timeout", Duration::from_millis(5));
+        ctx.set_interval(REPLACED_TIMER_KIND, "tick", Duration::from_millis(10));
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        if message == "tick" {
+            ctx.set_timeout(
+                REPLACED_TIMER_KIND,
+                "final-timeout",
+                Duration::from_millis(20),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn timeout_and_interval_replace_each_other_at_the_same_key() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (tree, _) = build_runtime(move || ReplacedTimerKinds {
+        observed: observed_tx.clone(),
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("tick"));
+    assert_eq!(observed_rx.recv().await, Some("final-timeout"));
+    assert!(
+        timeout(Duration::from_millis(50), observed_rx.recv())
+            .await
+            .is_err(),
+        "a replaced timer survived at the shared key"
+    );
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntervalPhaseMsg {
+    Replace,
+    Old,
+    New,
+}
+
+struct ReplaceableInterval {
+    started: mpsc::UnboundedSender<()>,
+    observed: mpsc::UnboundedSender<IntervalPhaseMsg>,
+}
+
+const REPLACEABLE_INTERVAL: TimerKey = TimerKey::new("replaceable-interval");
+
+impl Actor for ReplaceableInterval {
+    type Msg = IntervalPhaseMsg;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_interval(
+            REPLACEABLE_INTERVAL,
+            IntervalPhaseMsg::Old,
+            Duration::from_millis(20),
+        );
+        self.started.send(()).expect("test receives start signal");
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        match message {
+            IntervalPhaseMsg::Replace => ctx.set_interval(
+                REPLACEABLE_INTERVAL,
+                IntervalPhaseMsg::New,
+                Duration::from_millis(20),
+            ),
+            IntervalPhaseMsg::Old | IntervalPhaseMsg::New => {
+                ctx.clear_timer(REPLACEABLE_INTERVAL);
+            }
+        }
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacing_an_interval_resets_its_phase() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (tree, actor_ref) = build_runtime(move || ReplaceableInterval {
+        started: started_tx.clone(),
+        observed: observed_tx.clone(),
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+    started_rx.recv().await.expect("actor started");
+
+    advance(Duration::from_millis(10)).await;
+    actor_ref
+        .send(IntervalPhaseMsg::Replace)
+        .await
+        .expect("replacement queued");
+    assert_eq!(observed_rx.recv().await, Some(IntervalPhaseMsg::Replace));
+    assert!(
+        timeout(Duration::from_millis(19), observed_rx.recv())
+            .await
+            .is_err(),
+        "replacement interval retained the old phase"
+    );
+    assert_eq!(observed_rx.recv().await, Some(IntervalPhaseMsg::New));
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
+struct ZeroPeriodKeyedInterval {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+const ZERO_PERIOD_KEYED_INTERVAL: TimerKey = TimerKey::new("zero-period-keyed-interval");
+
+impl Actor for ZeroPeriodKeyedInterval {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_timeout(
+            ZERO_PERIOD_KEYED_INTERVAL,
+            "old-timeout",
+            Duration::from_millis(10),
+        );
+        ctx.set_interval(ZERO_PERIOD_KEYED_INTERVAL, "never", Duration::ZERO);
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_period_keyed_interval_clears_the_existing_timer() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (tree, actor_ref) = build_runtime(move || ZeroPeriodKeyedInterval {
+        observed: observed_tx.clone(),
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+
+    assert!(
+        timeout(Duration::from_millis(50), observed_rx.recv())
+            .await
+            .is_err(),
+        "zero-period interval left a timer armed"
+    );
+    actor_ref.send("ping").await.expect("actor remains alive");
+    assert_eq!(observed_rx.recv().await, Some("ping"));
 
     running_tree.shutdown().await.expect("clean shutdown");
 }
@@ -496,7 +705,6 @@ struct SlowInterval {
     release: Arc<Notify>,
     started: Option<Instant>,
     ticks: usize,
-    timer: Option<Guard>,
 }
 
 impl Actor for SlowInterval {
@@ -504,11 +712,11 @@ impl Actor for SlowInterval {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.started = Some(Instant::now());
-        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        ctx.set_interval(SELF_INTERVAL, (), Duration::from_millis(10));
         Ok(())
     }
 
-    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+    async fn handle(&mut self, (): Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.ticks += 1;
         self.observed
             .send(Instant::now().duration_since(self.started.expect("started")))
@@ -516,7 +724,7 @@ impl Actor for SlowInterval {
         if self.ticks == 1 {
             self.release.notified().await;
         } else if self.ticks == 3 {
-            self.timer.as_ref().expect("timer armed").cancel();
+            ctx.clear_timer(SELF_INTERVAL);
         }
         Ok(())
     }
@@ -533,7 +741,6 @@ async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
             release: release.clone(),
             started: None,
             ticks: 0,
-            timer: None,
         }
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -553,14 +760,16 @@ struct RestartingTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-const RESTART_TIMEOUT: TimerKey = TimerKey::new("restart");
+const RESTART_TIMEOUT: TimerKey = TimerKey::new("restart-timeout");
+const RESTART_INTERVAL: TimerKey = TimerKey::new("restart-interval");
 
 impl Actor for RestartingTimer {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            ctx.set_timeout(RESTART_TIMEOUT, "old", Duration::from_millis(150));
+            ctx.set_timeout(RESTART_TIMEOUT, "old-timeout", Duration::from_millis(150));
+            ctx.set_interval(RESTART_INTERVAL, "old-interval", Duration::from_millis(150));
             ctx.continue_with("crash");
         } else {
             ctx.set_timeout(RESTART_TIMEOUT, "new", Duration::from_millis(10));

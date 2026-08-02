@@ -98,8 +98,7 @@ incarnation.
 
 ## Timers
 
-Actors schedule future messages through their context. The workhorse is the
-keyed one-shot timer:
+Handler actors schedule future messages through loop-owned keyed timers:
 
 ```rust
 use std::time::Duration;
@@ -109,6 +108,7 @@ use tokio::sync::mpsc;
 
 const NIGHTLY: TimerKey = TimerKey::new("nightly-maintenance");
 
+#[derive(Clone)]
 enum PressMsg {
     Job(String),
     Maintain,
@@ -122,18 +122,16 @@ impl Actor for Press {
     type Msg = PressMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.set_timeout(NIGHTLY, PressMsg::Maintain, Duration::from_millis(10));
+        ctx.set_interval(NIGHTLY, PressMsg::Maintain, Duration::from_millis(10));
         Ok(())
     }
 
-    async fn handle(&mut self, msg: PressMsg, ctx: &mut Context<'_, Self>) -> ExitResult {
+    async fn handle(&mut self, msg: PressMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match msg {
             PressMsg::Job(job) => println!("printed: {job}"),
             PressMsg::Maintain => {
                 println!("cleaning rollers");
                 self.maintained.send(()).expect("receiver alive");
-                // re-arm for the next night
-                ctx.set_timeout(NIGHTLY, PressMsg::Maintain, Duration::from_millis(10));
             }
         }
         Ok(())
@@ -156,47 +154,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-[`set_timeout`] semantics are tuned for actor protocols:
+[`set_timeout`] arms a one-shot message, while [`set_interval`] repeats a
+message and therefore requires `Msg: Clone`. Their semantics are tuned for
+actor protocols:
 
 - The [`TimerKey`] names the timer: setting the same key again *replaces* the
-  pending timer (perfect for deadline-style "reset on activity" logic), and
-  [`clear_timeout`] cancels it.
+  pending one-shot or interval (perfect for deadline-style "reset on activity"
+  logic), and [`clear_timer`] cancels either kind.
 - Delivery bypasses mailbox capacity and conflation — a full mailbox cannot
-  starve your deadline.
+  starve your deadline. A fire counts as received but not accepted mailbox
+  traffic.
+- A zero-delay [`set_timeout`] fires immediately. A zero-period [`set_interval`]
+  instead clears its key without arming a timer; [`RawContext::interval`] with
+  a zero period returns a finished guard and does not affect keyed timers.
+- Intervals first fire one full period after arming and skip missed ticks rather
+  than accumulating catch-up work. If an interval stays overdue because its
+  handler takes longer than the period, it can defer offload completions; use
+  [`interval_to`] with `&ctx.myself()` when ordinary delivery scheduling is
+  required.
 - Timers are owned by the current run: they are dropped on stop and restart,
   never fired into a fresh incarnation that doesn't remember arming them.
   Re-arm in `on_start` (as above) if the schedule should survive restarts.
 
-For guard-owned mailbox timers, [`send_after`] schedules a one-shot message
-to self and [`interval`] repeats one (requiring `Msg: Clone`). Both use the
-*ordinary mailbox* with backpressure; a slow interval skips ticks rather than
-piling them up. The adjacent [`send_after_to`] and [`interval_to`] forms target
-any `ActorRef`.
-
-These helpers return a [`Guard`] — your first meeting with a type that recurs
-throughout kokage. A `Guard` owns a background operation: **dropping it
-cancels the operation**. Keep it in the actor's state to tie the interval's
-lifetime to yours, call `.cancel()` to stop it early, or `.detach()` when
-fire-and-forget is really what you mean:
+[`send_after_to`] and [`interval_to`] deliberately use ordinary mailbox
+delivery to any `ActorRef`; pass `&ctx.myself()` when backpressure or conflation
+on self-delivery is part of the protocol. These operations are owned by their
+returned [`Guard`]: dropping it cancels the operation, so retain it for scoped
+ownership or call [`Guard::detach`] to keep it alive independently.
+Raw actors have the same `_to` forms plus self-directed [`RawContext::send_after`]
+and [`RawContext::interval`], because their custom loops do not have the keyed
+timer table.
 
 ```rust
 # use std::time::Duration;
 # use kokage::prelude::*;
-# #[derive(Clone)]
-# enum PressMsg { Tick }
-# struct Press { heartbeat: Option<Guard> }
+# enum PressMsg { Wake }
+# struct Press;
 # impl Actor for Press {
 #     type Msg = PressMsg;
 #     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-self.heartbeat = Some(ctx.interval(PressMsg::Tick, Duration::from_secs(30)));
+ctx.send_after_to(&ctx.myself(), PressMsg::Wake, Duration::from_secs(30))
+    .detach();
 #         Ok(())
 #     }
 #     async fn handle(&mut self, _m: PressMsg, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
 ```
-
-(`set_timeout` is the exception: it is loop-owned and keyed, so there is no
-guard to hold.)
 
 [`Actor`]: https://stokes.io/kokage/api/kokage/trait.Actor.html
 [`StopContext`]: https://stokes.io/kokage/api/kokage/struct.StopContext.html
@@ -204,10 +207,11 @@ guard to hold.)
 [`Context::is_draining`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.is_draining
 [`Context::continue_with`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.continue_with
 [`set_timeout`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.set_timeout
+[`set_interval`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.set_interval
 [`TimerKey`]: https://stokes.io/kokage/api/kokage/struct.TimerKey.html
-[`clear_timeout`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.clear_timeout
-[`send_after`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.send_after
-[`interval`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.interval
+[`clear_timer`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.clear_timer
 [`send_after_to`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.send_after_to
 [`interval_to`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.interval_to
+[`RawContext::send_after`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html#method.send_after
+[`RawContext::interval`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html#method.interval
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html

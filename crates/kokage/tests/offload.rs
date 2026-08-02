@@ -30,7 +30,7 @@ async fn wait_runtime_started(scope: &ScopeRef, phase: &str) {
 }
 
 async fn shutdown_runtime(scope: &ScopeRef, phase: &str) {
-    tokio::time::timeout(TEST_TIMEOUT, scope.shutdown())
+    tokio::time::timeout(TEST_TIMEOUT, scope.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
@@ -273,7 +273,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     });
     let running_tree = graph
         .build()
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .unwrap();
     wait_runtime_started(&running_tree.scope(), "stale-offload runtime startup").await;
@@ -391,7 +391,7 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
     });
     let running_tree = graph
         .build()
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
     wait_runtime_started(&running_tree.scope(), "offload restart runtime startup").await;
@@ -630,7 +630,7 @@ async fn shutdown_case(policy: MailboxShutdown) -> Vec<&'static str> {
     let release = Arc::new(Notify::new());
     let entered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = Tree::new().mailbox_capacity(1);
+    let mut graph = Tree::new().default_actor_mailbox_capacity(1);
     let actor_slot = ActorSlot::new("ShutdownActor");
     let actor = actor_slot.actor_ref();
     graph.add_actor_spec(
@@ -731,7 +731,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
-    graph.mailbox_capacity(1);
+    graph.default_actor_mailbox_capacity(1);
     let actor_slot = ActorSlot::new("BackpressureActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -955,7 +955,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     });
     let running_tree = graph
         .build()
-        .default_restart(RestartPolicy::on_failure())
+        .default_child_restart(RestartPolicy::on_failure())
         .spawn()
         .unwrap();
     wait_runtime_started(&running_tree.scope(), "offload-panic runtime startup").await;

@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scope = running_tree.scope();
     scope.add_task_spec(metrics).await?;
     let nested_handle = scope.add_subtree("nested-pipeline", nested_tree).await?;
-    let mut nested_snapshots = nested_handle.snapshots();
+    let mut nested_snapshots = nested_handle.subscribe_snapshots();
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for_child("nested-worker", |child| {
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(metrics.generation, 0);
     println!("nested subtree recovered internally without restarting outer siblings");
 
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

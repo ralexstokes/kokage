@@ -213,7 +213,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child_named(remove_id).await,
+                    mount.remove_named(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -236,7 +236,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child_named(remove_id).await,
+                    mount.remove_named(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -299,7 +299,7 @@ impl Actor for Router {
         // add appears after the baseline as Added and is swept there instead.
         self.mount_watch = Some(
             self.mount
-                .lifecycle_events()
+                .subscribe_lifecycle()
                 .direct_children()
                 .forward_to(&ctx.myself(), RouterMsg::MountLifecycle),
         );

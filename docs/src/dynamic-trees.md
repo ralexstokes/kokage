@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     acme.send("letterhead x1000".to_owned()).await?;
 
     // Contract over: the press drains its queue and leaves the tree.
-    scope.remove_actor(&acme).await?;
+    scope.remove(&acme).await?;
 
     running_tree.shutdown().await?;
     Ok(())
@@ -50,15 +50,13 @@ they belong to ordered scopes. Membership is managed through the
 - `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
 - `scope.add_task(id, task).await?` — supervised tasks work too.
 - `scope.spawn_once(id, task).await?` — finite, non-restarting work that removes
-  its membership on completion.
+  its membership on terminal exit.
 - `scope.add_subtree(id, tree).await?` — insert a whole *ordered or dynamic*
   subtree, and get back the new scope's `ScopeRef`.
-- `scope.add_dynamic_subtree(id, tree).await?` — retain a nested dynamic
-  subtree's `DynamicScopeRef` directly.
-- `scope.remove_actor(&actor).await?`, `remove_task(&task)`, or
-  `remove_subtree(&subtree)` — stop and remove the exact membership represented
-  by a returned handle. A stale handle cannot remove a same-id replacement.
-- `scope.remove_child_named(id).await?` — the id-based escape hatch for an
+- `scope.remove(&child).await?` — stop and remove the exact actor, task, or
+  subtree membership represented by a returned handle. A stale handle cannot
+  remove a same-id replacement.
+- `scope.remove_named(id).await?` — the id-based escape hatch for an
   external registry or operator command.
 
 The adjacent `add_actor_spec`, `add_task_spec`, and `spawn_once_spec` forms
@@ -69,11 +67,14 @@ directly when the subtree edge needs policy overrides.
 
 These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
 be mutated accidentally. They return [`ControlError`] for operational errors:
-`UnknownChildId`, `ChildRemovalInProgress` if you re-add an id whose removal
-hasn't finished, or `Rejected` wrapping the same validation a static `spawn`
-performs. Ids must be unique within the scope at any moment — a removed id may
-be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
+`UnknownChildId`, `UnknownChildHandle`, `ChildRemovalInProgress` if you re-add
+an id whose removal hasn't finished, or `Rejected` wrapping the same validation
+a static `spawn` performs. Ids must be unique within the scope at any moment —
+a removed id may be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
 `scope.dynamic()` to request the mutation capability after checking its kind.
+To retain a nested dynamic subtree's mutation capability, call
+`dynamic_tree.scope()` before moving the declaration into `add_subtree`. The
+same two-step pattern applies whether the parent scope is ordered or dynamic.
 
 ## Mixing static structure with dynamic membership
 
@@ -117,12 +118,12 @@ actor holding the `sessions` scope (it is cheaply cloneable) can spawn a
 session actor per request, hand out its `ActorRef`, and remove it when the
 client leaves.
 
-## One-shot work: run to completion, then clean up
+## One-shot work: run once, then clean up
 
-`spawn_once` gives dynamic trees straightforward batch semantics. Finished
-work leaves the scope; the returned `TaskRef` remains tied to that exact
-membership and preserves its completion even when the task exits quickly. Its
-factory is `FnOnce`, so it can consume owned inputs:
+`spawn_once` gives dynamic trees straightforward batch semantics. Terminal
+work leaves the scope whether it completed or failed; the returned `TaskRef`
+remains tied to that exact membership and preserves its outcome even when the
+task exits quickly. Its factory is `FnOnce`, so it can consume owned inputs:
 
 ```rust
 # use kokage::prelude::*;
@@ -147,11 +148,17 @@ running_tree.wait().await?;
 Use `scope.spawn_once_spec(OneShotTaskSpec::new(...))` when the same consuming
 factory needs a custom shutdown policy, readiness gate, or retained terminal
 membership. Restart settings are deliberately unavailable because the factory
-cannot create a second incarnation. Select `.retain_when_done()` when
+cannot create a second incarnation. Select `.retain_on_terminal_exit()` when
 scope-level snapshot observers must discover the terminal state without an
 existing `TaskRef`. A retained membership keeps its child id occupied until
-`scope.remove_task(&job).await?` removes it or the scope shuts down; the
+`scope.remove(&job).await?` removes it or the scope shuts down; the
 `TaskRef` retains the terminal outcome whether or not the membership is kept.
+
+In this policy, a *terminal exit* is one that a running supervisor evaluates
+and declines to restart. The membership option is not applied to exits during
+supervisor shutdown. Likewise, a non-`Never` child that completes while a group
+restart drains its peers remains part of that restart and is respawned with the
+group.
 
 `TaskRef::wait` skips exits followed by the task's restart policy and returns
 the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several

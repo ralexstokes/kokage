@@ -6,13 +6,12 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use crate::supervisor::{CancelOnDrop, CancellationToken, ExitStatus, RestartPolicy};
 #[cfg(feature = "host")]
 use crate::supervisor::{MailboxShutdown, Shutdown};
-#[cfg(feature = "host")]
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::oneshot;
 #[cfg(feature = "host")]
@@ -26,7 +25,7 @@ use crate::{
         binding::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, Mailbox, MailboxRef, mailbox,
         },
-        context::{ActorLifetime, ActorRef, RawContext},
+        context::{ActorLifetime, ActorReadySignal, ActorRef, RawContext},
         factory::ActorFactory,
         monitor::MonitorRun,
         observability::{ActorExitStatus, ScopeObservability},
@@ -38,6 +37,10 @@ pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
 
 pub(crate) type BoxedActorFuture =
     Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send + 'static>>;
+
+#[derive(Debug, Error)]
+#[error("manual readiness timed out after {0:?}")]
+struct ManualReadinessTimedOut(Duration);
 
 pub(crate) struct RunnerStart {
     pub(crate) shutdown: CancellationToken,
@@ -122,9 +125,17 @@ where
                 );
                 return Ok(());
             };
+            // Binding is deliberately deferred until this actor task's first
+            // poll, then established before construction so a constructor
+            // panic follows the same monitoring and supervision path as
+            // startup and run panics.
+            let mut actor = factory.build();
+            let manual_readiness = actor.manual_readiness();
+            let ready = ActorReadySignal::new(start.ready, manual_readiness.is_some());
             let monitors = bound_mailbox.monitor_lease();
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
-            let mut ctx = RawContext {
+            let readiness_shutdown = actor_shutdown.clone();
+            let ctx = RawContext {
                 id: actor_id,
                 mailbox,
                 myself,
@@ -134,22 +145,45 @@ where
                 timers: Default::default(),
                 lifetime: ActorLifetime::new(),
                 monitors,
-                ready: Some(start.ready),
+                ready: Some(ready.clone()),
                 continuations: Default::default(),
                 stop_requested: false,
                 offloads: Default::default(),
                 supervisor: start.supervisor,
             };
-            // Binding is deliberately deferred until this actor future's first
-            // poll so construction happens inside the bound, instrumented
-            // future. Constructor panics then follow the same binding,
-            // monitoring, and supervision path as startup and run panics.
-            let mut actor = factory.build();
-            if !actor.readiness_gated() {
-                ctx.mark_ready();
-            }
             let _bound_mailbox = bound_mailbox;
-            let result = actor.run(ctx).await;
+            let result = {
+                let future = actor.run(ctx);
+                tokio::pin!(future);
+                let immediate_ready = ready.clone();
+                let mut first_poll = true;
+                // Immediate readiness is decided only after `run` has had one
+                // poll in which the blanket `Actor` implementation can gate
+                // readiness. Its `defer_automatic_readiness` call must remain
+                // the first operation in that implementation.
+                let managed = std::future::poll_fn(|cx| {
+                    let result = future.as_mut().poll(cx);
+                    if first_poll {
+                        first_poll = false;
+                        immediate_ready.mark_immediate();
+                    }
+                    result
+                });
+                if let Some(timeout) = manual_readiness {
+                    tokio::pin!(managed);
+                    tokio::select! {
+                        biased;
+                        result = &mut managed => result,
+                        () = ready.wait() => managed.await,
+                        () = readiness_shutdown.cancelled() => managed.await,
+                        () = tokio::time::sleep(timeout) => {
+                            Err(ManualReadinessTimedOut(timeout).into())
+                        }
+                    }
+                } else {
+                    managed.await
+                }
+            };
             drop(actor);
             exit_report.report_result(&result);
             result
@@ -170,6 +204,16 @@ pub enum ActorRunError {
         /// Error returned by the actor.
         #[source]
         source: BoxError,
+    },
+    /// The actor did not report manual startup readiness within its declared
+    /// bound.
+    #[error("actor `{actor_id}` did not report readiness within {timeout:?}")]
+    #[non_exhaustive]
+    ReadinessTimedOut {
+        /// Stable id of the actor that missed its readiness deadline.
+        actor_id: String,
+        /// Bound declared by [`RawActor::manual_readiness`].
+        timeout: Duration,
     },
     /// The actor did not finish its drain and stop hooks within the host's
     /// shutdown bound.
@@ -751,9 +795,15 @@ impl RunnableActor {
                 }
             }
             Ok(Err(source)) => {
-                let error = ActorRunError::Failed {
-                    actor_id: actor_id.to_string(),
-                    source,
+                let error = match source.downcast::<ManualReadinessTimedOut>() {
+                    Ok(timeout) => ActorRunError::ReadinessTimedOut {
+                        actor_id: actor_id.to_string(),
+                        timeout: timeout.0,
+                    },
+                    Err(source) => ActorRunError::Failed {
+                        actor_id: actor_id.to_string(),
+                        source,
+                    },
                 };
                 self.inner.observability.emit_actor_exited(
                     &actor_id,

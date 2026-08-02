@@ -84,7 +84,7 @@ pub trait Actor: Send + 'static {
     /// This hook also runs after a drain and cannot change the stop decision.
     /// During cooperative supervisor removal, the supervisor waits for the
     /// hook before detaching the child and completing
-    /// [`DynamicScopeRef::remove_actor`](crate::DynamicScopeRef::remove_actor).
+    /// [`DynamicScopeRef::remove`](crate::DynamicScopeRef::remove).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
     /// can abort this hook and detach the child without waiting for it.
     /// Awaiting anything here that depends on that detach — the scope
@@ -103,11 +103,10 @@ pub trait Actor: Send + 'static {
 impl<H: Actor> RawActor for H {
     type Msg = H::Msg;
 
-    fn readiness_gated(&self) -> bool {
-        true
-    }
-
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        // This must be the first operation: `ActorReadySignal` decides whether
+        // a raw actor is immediately ready after the first poll of `run`.
+        ctx.defer_automatic_readiness();
         self.on_start(&mut Context::new(&mut ctx)).await?;
         ctx.mark_ready();
 

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{TimerKey, observe::ExitStatus, prelude::*};
+use kokage::{MonitorEventKind, TimerKey, observe::ExitStatus, prelude::*};
 use tokio::time::Instant;
 
 use crate::{
@@ -81,7 +81,7 @@ impl Reconciler {
                 deadline.saturating_duration_since(now),
             );
         } else {
-            ctx.clear_timeout(STALE_SWEEP_TIMER);
+            ctx.clear_timer(STALE_SWEEP_TIMER);
         }
     }
 }

@@ -12,9 +12,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartPolicy,
-    RunningDynamicTree, ScopeRef, Tree,
-    observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
+    Actor, ActorSlot, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, Guard,
+    RestartPolicy, RunningTree, ScopeRef, Tree,
+    observe::{ChildEventKind, ChildObservationUpdate, LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -83,13 +83,40 @@ struct ScopeSink {
     watch: Option<Guard>,
 }
 
+enum ObservationSinkMsg {
+    Update(ChildObservationUpdate),
+    Crash,
+}
+
+struct ObservationSink {
+    generation: u64,
+    observed: mpsc::UnboundedSender<(u64, ChildObservationUpdate)>,
+}
+
+impl Actor for ObservationSink {
+    type Msg = ObservationSinkMsg;
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        match message {
+            ObservationSinkMsg::Update(update) => self
+                .observed
+                .send((self.generation, update))
+                .expect("observation receiver remains live"),
+            ObservationSinkMsg::Crash => {
+                return Err(io::Error::other("observation sink crash requested").into());
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Actor for ScopeSink {
     type Msg = ScopeSinkMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.watch = Some(
             ctx.scope()
-                .lifecycle_events()
+                .subscribe_lifecycle()
                 .direct_children()
                 .forward_to(&ctx.myself(), ScopeSinkMsg::Lifecycle),
         );
@@ -106,7 +133,7 @@ impl Actor for ScopeSink {
 }
 
 async fn runtime_with_watched_subtree() -> (
-    RunningDynamicTree,
+    RunningTree<DynamicScopeRef>,
     ScopeRef,
     kokage::ActorRef<SinkMsg>,
     kokage::ActorRef<()>,
@@ -135,9 +162,9 @@ async fn runtime_with_watched_subtree() -> (
     let watched = support::dynamic_root(&running_tree)
         .add_subtree(
             "watched",
-            graph
-                .build()
-                .default_restart(RestartPolicy::on_failure().limit(8, Duration::from_secs(1))),
+            graph.build().default_child_restart(
+                RestartPolicy::on_failure().limit(8, Duration::from_secs(1)),
+            ),
         )
         .await
         .expect("watched subtree added");
@@ -158,7 +185,7 @@ async fn recv_event(
 }
 
 async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
-    let mut snapshots = handle.snapshots();
+    let mut snapshots = handle.subscribe_snapshots();
     timeout(Duration::from_secs(2), async {
         loop {
             if snapshots
@@ -179,7 +206,7 @@ async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
 }
 
 async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
-    timeout(Duration::from_secs(2), handle.shutdown())
+    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
@@ -231,7 +258,7 @@ async fn assert_no_buffered_lifecycle(
 async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
 
@@ -283,7 +310,7 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
 async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
@@ -293,7 +320,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     wait_for_generation(&watched, "crasher", 1).await;
 
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     drop(guard);
@@ -304,7 +331,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     wait_for_generation(&watched, "crasher", 2).await;
 
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     let later = crash_and_receive_events(&crasher, &mut observed).await;
@@ -331,12 +358,12 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
 async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child_named("watched")
+        .remove_named("watched")
         .await
         .expect("watched subtree removed");
     let (_, final_event) = recv_event(&mut observed).await;
@@ -358,12 +385,12 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .await
         .expect("replacement subtree added");
     let guard = replacement
-        .lifecycle_events()
+        .subscribe_lifecycle()
         .direct_children()
         .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
-        .remove_child_named("sink")
+        .remove_named("sink")
         .await
         .expect("target removed");
     timeout(Duration::from_secs(2), guard.finished())
@@ -425,4 +452,201 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
 
     let handle = running_tree.scope();
     shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;
+}
+
+#[tokio::test]
+async fn child_observation_pump_forwards_resets_and_post_reset_transitions() {
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
+    let root = support::dynamic_root(&running_tree);
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let sink = root
+        .add_actor("observation-sink", move || ObservationSink {
+            generation: 0,
+            observed: observed_tx.clone(),
+        })
+        .await
+        .expect("observation sink added");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("observation sink starts");
+    let observation = running_tree.scope().observe_children();
+
+    for index in 0..70 {
+        let task = root
+            .add_task(format!("overflow-{index}"), |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            })
+            .await
+            .expect("overflow task added");
+        root.remove(&task).await.expect("overflow task removed");
+    }
+
+    let guard = observation
+        .events
+        .forward_to(&sink, ObservationSinkMsg::Update);
+    let (generation, reset) = timeout(Duration::from_secs(2), observed_rx.recv())
+        .await
+        .expect("recovery reset is forwarded")
+        .expect("observation receiver remains live");
+    assert_eq!(generation, 0);
+    let ChildObservationUpdate::Reset { snapshot, dropped } = reset else {
+        panic!("the first forwarded update after overflow must be a reset");
+    };
+    assert!(dropped > 0);
+    assert!(snapshot.child("observation-sink").is_some());
+    assert_eq!(snapshot.children, running_tree.scope().snapshot().children);
+    let reset_sequence = snapshot.lifecycle_seq;
+
+    let fresh = root
+        .add_task("after-reset", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("post-reset task added");
+    let (generation, transition) = timeout(Duration::from_secs(2), observed_rx.recv())
+        .await
+        .expect("post-reset transition is forwarded")
+        .expect("observation receiver remains live");
+    assert_eq!(generation, 0);
+    let ChildObservationUpdate::Transition(transition) = transition else {
+        panic!("post-reset child change must be a transition");
+    };
+    assert_eq!(transition.child_id, "after-reset");
+    assert!(transition.seq > reset_sequence);
+
+    root.remove(&fresh).await.expect("post-reset task removed");
+    guard.cancel();
+    shutdown_runtime(&running_tree.scope(), "child observation pump shutdown").await;
+}
+
+#[tokio::test]
+async fn child_observation_pump_resets_a_restarted_target_while_source_is_quiet() {
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
+    let root = support::dynamic_root(&running_tree);
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let sink_generation = Arc::new(AtomicU64::new(0));
+    let sink = root
+        .add_actor_spec(
+            ActorSpec::new("observation-sink", move || ObservationSink {
+                generation: sink_generation.fetch_add(1, Ordering::SeqCst),
+                observed: observed_tx.clone(),
+            })
+            .restart(RestartPolicy::on_failure()),
+        )
+        .await
+        .expect("observation sink added");
+    let watched = root
+        .add_subtree("watched", DynamicTree::new())
+        .await
+        .expect("quiet observed scope added");
+    let watched_dynamic = watched.dynamic().expect("observed scope is dynamic");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("observation sink and observed scope start");
+    let guard = watched
+        .observe_children()
+        .events
+        .forward_to(&sink, ObservationSinkMsg::Update);
+
+    let before_restart = watched_dynamic
+        .add_task("quiet-child", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("quiet child added");
+    timeout(
+        Duration::from_secs(2),
+        watched
+            .subscribe_snapshots()
+            .wait_for_child("quiet-child", |child| child.state.is_running()),
+    )
+    .await
+    .expect("quiet child reaches running")
+    .expect("observed scope remains live");
+    let quiet_sequence = watched.snapshot().lifecycle_seq;
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let (generation, update) = observed_rx.recv().await.expect("observer remains live");
+            assert_eq!(generation, 0);
+            let ChildObservationUpdate::Transition(child) = update else {
+                panic!("the initial target incarnation must not receive a spurious reset");
+            };
+            if child.seq == quiet_sequence {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("all observed-scope transitions drain before target restart");
+
+    sink.send(ObservationSinkMsg::Crash)
+        .await
+        .expect("observation sink crash delivered");
+    wait_for_generation(&running_tree.scope(), "observation-sink", 1).await;
+
+    let reset = timeout(Duration::from_secs(2), async {
+        loop {
+            let (generation, update) = observed_rx.recv().await.expect("observer remains live");
+            if generation == 1
+                && let ChildObservationUpdate::Reset { snapshot, dropped } = update
+                && dropped == 0
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .expect("fresh target incarnation receives a reset");
+    assert!(
+        reset
+            .child("quiet-child")
+            .is_some_and(|child| child.state.is_running())
+    );
+    assert_eq!(reset.lifecycle_seq, quiet_sequence);
+
+    let after_restart = watched_dynamic
+        .add_task("after-target-restart", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("post-restart task added");
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let (generation, update) = observed_rx.recv().await.expect("observer remains live");
+            if generation == 1
+                && matches!(
+                    update,
+                    ChildObservationUpdate::Transition(ref child)
+                        if child.child_id == "after-target-restart"
+                )
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("post-reset transition reaches fresh target incarnation");
+
+    watched_dynamic
+        .remove(&before_restart)
+        .await
+        .expect("pre-restart task removed");
+    watched_dynamic
+        .remove(&after_restart)
+        .await
+        .expect("post-restart task removed");
+    guard.cancel();
+    shutdown_runtime(
+        &running_tree.scope(),
+        "restarted child observation target shutdown",
+    )
+    .await;
 }

@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Jam the press, then wait until the supervisor has restarted it.
     let scope = running_tree.scope();
     let baseline = scope.snapshot().child("press").expect("declared").generation;
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
     press.send("jam".to_owned()).await?;
     snapshots
         .wait_for_child("press", |child| {
@@ -125,14 +125,16 @@ Every restartable policy carries a restart *budget* — by default 5 restarts
 within 30 seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 `exponential_with_jitter`) spacing the attempts. Attach a policy to one actor
 with `ActorSpec::restart(...)`, or set a scope-wide default with
-`Tree::default_restart(...)`.
+`Tree::default_child_restart(...)`.
 
 The constructors and builders cover normal configuration. `RestartPolicy` is
 also a public enum, so generic configuration code can match or construct its
 `Always`, `OnFailure`, and `Never` variants directly. Restartable variants
 carry their budget, window, and backoff fields directly; `Never` carries no
-meaningless tuning. The fluent constructors remain the concise common path,
-while the variants are the at-hand escape hatch for generic configuration.
+meaningless tuning, so chaining `.limit(...)` or `.backoff(...)` onto
+`RestartPolicy::never()` has no effect. The fluent constructors remain the
+concise common path, while the variants are the at-hand escape hatch for
+generic configuration.
 
 The `serde` representation is likewise unversioned during `0.x`. Persisted
 configuration that must survive Kokage upgrades should live behind an

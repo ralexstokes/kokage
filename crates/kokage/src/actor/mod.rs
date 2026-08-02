@@ -23,6 +23,8 @@ pub use error::{
     BlockingCancelled, CallError, OffloadDeadline, ReplyError, SendError, SendErrorKind,
 };
 pub use factory::ActorFactory;
+#[cfg(not(feature = "host"))]
+pub(crate) use graph::ActorRunError;
 #[cfg(feature = "host")]
 pub use graph::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActor, RunnableActorBuilder};

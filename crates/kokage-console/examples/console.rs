@@ -98,7 +98,7 @@ fn pipeline_runtime() -> Tree {
 
     let mut tree = Tree::new()
         .strategy(Strategy::OneForAll)
-        .default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
+        .default_child_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_task_spec(source);
     tree.add_task_spec(transform);
     tree
@@ -131,8 +131,8 @@ fn telemetry_runtime() -> Tree {
     let mut exporters = Tree::new();
     exporters.add_task_spec(exporter);
 
-    let mut tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
+    let mut tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_task_spec(
         heartbeat.restart(RestartPolicy::always().limit(60, Duration::from_secs(60))),
     );
@@ -156,8 +156,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let frontend = frontend_spec.actor_ref();
 
-    let mut tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
+    let mut tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_actor_spec(frontend_spec);
     tree.add_actor_spec(worker_spec);
     tree.add_subtree("pipeline", pipeline_runtime());
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 sleep(Duration::from_millis(150)).await;
             }
             sleep(Duration::from_secs(4)).await;
-            if dynamic.remove_child_named("burst").await.is_err() {
+            if dynamic.remove_named("burst").await.is_err() {
                 break;
             }
         }

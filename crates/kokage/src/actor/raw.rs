@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use crate::actor::context::RawContext;
 pub(crate) use crate::supervisor::BoxError;
@@ -46,14 +46,19 @@ pub trait RawActor: Send + 'static {
     /// The message type this actor receives.
     type Msg: Send + 'static;
 
-    /// Returns whether this actor reports readiness explicitly from
+    /// Returns the deadline for reporting readiness explicitly from
     /// [`RawContext::mark_ready`](crate::raw::RawContext::mark_ready).
     ///
     /// Handler-style [`Actor`](crate::Actor) implementations do this
     /// automatically after `on_start`; custom raw actors are ready immediately
-    /// unless they override this method.
-    fn readiness_gated(&self) -> bool {
-        false
+    /// unless they return a deadline from this method. Missing that deadline
+    /// fails the actor incarnation and is governed by its restart policy. A
+    /// shutdown request disarms the readiness deadline so the actor retains
+    /// its configured cooperative shutdown grace. If readiness and the
+    /// deadline are both observable in the same scheduler turn, readiness
+    /// wins.
+    fn manual_readiness(&self) -> Option<Duration> {
+        None
     }
 
     /// Runs the actor until it finishes or shutdown is requested.

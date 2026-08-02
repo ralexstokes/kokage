@@ -14,8 +14,8 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, DynamicScopeRef, ExitResult, RunningDynamicTree,
-    RunningTree, ScopeRef, TaskContext, TaskRef,
+    ActorFactory, ActorRef, ActorSpec, DynamicScopeRef, ExitResult, RunningTree, ScopeRef,
+    TaskContext, TaskRef,
     actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -23,10 +23,10 @@ use crate::{
 #[derive(Clone)]
 struct ScopeConfig {
     strategy: Strategy,
-    default_restart: RestartPolicy,
-    default_shutdown: Shutdown,
-    default_mailbox_shutdown: MailboxShutdown,
-    mailbox_capacity: usize,
+    default_child_restart: RestartPolicy,
+    default_child_shutdown: Shutdown,
+    default_actor_mailbox_shutdown: MailboxShutdown,
+    default_actor_mailbox_capacity: usize,
     reservation: Option<u64>,
 }
 
@@ -34,10 +34,10 @@ impl ScopeConfig {
     fn new() -> Self {
         Self {
             strategy: Strategy::default(),
-            default_restart: RestartPolicy::default(),
-            default_shutdown: Shutdown::default(),
-            default_mailbox_shutdown: MailboxShutdown::default(),
-            mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
+            default_child_restart: RestartPolicy::default(),
+            default_child_shutdown: Shutdown::default(),
+            default_actor_mailbox_shutdown: MailboxShutdown::default(),
+            default_actor_mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
             reservation: None,
         }
     }
@@ -111,7 +111,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// # Example
 ///
 /// ```
-/// use kokage::prelude::*;
+/// use kokage::{RestartPolicy, Strategy, prelude::*};
 ///
 /// struct Worker;
 ///
@@ -146,47 +146,9 @@ pub struct Tree {
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
 /// [`DynamicScopeRef`] returned by [`scope`](Self::scope) before spawn or by
-/// calling [`RunningDynamicTree::scope`] on the spawned tree.
+/// calling [`RunningTree::scope`] on the spawned tree.
 pub struct DynamicTree {
     inner: IdentityTree<true>,
-}
-
-/// Marker for an empty dynamic scope in a derived [`Supervision`] declaration.
-///
-/// This type is never constructed. With the `derive` feature, place it in a
-/// field marked `#[supervision(dynamic)]`; the generated declaration creates a
-/// [`DynamicTree`] and exposes its [`DynamicScopeRef`] in the generated handles
-/// bundle.
-#[cfg(feature = "derive")]
-pub enum DynamicScope {}
-
-/// Recursive declaration implemented by `#[derive(Supervision)]`.
-///
-/// Application code normally uses the generated `tree` constructor instead of
-/// calling this trait directly. It is public so a derived declaration can nest
-/// a derived scope from another module or crate.
-#[cfg(feature = "derive")]
-pub trait Supervision: Sized {
-    /// Nested actor and scope handles generated for this declaration.
-    type Handles: Clone;
-
-    /// Reserved single-use construction state generated for this declaration.
-    #[doc(hidden)]
-    type Slots;
-
-    /// Reserves every actor binding and scope identity before factories are wired.
-    #[doc(hidden)]
-    fn __open() -> (Self::Slots, Self::Handles);
-}
-
-/// Factory bundle generated for a derived [`Supervision`] declaration.
-///
-/// This is public only as cross-crate glue for generated implementations.
-#[cfg(feature = "derive")]
-#[doc(hidden)]
-pub trait SupervisionFactories<T: Supervision> {
-    /// Fills the reserved actor slots and assembles the ordinary tree.
-    fn __define(self, slots: T::Slots) -> Tree;
 }
 
 /// Opaque ownership of either kind of supervision tree.
@@ -244,8 +206,8 @@ impl SubtreeSpec {
     /// Sets the policy used by the enclosing scope to stop this subtree.
     ///
     /// This configures the nested scope's edge in its parent. It is distinct
-    /// from [`Tree::default_shutdown`] and
-    /// [`DynamicTree::default_shutdown`], which configure children inside the
+    /// from [`Tree::default_child_shutdown`] and
+    /// [`DynamicTree::default_child_shutdown`], which configure children inside the
     /// nested scope.
     #[must_use]
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
@@ -277,28 +239,28 @@ macro_rules! tree_common_methods {
         /// Sets the restart policy inherited by all direct children in this
         /// scope, including actors, tasks, and subtree edges.
         #[must_use]
-        pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
-            self.inner = self.inner.default_restart(restart);
+        pub fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+            self.inner = self.inner.default_child_restart(restart);
             self
         }
 
         /// Sets the shutdown policy inherited by all direct children in this
         /// scope, including actors, tasks, and subtree edges.
         #[must_use]
-        pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
-            self.inner = self.inner.default_shutdown(shutdown);
+        pub fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+            self.inner = self.inner.default_child_shutdown(shutdown);
             self
         }
 
-        /// Sets the mailbox shutdown policy inherited by actors in this scope.
+        /// Sets the mailbox shutdown policy inherited by actors directly in this scope.
         ///
         /// This actor-only default does not apply to tasks or subtree edges.
         /// Nested scopes do not inherit it; configure each subtree explicitly
         /// when it needs a different default. Individual actors can override
         /// it with [`ActorSpec::mailbox_shutdown`](crate::ActorSpec::mailbox_shutdown).
         #[must_use]
-        pub fn default_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
-            self.inner = self.inner.default_mailbox_shutdown(policy);
+        pub fn default_actor_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+            self.inner = self.inner.default_actor_mailbox_shutdown(policy);
             self
         }
 
@@ -314,8 +276,8 @@ macro_rules! tree_common_methods {
         /// The value is validated when the tree is spawned or dynamically
         /// inserted.
         #[must_use]
-        pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-            self.inner = self.inner.mailbox_capacity(capacity);
+        pub fn default_actor_mailbox_capacity(mut self, capacity: usize) -> Self {
+            self.inner = self.inner.default_actor_mailbox_capacity(capacity);
             self
         }
 
@@ -429,20 +391,6 @@ impl Tree {
         self.add_subtree_spec(id, tree.into())
     }
 
-    /// Appends a dynamic nested scope and returns its mutation-capable handle.
-    ///
-    /// This is the typed counterpart to [`add_subtree`](Self::add_subtree).
-    /// Use it when the caller will add runtime children to the nested scope.
-    pub fn add_dynamic_subtree(
-        &mut self,
-        id: impl Into<String>,
-        tree: DynamicTree,
-    ) -> DynamicScopeRef {
-        let scope = tree.scope();
-        self.add_subtree(id, tree);
-        scope
-    }
-
     /// Appends an explicitly configured subtree declaration and returns its scope handle.
     pub fn add_subtree_spec(&mut self, id: impl Into<String>, tree: SubtreeSpec) -> ScopeRef {
         let id = id.into();
@@ -458,7 +406,7 @@ impl Tree {
                 scope
             }
             SubtreeKind::Dynamic(tree) => {
-                let scope = tree.scope().into_scope();
+                let scope = ScopeRef::from(tree.scope());
                 self.inner.add_subtree(id, tree.inner, restart, shutdown);
                 scope
             }
@@ -510,10 +458,10 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`RunningDynamicTree`] for as long as the runtime
+    /// Retain the returned [`RunningTree`] for as long as the runtime
     /// should remain alive. Dropping it requests graceful shutdown;
     /// [`DynamicScopeRef`] values are non-owning. Access the root scope after
-    /// spawn with [`RunningDynamicTree::scope`].
+    /// spawn with [`RunningTree::scope`].
     ///
     /// # Errors
     ///
@@ -521,12 +469,9 @@ impl DynamicTree {
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<RunningDynamicTree, BuildError> {
+    pub fn spawn(self) -> Result<RunningTree<DynamicScopeRef>, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RunningDynamicTree::new(RunningTree::new(
-            supervisor.spawn(),
-            actors,
-        )))
+        Ok(RunningTree::new(supervisor.spawn(), actors))
     }
 }
 
@@ -630,28 +575,28 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
 
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(mut self, restart: RestartPolicy) -> Self {
-        self.config_mut().default_restart = restart;
+    fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+        self.config_mut().default_child_restart = restart;
         self
     }
 
     /// Sets the shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
-        self.config_mut().default_shutdown = shutdown;
+    fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+        self.config_mut().default_child_shutdown = shutdown;
         self
     }
 
     /// Sets the mailbox shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
-        self.config_mut().default_mailbox_shutdown = policy;
+    fn default_actor_mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
+        self.config_mut().default_actor_mailbox_shutdown = policy;
         self
     }
 
     #[must_use]
-    fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.config_mut().mailbox_capacity = capacity;
+    fn default_actor_mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.config_mut().default_actor_mailbox_capacity = capacity;
         self
     }
 
@@ -688,9 +633,9 @@ impl ScopeNode {
                 .iter()
                 .map(|child| {
                     child.outline(
-                        config.default_restart,
-                        config.default_shutdown,
-                        config.default_mailbox_shutdown,
+                        config.default_child_restart,
+                        config.default_child_shutdown,
+                        config.default_actor_mailbox_shutdown,
                     )
                 })
                 .collect(),
@@ -699,9 +644,9 @@ impl ScopeNode {
         SupervisionOutline {
             kind: self.kind(),
             strategy: config.strategy,
-            default_restart: config.default_restart,
-            default_shutdown: config.default_shutdown,
-            default_mailbox_shutdown: config.default_mailbox_shutdown,
+            default_child_restart: config.default_child_restart,
+            default_child_shutdown: config.default_child_shutdown,
+            default_actor_mailbox_shutdown: config.default_actor_mailbox_shutdown,
             children,
         }
     }
@@ -711,12 +656,13 @@ impl ScopeNode {
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
         let config = self.config().clone();
-        if config.mailbox_capacity == 0 {
+        if config.default_actor_mailbox_capacity == 0 {
             return Err(BuildError::InvalidConfig(
                 "actor mailbox capacity must be non-zero",
             ));
         }
-        let actor_builder = RunnableActorBuilder::with_mailbox_capacity(config.mailbox_capacity);
+        let actor_builder =
+            RunnableActorBuilder::with_mailbox_capacity(config.default_actor_mailbox_capacity);
         let reservation = config.reservation.and_then(|id| {
             reservations
                 .iter()
@@ -727,18 +673,18 @@ impl ScopeNode {
             || {
                 Arc::new(ActorRuntimeState::new(
                     actor_builder.clone(),
-                    config.default_restart,
-                    config.default_shutdown,
-                    config.default_mailbox_shutdown,
+                    config.default_child_restart,
+                    config.default_child_shutdown,
+                    config.default_actor_mailbox_shutdown,
                 ))
             },
             |reservation| Arc::clone(&reservation.actors),
         );
         actors.configure(
             actor_builder,
-            config.default_restart,
-            config.default_shutdown,
-            config.default_mailbox_shutdown,
+            config.default_child_restart,
+            config.default_child_shutdown,
+            config.default_actor_mailbox_shutdown,
         );
 
         match self {
@@ -751,8 +697,8 @@ impl ScopeNode {
                     None => Supervisor::dynamic(),
                 };
                 builder = builder
-                    .default_restart(config.default_restart)
-                    .default_shutdown(config.default_shutdown);
+                    .default_child_restart(config.default_child_restart)
+                    .default_child_shutdown(config.default_child_shutdown);
                 Ok((builder.build()?, actors))
             }
             Self::Ordered { children, .. } => {
@@ -765,15 +711,15 @@ impl ScopeNode {
                 };
                 let mut builder = builder
                     .strategy(config.strategy)
-                    .default_restart(config.default_restart)
-                    .default_shutdown(config.default_shutdown);
+                    .default_child_restart(config.default_child_restart)
+                    .default_child_shutdown(config.default_child_shutdown);
                 for child in children {
                     builder = child.lower(
                         builder,
                         &actors,
-                        config.default_restart,
-                        config.default_shutdown,
-                        config.default_mailbox_shutdown,
+                        config.default_child_restart,
+                        config.default_child_shutdown,
+                        config.default_actor_mailbox_shutdown,
                         reservations,
                     )?;
                 }
@@ -795,26 +741,28 @@ impl SupervisionChild {
     #[cfg(feature = "serde")]
     fn outline(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
     ) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
                 id: actor.label().to_owned(),
-                restart: actor.restart.unwrap_or(default_restart),
-                shutdown: actor.shutdown.unwrap_or(default_shutdown),
-                mailbox_shutdown: actor.mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
-                remove_when_done: actor.remove_when_done,
+                restart: actor.restart.unwrap_or(default_child_restart),
+                shutdown: actor.shutdown.unwrap_or(default_child_shutdown),
+                mailbox_shutdown: actor
+                    .mailbox_shutdown
+                    .unwrap_or(default_actor_mailbox_shutdown),
+                remove_on_terminal_exit: actor.remove_on_terminal_exit,
             },
             Self::Task(child) => {
                 let (restart, shutdown) =
-                    child.resolved_policies(default_restart, default_shutdown);
+                    child.resolved_policies(default_child_restart, default_child_shutdown);
                 ChildOutline::Task {
                     id: child.id().to_owned(),
                     restart,
                     shutdown,
-                    remove_when_done: child.removes_when_done(),
+                    remove_on_terminal_exit: child.removes_on_terminal_exit(),
                 }
             }
             Self::Scope {
@@ -824,8 +772,8 @@ impl SupervisionChild {
                 shutdown,
             } => ChildOutline::Scope {
                 id: id.clone(),
-                restart: restart.unwrap_or(default_restart),
-                shutdown: shutdown.unwrap_or(default_shutdown),
+                restart: restart.unwrap_or(default_child_restart),
+                shutdown: shutdown.unwrap_or(default_child_shutdown),
                 outline: node.outline(),
             },
         }
@@ -835,9 +783,9 @@ impl SupervisionChild {
         self,
         builder: OrderedSupervisorBuilder,
         actors: &Arc<ActorRuntimeState>,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
-        default_mailbox_shutdown: MailboxShutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
+        default_actor_mailbox_shutdown: MailboxShutdown,
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, BuildError> {
         Ok(match self {
@@ -851,16 +799,16 @@ impl SupervisionChild {
                     restart,
                     shutdown,
                     mailbox_shutdown,
-                    remove_when_done,
+                    remove_on_terminal_exit,
                 } = actors.materialize_actor_node(actor);
                 builder.child_spec(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
                     actors,
                     ActorChildOptions::new(
-                        restart.unwrap_or(default_restart),
-                        shutdown.unwrap_or(default_shutdown),
-                        mailbox_shutdown.unwrap_or(default_mailbox_shutdown),
-                        remove_when_done,
+                        restart.unwrap_or(default_child_restart),
+                        shutdown.unwrap_or(default_child_shutdown),
+                        mailbox_shutdown.unwrap_or(default_actor_mailbox_shutdown),
+                        remove_on_terminal_exit,
                     ),
                 ))
             }
@@ -893,10 +841,12 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         let id = NEXT_RESERVATION_ID.fetch_add(1, Ordering::Relaxed);
         tree.config_mut().reservation = Some(id);
         let actors = Arc::new(ActorRuntimeState::new(
-            RunnableActorBuilder::with_mailbox_capacity(tree.config().mailbox_capacity),
-            tree.config().default_restart,
-            tree.config().default_shutdown,
-            tree.config().default_mailbox_shutdown,
+            RunnableActorBuilder::with_mailbox_capacity(
+                tree.config().default_actor_mailbox_capacity,
+            ),
+            tree.config().default_child_restart,
+            tree.config().default_child_shutdown,
+            tree.config().default_actor_mailbox_shutdown,
         ));
         let builder = match tree.node {
             ScopeNode::Ordered { .. } => ReservedScopeBuilder::Ordered(Some(Supervisor::ordered())),
@@ -935,22 +885,29 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             ScopeNode::Ordered { children, .. } => children
                 .iter()
                 .map(|child| {
-                    let (restart, remove_when_done) = match child {
+                    let (restart, remove_on_terminal_exit) = match child {
                         SupervisionChild::Actor(actor) => (
-                            actor.restart.unwrap_or(config.default_restart),
-                            actor.remove_when_done,
+                            actor.restart.unwrap_or(config.default_child_restart),
+                            actor.remove_on_terminal_exit,
                         ),
                         SupervisionChild::Task(child) => (
                             child
-                                .resolved_policies(config.default_restart, config.default_shutdown)
+                                .resolved_policies(
+                                    config.default_child_restart,
+                                    config.default_child_shutdown,
+                                )
                                 .0,
-                            child.removes_when_done(),
+                            child.removes_on_terminal_exit(),
                         ),
                         SupervisionChild::Scope { restart, .. } => {
-                            (restart.unwrap_or(config.default_restart), false)
+                            (restart.unwrap_or(config.default_child_restart), false)
                         }
                     };
-                    (child.declared_id().to_owned(), restart, remove_when_done)
+                    (
+                        child.declared_id().to_owned(),
+                        restart,
+                        remove_on_terminal_exit,
+                    )
                 })
                 .collect(),
             ScopeNode::Dynamic { .. } => Vec::new(),
@@ -961,10 +918,10 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             .find(|reservation| reservation.id == id)
             .expect("reserved tree owns its root reservation");
         reservation.actors.configure(
-            RunnableActorBuilder::with_mailbox_capacity(config.mailbox_capacity),
-            config.default_restart,
-            config.default_shutdown,
-            config.default_mailbox_shutdown,
+            RunnableActorBuilder::with_mailbox_capacity(config.default_actor_mailbox_capacity),
+            config.default_child_restart,
+            config.default_child_shutdown,
+            config.default_actor_mailbox_shutdown,
         );
         if let ReservedScopeBuilder::Ordered(builder) = &mut reservation.builder {
             let configured = builder
@@ -997,25 +954,25 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
 
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(self, restart: RestartPolicy) -> Self {
-        self.map_tree(|tree| tree.default_restart(restart))
+    fn default_child_restart(self, restart: RestartPolicy) -> Self {
+        self.map_tree(|tree| tree.default_child_restart(restart))
     }
 
     /// Sets the shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_shutdown(self, shutdown: Shutdown) -> Self {
-        self.map_tree(|tree| tree.default_shutdown(shutdown))
+    fn default_child_shutdown(self, shutdown: Shutdown) -> Self {
+        self.map_tree(|tree| tree.default_child_shutdown(shutdown))
     }
 
     /// Sets the mailbox shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_mailbox_shutdown(self, policy: MailboxShutdown) -> Self {
-        self.map_tree(|tree| tree.default_mailbox_shutdown(policy))
+    fn default_actor_mailbox_shutdown(self, policy: MailboxShutdown) -> Self {
+        self.map_tree(|tree| tree.default_actor_mailbox_shutdown(policy))
     }
 
     #[must_use]
-    fn mailbox_capacity(self, capacity: usize) -> Self {
-        self.map_tree(|tree| tree.mailbox_capacity(capacity))
+    fn default_actor_mailbox_capacity(self, capacity: usize) -> Self {
+        self.map_tree(|tree| tree.default_actor_mailbox_capacity(capacity))
     }
 
     /// Projects the executable scope to serializable, payload-free data.
@@ -1098,9 +1055,12 @@ impl std::fmt::Debug for DebugScope<'_> {
         f.debug_struct("SupervisionTree")
             .field("kind", &self.0.kind())
             .field("strategy", &config.strategy)
-            .field("default_restart", &config.default_restart)
-            .field("default_shutdown", &config.default_shutdown)
-            .field("default_mailbox_shutdown", &config.default_mailbox_shutdown)
+            .field("default_child_restart", &config.default_child_restart)
+            .field("default_child_shutdown", &config.default_child_shutdown)
+            .field(
+                "default_actor_mailbox_shutdown",
+                &config.default_actor_mailbox_shutdown,
+            )
             .field("children", &DebugChildren { children, config })
             .finish()
     }
@@ -1135,28 +1095,30 @@ impl std::fmt::Debug for DebugChild<'_> {
                 .field("id", &actor.label())
                 .field(
                     "restart",
-                    &actor.restart.unwrap_or(self.config.default_restart),
+                    &actor.restart.unwrap_or(self.config.default_child_restart),
                 )
                 .field(
                     "shutdown",
-                    &actor.shutdown.unwrap_or(self.config.default_shutdown),
+                    &actor.shutdown.unwrap_or(self.config.default_child_shutdown),
                 )
                 .field(
                     "mailbox_shutdown",
                     &actor
                         .mailbox_shutdown
-                        .unwrap_or(self.config.default_mailbox_shutdown),
+                        .unwrap_or(self.config.default_actor_mailbox_shutdown),
                 )
-                .field("remove_when_done", &actor.remove_when_done)
+                .field("remove_on_terminal_exit", &actor.remove_on_terminal_exit)
                 .finish(),
             SupervisionChild::Task(task) => {
-                let (restart, shutdown) = task
-                    .resolved_policies(self.config.default_restart, self.config.default_shutdown);
+                let (restart, shutdown) = task.resolved_policies(
+                    self.config.default_child_restart,
+                    self.config.default_child_shutdown,
+                );
                 f.debug_struct("Task")
                     .field("id", &task.id())
                     .field("restart", &restart)
                     .field("shutdown", &shutdown)
-                    .field("remove_when_done", &task.removes_when_done())
+                    .field("remove_on_terminal_exit", &task.removes_on_terminal_exit())
                     .finish()
             }
             SupervisionChild::Scope {
@@ -1167,10 +1129,13 @@ impl std::fmt::Debug for DebugChild<'_> {
             } => f
                 .debug_struct("Scope")
                 .field("id", id)
-                .field("restart", &restart.unwrap_or(self.config.default_restart))
+                .field(
+                    "restart",
+                    &restart.unwrap_or(self.config.default_child_restart),
+                )
                 .field(
                     "shutdown",
-                    &shutdown.unwrap_or(self.config.default_shutdown),
+                    &shutdown.unwrap_or(self.config.default_child_shutdown),
                 )
                 .field("tree", &DebugScope(node))
                 .finish(),
@@ -1179,8 +1144,12 @@ impl std::fmt::Debug for DebugChild<'_> {
 }
 
 /// Serializable, payload-free declaration tree for persisted comparison.
+///
+/// Deserialization rejects unknown scope and child declaration fields, so
+/// schema changes require coordinated updates to readers and writers.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SupervisionOutline {
     /// Immutable scope kind.
@@ -1189,13 +1158,13 @@ pub struct SupervisionOutline {
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
     #[serde(default)]
-    pub default_restart: RestartPolicy,
+    pub default_child_restart: RestartPolicy,
     /// Shutdown policy inherited by children without an explicit override.
     #[serde(default)]
-    pub default_shutdown: Shutdown,
+    pub default_child_shutdown: Shutdown,
     /// Mailbox shutdown policy inherited by actors without an explicit override.
     #[serde(default)]
-    pub default_mailbox_shutdown: MailboxShutdown,
+    pub default_actor_mailbox_shutdown: MailboxShutdown,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
 }
@@ -1217,8 +1186,7 @@ pub enum ChildOutline {
         #[serde(default)]
         mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     },
     /// An arbitrary task child.
     Task {
@@ -1229,8 +1197,7 @@ pub enum ChildOutline {
         /// Shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
-        remove_when_done: bool,
+        remove_on_terminal_exit: bool,
     },
     /// A nested ordered or dynamic scope.
     Scope {

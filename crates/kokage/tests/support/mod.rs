@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, DynamicScopeRef, RunningDynamicTree, Tree, raw::RawActor,
+    ActorFactory, ActorRef, ActorSlot, DynamicScopeRef, RunningTree, Tree, raw::RawActor,
 };
 #[cfg(feature = "host")]
 use kokage::{ActorSpec, raw::ActorHost};
 
-pub(crate) fn dynamic_root(running_tree: &RunningDynamicTree) -> DynamicScopeRef {
+pub(crate) fn dynamic_root(running_tree: &RunningTree<DynamicScopeRef>) -> DynamicScopeRef {
     running_tree.scope()
 }
 
@@ -88,8 +88,8 @@ impl TreeBuilder {
         self.tree.add_actor_spec(slot.define(factory))
     }
 
-    pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
-        self.tree = std::mem::take(&mut self.tree).mailbox_capacity(capacity);
+    pub(crate) fn default_actor_mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
+        self.tree = std::mem::take(&mut self.tree).default_actor_mailbox_capacity(capacity);
         self
     }
 

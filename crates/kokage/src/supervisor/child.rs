@@ -3,6 +3,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use crate::{
@@ -28,7 +29,7 @@ pub(crate) struct ChildDefinition {
     restart_is_default: bool,
     pub(crate) shutdown_policy: Shutdown,
     shutdown_is_default: bool,
-    pub(crate) remove_when_done: bool,
+    pub(crate) remove_on_terminal_exit: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) kind: ChildKind,
@@ -38,7 +39,14 @@ pub(crate) struct ChildDefinition {
 pub(crate) enum ChildReadiness {
     #[default]
     Immediate,
-    Explicit,
+    Manual(Duration),
+    Automatic,
+}
+
+impl ChildReadiness {
+    pub(crate) fn is_gated(self) -> bool {
+        !matches!(self, Self::Immediate)
+    }
 }
 
 pub(crate) enum ChildKind {
@@ -147,7 +155,7 @@ impl TaskSpec {
                     restart_is_default: true,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
-                    remove_when_done: false,
+                    remove_on_terminal_exit: false,
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(make_child_factory(f)),
@@ -177,29 +185,38 @@ impl TaskSpec {
     ///
     /// By default a terminal child remains visible as an inactive membership.
     /// This setting is independent of the selected [`RestartPolicy`].
+    /// It does not turn an otherwise eligible restart into a terminal exit;
+    /// exhausting the restart budget still fails the enclosing scope.
+    /// Here, terminal means an exit a running supervisor evaluates and declines
+    /// to restart. The option is not applied during supervisor shutdown, and a
+    /// non-`Never` child completing during a group-restart drain is respawned
+    /// with the group.
     #[must_use]
-    pub fn remove_when_done(self) -> Self {
+    pub fn remove_on_terminal_exit(self) -> Self {
         Self {
-            spec: self.spec.remove_when_done(),
+            spec: self.spec.remove_on_terminal_exit(),
         }
     }
 
     /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
-    /// before it is considered started.
+    /// within `timeout` before it is considered started.
     ///
     /// An ordered supervisor waits for this signal before starting its next
     /// declared task.
     /// If the task exits before reporting readiness, its ordinary restart
     /// policy applies. The sequence waits through a scheduled restart; if the
     /// exit is terminal, the task is marked startup-aborted and the sequence
-    /// skips it. There is no built-in readiness timeout; use a timeout inside
-    /// the task when initialization must be bounded. Shutdown and control
-    /// commands remain responsive while a supervisor waits for readiness, so a
-    /// task may await a control operation before calling `mark_ready`.
+    /// skips it. Missing the deadline is a startup failure governed by the
+    /// task's ordinary restart policy. A shutdown request disarms the
+    /// readiness deadline so the task retains its configured cooperative
+    /// shutdown grace. If readiness and the deadline are both observable in
+    /// the same scheduler turn, readiness wins. Shutdown and control commands
+    /// remain responsive while a supervisor waits for readiness, so a task may
+    /// await a control operation before calling `mark_ready`.
     #[must_use]
-    pub fn wait_for_ready(self) -> Self {
+    pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {
-            spec: self.spec.wait_for_ready(),
+            spec: self.spec.manual_readiness(timeout),
         }
     }
 
@@ -214,23 +231,24 @@ impl TaskSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
     ) -> (RestartPolicy, Shutdown) {
         self.spec
-            .resolved_policies(default_restart, default_shutdown)
+            .resolved_policies(default_child_restart, default_child_shutdown)
     }
 
-    pub(crate) fn removes_when_done(&self) -> bool {
-        self.spec.inner.remove_when_done
+    pub(crate) fn removes_on_terminal_exit(&self) -> bool {
+        self.spec.inner.remove_on_terminal_exit
     }
 }
 
 impl OneShotTaskSpec {
     /// Creates finite work whose consuming factory runs at most once.
     ///
-    /// The task never restarts and its membership is removed after completion
-    /// unless [`retain_when_done`](Self::retain_when_done) is selected.
+    /// The task never restarts and its membership is removed after its terminal
+    /// exit unless
+    /// [`retain_on_terminal_exit`](Self::retain_on_terminal_exit) is selected.
     pub fn new<F, Fut>(id: impl Into<String>, f: F) -> Self
     where
         F: FnOnce(TaskContext) -> Fut + Send + 'static,
@@ -244,7 +262,7 @@ impl OneShotTaskSpec {
                     restart_is_default: false,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
-                    remove_when_done: true,
+                    remove_on_terminal_exit: true,
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(Arc::new(OneShotFactory {
@@ -269,28 +287,30 @@ impl OneShotTaskSpec {
     /// This is useful when scope-level snapshot observers need to discover the
     /// terminal state without already holding its [`TaskRef`](crate::TaskRef).
     /// The retained membership continues to occupy its child id until it is
-    /// passed to [`DynamicScopeRef::remove_task`](crate::DynamicScopeRef::remove_task)
+    /// passed to [`DynamicScopeRef::remove`](crate::DynamicScopeRef::remove)
     /// or the scope shuts down. The default removes the membership after
-    /// completion; the returned `TaskRef` retains the terminal outcome either
-    /// way.
+    /// terminal exit; the returned `TaskRef` retains the terminal outcome
+    /// either way.
     #[must_use]
-    pub fn retain_when_done(self) -> Self {
+    pub fn retain_on_terminal_exit(self) -> Self {
         Self {
-            spec: self.spec.retain_when_done(),
+            spec: self.spec.retain_on_terminal_exit(),
         }
     }
 
     /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
-    /// before it is considered started.
+    /// within `timeout` before it is considered started.
     ///
     /// The dynamic membership remains in its starting state until this signal.
-    /// If the task exits first, it is marked startup-aborted and cannot restart.
-    /// There is no built-in readiness timeout; use a timeout inside the task
-    /// when initialization must be bounded.
+    /// If the task exits or misses the deadline first, it is marked
+    /// startup-aborted and cannot restart. A shutdown request disarms the
+    /// readiness deadline so the task retains its configured cooperative
+    /// shutdown grace. If readiness and the deadline are both observable in
+    /// the same scheduler turn, readiness wins.
     #[must_use]
-    pub fn wait_for_ready(self) -> Self {
+    pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {
-            spec: self.spec.wait_for_ready(),
+            spec: self.spec.manual_readiness(timeout),
         }
     }
 
@@ -322,8 +342,8 @@ impl ChildSpec {
                 restart_is_default: true,
                 shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
-                remove_when_done: false,
-                readiness: ChildReadiness::Explicit,
+                remove_on_terminal_exit: false,
+                readiness: ChildReadiness::Automatic,
                 attachment: None,
                 kind: ChildKind::Supervisor(supervisor),
             }),
@@ -351,13 +371,13 @@ impl ChildSpec {
     }
 
     #[must_use]
-    pub(crate) fn remove_when_done(self) -> Self {
-        self.map_inner(|inner| inner.remove_when_done = true)
+    pub(crate) fn remove_on_terminal_exit(self) -> Self {
+        self.map_inner(|inner| inner.remove_on_terminal_exit = true)
     }
 
     #[must_use]
-    pub(crate) fn retain_when_done(self) -> Self {
-        self.map_inner(|inner| inner.remove_when_done = false)
+    pub(crate) fn retain_on_terminal_exit(self) -> Self {
+        self.map_inner(|inner| inner.remove_on_terminal_exit = false)
     }
 
     /// Attaches process-local metadata to this supervised child.
@@ -373,11 +393,19 @@ impl ChildSpec {
         self.map_inner(|inner| inner.attachment = Some(Arc::new(attachment)))
     }
 
-    /// Requires the child to report readiness before it is considered
-    /// started. See [`TaskSpec::wait_for_ready`] for the full contract.
+    /// Requires a task child to report readiness within `timeout` before it is
+    /// considered started. See [`TaskSpec::manual_readiness`] for the full
+    /// contract.
     #[must_use]
-    pub(crate) fn wait_for_ready(self) -> Self {
-        self.map_inner(|inner| inner.readiness = ChildReadiness::Explicit)
+    pub(crate) fn manual_readiness(self, timeout: Duration) -> Self {
+        self.map_inner(|inner| inner.readiness = ChildReadiness::Manual(timeout))
+    }
+
+    /// Waits for framework-owned readiness, such as an actor host or nested
+    /// supervisor reporting that its own startup protocol has completed.
+    #[must_use]
+    pub(crate) fn automatic_readiness(self) -> Self {
+        self.map_inner(|inner| inner.readiness = ChildReadiness::Automatic)
     }
 
     /// Returns the child's unique identifier.
@@ -387,16 +415,16 @@ impl ChildSpec {
 
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: Shutdown,
+        default_child_restart: RestartPolicy,
+        default_child_shutdown: Shutdown,
     ) -> (RestartPolicy, Shutdown) {
         let restart = if self.inner.restart_is_default {
-            default_restart
+            default_child_restart
         } else {
             self.inner.restart
         };
         let shutdown = if self.inner.shutdown_is_default {
-            default_shutdown
+            default_child_shutdown
         } else {
             self.inner.shutdown_policy
         };

@@ -51,13 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let mut tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
+    let mut tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
     tree.add_task_spec(warm_cache);
     tree.add_task_spec(metrics);
     let running_tree = tree.spawn()?;
     let scope = running_tree.scope();
-    let mut snapshots = scope.snapshots();
+    let mut snapshots = scope.subscribe_snapshots();
     let scheduled = timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("warm-cache", |child| child.next_restart_in.is_some()),
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
 
-    scope.shutdown().await?;
+    scope.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())
