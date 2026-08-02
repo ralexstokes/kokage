@@ -42,7 +42,7 @@ name = "trading_engine"
 required-features = ["derive", "metrics"]
 
 [[example]]
-name = "agent_control"
+name = "assistant_control_plane"
 required-features = ["derive", "metrics"]
 
 [[example]]

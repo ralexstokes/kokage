@@ -30,7 +30,7 @@ public-api:
 
 smoke:
     cargo run --locked -p kokage --example trading_engine --features metrics,derive
-    cargo run --locked -p kokage --example agent_control --features metrics,derive
+    cargo run --locked -p kokage --example assistant_control_plane --features metrics,derive
     cargo run --locked -p kokage --example build_farm --features serde
 
 all-examples:
