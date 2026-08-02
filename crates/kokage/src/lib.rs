@@ -117,8 +117,8 @@
 //! ordering, and delivery contract appropriate to its audience.
 //! [`ScopeRef::observe_children`] is the reducer-oriented projection: it
 //! aligns a snapshot with direct-child transitions, suppresses transitions
-//! already represented by that snapshot, and recovers queue overflow with a
-//! complete [`observe::ChildObservationUpdate::Reset`].
+//! already represented by that snapshot, and recovers queue overflow or scope
+//! reincarnation with a complete [`observe::ChildObservationUpdate::Reset`].
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
@@ -257,11 +257,10 @@ pub mod observe {
 /// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
-        DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-        MonitorEventKind, OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
-        SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey,
-        Tree,
+        Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
+        DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
+        OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind,
+        Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
     };
 }
 

@@ -8,8 +8,9 @@ down.
 ## The owner and the references
 
 Both `Tree::spawn` and `DynamicTree::spawn` return a [`RunningTree`] — the
-unique **owner** of the whole supervision tree. The inferred root-scope type is
-`ScopeRef` for an ordered tree and `DynamicScopeRef` for a dynamic tree.
+unique **owner** of the whole supervision tree. Each spawn method fixes the
+root-scope type: `ScopeRef` for an ordered tree and `DynamicScopeRef` for a
+dynamic tree.
 Ownership here is literal Rust ownership:
 
 - Keep it alive for as long as the application should run.
