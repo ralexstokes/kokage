@@ -21,10 +21,10 @@
 //! holding the root [`ScopeRef`] has this same power, which is why the
 //! operator is a role, not an authority the framework enforces.
 
-use std::{error::Error, fmt::Write as _, io, time::Duration};
+use std::{error::Error, fmt::Write as _, time::Duration};
 
 use kokage::{
-    BoxError, MonitorEvent, RestartPolicy, SubtreeSpec,
+    MonitorEvent, RestartPolicy, SubtreeSpec,
     observe::{ChildStateView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
     prelude::*,
 };
@@ -51,7 +51,7 @@ impl Actor for Worker {
 
     async fn handle(&mut self, message: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         if message == "poison" {
-            return Err::<_, BoxError>(Box::new(io::Error::other("simulated worker failure")));
+            return Err("simulated worker failure".into());
         }
         println!("[worker] processed `{message}`");
         Ok(())
@@ -84,8 +84,8 @@ enum OperatorMsg {
     Report(Reply<String>),
     /// Add a `Job` actor to the dynamic `jobs` scope.
     SpawnJob(String, Reply<Result<(), String>>),
-    /// Run finite one-shot work under supervision in `jobs`.
-    RunOnce(String, Reply<Result<(), String>>),
+    /// Spawn finite one-shot work under supervision in `jobs`.
+    SpawnOnce(String, Reply<Result<TaskRef, String>>),
     /// Remove whichever `jobs` member currently owns the id.
     RemoveJob(String, Reply<Result<(), String>>),
     /// Gracefully stop the `pipeline` subtree and wait for it.
@@ -134,7 +134,7 @@ impl Actor for Operator {
                 };
                 reply.send(result);
             }
-            OperatorMsg::RunOnce(id, reply) => {
+            OperatorMsg::SpawnOnce(id, reply) => {
                 let result = match jobs_scope(&root) {
                     Ok(jobs) => jobs
                         .spawn_once(id.clone(), move |_ctx| async move {
@@ -142,7 +142,6 @@ impl Actor for Operator {
                             Ok(())
                         })
                         .await
-                        .map(drop)
                         .map_err(|error| error.to_string()),
                     Err(error) => Err(error),
                 };
@@ -177,18 +176,24 @@ impl Actor for Operator {
                 ctx.request_scope_shutdown();
             }
             OperatorMsg::TreeEvent(event) => {
-                if let LifecycleEventKind::Child(child) = &event.kind {
-                    let path: Vec<&str> = event
-                        .scope_path
-                        .iter()
-                        .map(|segment| segment.id.as_str())
-                        .collect();
-                    println!(
-                        "[operator] /{} `{}` {:?}",
-                        path.join("/"),
-                        child.child_id,
-                        child.kind
-                    );
+                let path = event
+                    .scope_path
+                    .iter()
+                    .map(|segment| segment.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                match &event.kind {
+                    LifecycleEventKind::Child(child) => {
+                        println!("[operator] /{path} `{}` {:?}", child.child_id, child.kind)
+                    }
+                    LifecycleEventKind::Lagged { dropped } => {
+                        println!(
+                            "[operator] /{path} lifecycle stream dropped {dropped} events; \
+                             resyncing from a snapshot"
+                        );
+                        print!("{}", render_report(&root));
+                    }
+                    kind => println!("[operator] /{path} {kind:?}"),
                 }
             }
             OperatorMsg::WorkerEvent(event) => {
@@ -316,12 +321,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             CALL_TIMEOUT,
         )
         .await??;
-    operator
+    let one_shot = operator
         .call(
-            |reply| OperatorMsg::RunOnce("backfill".into(), reply),
+            |reply| OperatorMsg::SpawnOnce("backfill".into(), reply),
             CALL_TIMEOUT,
         )
         .await??;
+    let one_shot_exit = tokio::time::timeout(CALL_TIMEOUT, one_shot.wait()).await??;
+    if !one_shot_exit.is_completed() {
+        return Err(format!("one-shot work exited unexpectedly: {one_shot_exit:?}").into());
+    }
 
     // 3. Fail the worker and watch supervision restart it. The operator reports
     //    the same transitions through its lifecycle pump and peer watch.
@@ -333,13 +342,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .generation;
     ingest.send("one".into()).await?;
     ingest.send("poison".into()).await?;
-    snapshots
-        .wait_for(|snapshot| {
+    tokio::time::timeout(
+        CALL_TIMEOUT,
+        snapshots.wait_for(|snapshot| {
             snapshot
                 .descendant(["pipeline", "worker"])
                 .is_some_and(|child| child.generation > baseline && child.state.is_running())
-        })
-        .await?;
+        }),
+    )
+    .await??;
     ingest.send("two".into()).await?;
 
     println!("--- after failure and dynamic growth ---");
