@@ -709,7 +709,7 @@ impl Actor for DefaultPolicy {
 }
 
 #[test]
-fn the_default_child_shutdown_drains() {
+fn the_shutdown_default_drains() {
     assert_eq!(
         Shutdown::default(),
         Shutdown::graceful_for(std::time::Duration::from_secs(5))

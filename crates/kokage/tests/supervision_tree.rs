@@ -703,6 +703,21 @@ fn an_outline_rejects_retired_scope_default_keys() {
 
 #[cfg(feature = "serde")]
 #[test]
+fn an_outline_rejects_unknown_child_keys() {
+    let (graph, _ingest, _parse) = two_actor_tree();
+    let json = serde_json::to_string(&graph.outline()).expect("outline serializes");
+    let unknown_json = json.replacen("\"remove_when_done\":", "\"unknown_child_policy\":", 1);
+    let error = serde_json::from_str::<kokage::observe::SupervisionOutline>(&unknown_json)
+        .expect_err("unknown child keys must not deserialize");
+
+    assert!(
+        error.to_string().contains("unknown field"),
+        "unexpected error: {error}"
+    );
+}
+
+#[cfg(feature = "serde")]
+#[test]
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(RestartPolicy::on_failure()).expect("restart serializes");
     assert_eq!(restart["condition"], "OnFailure");
