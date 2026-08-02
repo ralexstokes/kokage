@@ -564,7 +564,7 @@ async fn child_observation_pump_resets_a_restarted_target_while_source_is_quiet(
     timeout(
         Duration::from_secs(2),
         watched
-            .snapshots()
+            .subscribe_snapshots()
             .wait_for_child("quiet-child", |child| child.state.is_running()),
     )
     .await
