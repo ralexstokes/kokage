@@ -150,7 +150,10 @@ impl Actor for Operator {
             }
             OperatorMsg::RemoveJob(id, reply) => {
                 let result = match jobs_scope(&root) {
-                    Ok(jobs) => jobs.remove_named(id).await.map_err(|error| error.to_string()),
+                    Ok(jobs) => jobs
+                        .remove_named(id)
+                        .await
+                        .map_err(|error| error.to_string()),
                     Err(error) => Err(error),
                 };
                 reply.send(result);
@@ -301,14 +304,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // 1. Inspect the freshly started tree.
     println!("--- initial report ---");
-    print!("{}", operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?);
+    print!(
+        "{}",
+        operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?
+    );
 
     // 2. Grow the dynamic `jobs` scope: a long-lived actor and one-shot work.
     operator
-        .call(|reply| OperatorMsg::SpawnJob("job-1".into(), reply), CALL_TIMEOUT)
+        .call(
+            |reply| OperatorMsg::SpawnJob("job-1".into(), reply),
+            CALL_TIMEOUT,
+        )
         .await??;
     operator
-        .call(|reply| OperatorMsg::RunOnce("backfill".into(), reply), CALL_TIMEOUT)
+        .call(
+            |reply| OperatorMsg::RunOnce("backfill".into(), reply),
+            CALL_TIMEOUT,
+        )
         .await??;
 
     // 3. Fail the worker and watch supervision restart it. The operator reports
@@ -331,18 +343,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ingest.send("two".into()).await?;
 
     println!("--- after failure and dynamic growth ---");
-    print!("{}", operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?);
+    print!(
+        "{}",
+        operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?
+    );
 
     // 4. Shrink and stop: remove the dynamic job, then stop the pipeline.
     operator
-        .call(|reply| OperatorMsg::RemoveJob("job-1".into(), reply), CALL_TIMEOUT)
+        .call(
+            |reply| OperatorMsg::RemoveJob("job-1".into(), reply),
+            CALL_TIMEOUT,
+        )
         .await??;
     operator
         .call(OperatorMsg::StopPipeline, CALL_TIMEOUT)
         .await??;
 
     println!("--- after removing job-1 and stopping the pipeline ---");
-    print!("{}", operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?);
+    print!(
+        "{}",
+        operator.call(OperatorMsg::Report, CALL_TIMEOUT).await?
+    );
 
     // 5. The operator brings the whole tree down; the owner just waits.
     operator.send(OperatorMsg::ShutdownAll).await?;
