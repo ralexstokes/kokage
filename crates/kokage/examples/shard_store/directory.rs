@@ -20,9 +20,14 @@ pub enum DirectoryMsg {
         reply: Reply<Option<Endpoint>>,
     },
     Cutover {
+        operation_id: String,
         remove: Vec<String>,
         insert: Vec<Endpoint>,
         reply: Reply<Result<DirectorySnapshot, String>>,
+    },
+    CutoverStatus {
+        operation_id: String,
+        reply: Reply<Option<DirectorySnapshot>>,
     },
     Snapshot {
         reply: Reply<DirectorySnapshot>,
@@ -34,6 +39,14 @@ pub struct Directory {
     revision: u64,
     planned_rebinds: u64,
     routes: BTreeMap<String, Endpoint>,
+    completed_cutovers: BTreeMap<String, CompletedCutover>,
+}
+
+#[derive(Clone, Debug)]
+struct CompletedCutover {
+    remove: Vec<String>,
+    insert: Vec<RouteView>,
+    snapshot: DirectorySnapshot,
 }
 
 impl Directory {
@@ -53,9 +66,23 @@ impl Directory {
 
     fn cutover(
         &mut self,
+        operation_id: String,
         remove: Vec<String>,
         insert: Vec<Endpoint>,
     ) -> Result<DirectorySnapshot, String> {
+        let insert_views: Vec<_> = insert
+            .iter()
+            .map(|endpoint| endpoint.view.clone())
+            .collect();
+        if let Some(completed) = self.completed_cutovers.get(&operation_id) {
+            if completed.remove != remove || completed.insert != insert_views {
+                return Err(format!(
+                    "directory operation {operation_id} was reused with a different plan"
+                ));
+            }
+            return Ok(completed.snapshot.clone());
+        }
+
         let mut candidate = self.routes.clone();
         for id in &remove {
             if candidate.remove(id).is_none() {
@@ -82,7 +109,16 @@ impl Directory {
         if !remove.is_empty() {
             self.planned_rebinds += 1;
         }
-        Ok(self.snapshot())
+        let snapshot = self.snapshot();
+        self.completed_cutovers.insert(
+            operation_id,
+            CompletedCutover {
+                remove,
+                insert: insert_views,
+                snapshot: snapshot.clone(),
+            },
+        );
+        Ok(snapshot)
     }
 }
 
@@ -100,10 +136,19 @@ impl Actor for Directory {
                 );
             }
             DirectoryMsg::Cutover {
+                operation_id,
                 remove,
                 insert,
                 reply,
-            } => reply.send(self.cutover(remove, insert)),
+            } => reply.send(self.cutover(operation_id, remove, insert)),
+            DirectoryMsg::CutoverStatus {
+                operation_id,
+                reply,
+            } => reply.send(
+                self.completed_cutovers
+                    .get(&operation_id)
+                    .map(|completed| completed.snapshot.clone()),
+            ),
             DirectoryMsg::Snapshot { reply } => reply.send(self.snapshot()),
         }
         Ok(())

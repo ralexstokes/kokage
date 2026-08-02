@@ -1,6 +1,7 @@
 use std::{
+    collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -10,7 +11,7 @@ use kokage::{
     Actor, ActorRef, ActorSpec, CallError, Context, DynamicScopeRef, ExitResult, Reply,
     RestartPolicy, ScopeRef, Tree,
 };
-use tokio::sync::Notify;
+use tokio::{sync::Notify, time::Instant};
 
 use crate::{
     directory::{DirectoryMsg, Endpoint},
@@ -22,7 +23,55 @@ use crate::{
 };
 
 const CALL_BOUND: Duration = Duration::from_secs(2);
-const TRANSITION_BOUND: Duration = Duration::from_secs(6);
+const HANDOFF_BOUND: Duration = Duration::from_secs(4);
+const PHASE_BOUND: Duration = Duration::from_secs(3);
+const TRANSITION_BOUND: Duration = Duration::from_secs(20);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FailurePoint {
+    FirstMount,
+    SecondMount,
+    BeforeCutover,
+    CutoverReplyLost,
+    BeforeRetire,
+    RetireReplyLost,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct FaultInjector {
+    armed: Arc<Mutex<VecDeque<FailurePoint>>>,
+}
+
+impl FaultInjector {
+    #[cfg(test)]
+    pub fn arm(&self, point: FailurePoint) {
+        self.armed
+            .lock()
+            .expect("fault injector lock is not poisoned")
+            .push_back(point);
+    }
+
+    fn take(&self, point: FailurePoint) -> bool {
+        let mut armed = self
+            .armed
+            .lock()
+            .expect("fault injector lock is not poisoned");
+        if armed.front() == Some(&point) {
+            armed.pop_front();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn fail(&self, point: FailurePoint) -> Result<(), String> {
+        if self.take(point) {
+            Err(format!("injected transition failure at {point:?}"))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct TransitionGate {
@@ -32,6 +81,10 @@ pub struct TransitionGate {
     released: Arc<Notify>,
     buffered: Arc<AtomicU64>,
     buffered_changed: Arc<Notify>,
+    recovery_held: Arc<AtomicBool>,
+    recovery_entries: Arc<AtomicU64>,
+    recovery_entered: Arc<Notify>,
+    recovery_released: Arc<Notify>,
 }
 
 impl TransitionGate {
@@ -61,6 +114,25 @@ impl TransitionGate {
         }
     }
 
+    #[cfg(test)]
+    pub fn arm_recovery(&self) -> u64 {
+        self.recovery_held.store(true, Ordering::Release);
+        self.recovery_entries.load(Ordering::Acquire) + 1
+    }
+
+    #[cfg(test)]
+    pub async fn wait_recovery_entered(&self, ticket: u64) {
+        while self.recovery_entries.load(Ordering::Acquire) < ticket {
+            self.recovery_entered.notified().await;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn release_recovery(&self) {
+        self.recovery_held.store(false, Ordering::Release);
+        self.recovery_released.notify_waiters();
+    }
+
     fn record_buffered(&self) {
         self.buffered.fetch_add(1, Ordering::AcqRel);
         self.buffered_changed.notify_waiters();
@@ -76,6 +148,17 @@ impl TransitionGate {
             self.released.notified().await;
         }
     }
+
+    async fn pause_recovery_if_armed(&self) {
+        if !self.recovery_held.load(Ordering::Acquire) {
+            return;
+        }
+        self.recovery_entries.fetch_add(1, Ordering::AcqRel);
+        self.recovery_entered.notify_waiters();
+        while self.recovery_held.load(Ordering::Acquire) {
+            self.recovery_released.notified().await;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -83,6 +166,14 @@ struct Member {
     endpoint: Endpoint,
     scope: ScopeRef,
     durable: Arc<DurableShard>,
+}
+
+#[derive(Clone)]
+struct TransitionContext {
+    shards: DynamicScopeRef,
+    directory: ActorRef<DirectoryMsg>,
+    gate: TransitionGate,
+    faults: FaultInjector,
 }
 
 enum BufferedRequest {
@@ -163,21 +254,24 @@ pub(crate) struct MembershipRouter {
     shards: DynamicScopeRef,
     directory: ActorRef<DirectoryMsg>,
     gate: TransitionGate,
+    faults: FaultInjector,
     members: Vec<Member>,
     pending: Option<Pending>,
     next_epoch: u64,
 }
 
 impl MembershipRouter {
-    pub fn new(
+    pub(crate) fn with_faults(
         shards: DynamicScopeRef,
         directory: ActorRef<DirectoryMsg>,
         gate: TransitionGate,
+        faults: FaultInjector,
     ) -> Self {
         Self {
             shards,
             directory,
             gate,
+            faults,
             members: Vec::new(),
             pending: None,
             next_epoch: 0,
@@ -273,9 +367,12 @@ impl MembershipRouter {
             return;
         }
         let epochs = (self.allocate_epoch(), self.allocate_epoch());
-        let shards = self.shards.clone();
-        let directory = self.directory.clone();
-        let gate = self.gate.clone();
+        let transition = TransitionContext {
+            shards: self.shards.clone(),
+            directory: self.directory.clone(),
+            gate: self.gate.clone(),
+            faults: self.faults.clone(),
+        };
         self.pending = Some(Pending {
             ranges: vec![source.endpoint.view.range],
             buffered: Vec::new(),
@@ -284,8 +381,8 @@ impl MembershipRouter {
         ctx.offload(
             TRANSITION_BOUND,
             async move {
-                gate.pause_if_armed().await;
-                split(shards, directory, source, at, epochs).await
+                transition.gate.pause_if_armed().await;
+                split(transition, source, at, epochs).await
             },
             |result| RouterMsg::TransitionFinished(flatten_offload(result)),
         );
@@ -308,9 +405,12 @@ impl MembershipRouter {
             return;
         };
         let epoch = self.allocate_epoch();
-        let shards = self.shards.clone();
-        let directory = self.directory.clone();
-        let gate = self.gate.clone();
+        let transition = TransitionContext {
+            shards: self.shards.clone(),
+            directory: self.directory.clone(),
+            gate: self.gate.clone(),
+            faults: self.faults.clone(),
+        };
         self.pending = Some(Pending {
             ranges: vec![source.endpoint.view.range],
             buffered: Vec::new(),
@@ -319,16 +419,8 @@ impl MembershipRouter {
         ctx.offload(
             TRANSITION_BOUND,
             async move {
-                gate.pause_if_armed().await;
-                reload(
-                    shards,
-                    directory,
-                    source,
-                    config,
-                    epoch,
-                    crash_during_handoff,
-                )
-                .await
+                transition.gate.pause_if_armed().await;
+                reload(transition, source, config, epoch, crash_during_handoff).await
             },
             |result| RouterMsg::TransitionFinished(flatten_offload(result)),
         );
@@ -486,7 +578,14 @@ async fn bootstrap(
         DurableImage::empty(range, config),
     )
     .await?;
-    let snapshot = cutover(&directory, Vec::new(), vec![member.endpoint.clone()]).await?;
+    let (snapshot, _) = cutover(
+        &directory,
+        format!("bootstrap-e{epoch}"),
+        Vec::new(),
+        vec![member.endpoint.clone()],
+        false,
+    )
+    .await?;
     Ok(TransitionOutcome {
         removed: Vec::new(),
         members: vec![member],
@@ -496,36 +595,66 @@ async fn bootstrap(
 }
 
 async fn split(
-    shards: DynamicScopeRef,
-    directory: ActorRef<DirectoryMsg>,
+    transition: TransitionContext,
     source: Member,
     at: Key,
     epochs: (u64, u64),
 ) -> Result<TransitionOutcome, String> {
+    let TransitionContext {
+        shards,
+        directory,
+        gate,
+        faults,
+    } = transition;
     let source_id = source.endpoint.view.shard_id.clone();
-    let handoff_id = format!("split-{source_id}-at-{at}");
-    let (image, restart, recovered_crash) = prepare(&source, handoff_id, false).await?;
+    let operation_id = format!("split-{source_id}-at-{at}-e{}-e{}", epochs.0, epochs.1);
+    let (image, restart, recovered_crash) =
+        match prepare(&source, operation_id.clone(), false, &gate).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = source.durable.abort_handoff(&operation_id);
+                return Err(error);
+            }
+        };
     let moved_keys = image.values.len();
     let durable_effects = image.applied.len();
     let (left_range, right_range) = image.range.split(at);
     let (left_image, right_image) = image.partition(left_range, right_range);
 
-    let left = mount(&shards, left_range, epochs.0, "green", left_image).await?;
-    let right = mount(&shards, right_range, epochs.1, "green", right_image).await?;
+    let mut mounted = Vec::new();
+    let staged = async {
+        faults.fail(FailurePoint::FirstMount)?;
+        let left = mount(&shards, left_range, epochs.0, "green", left_image).await?;
+        mounted.push(left.clone());
+
+        faults.fail(FailurePoint::SecondMount)?;
+        let right = mount(&shards, right_range, epochs.1, "green", right_image).await?;
+        mounted.push(right.clone());
+
+        faults.fail(FailurePoint::BeforeCutover)?;
+        let (snapshot, cutover_reconciled) = cutover(
+            &directory,
+            operation_id.clone(),
+            vec![source_id.clone()],
+            vec![left.endpoint.clone(), right.endpoint.clone()],
+            faults.take(FailurePoint::CutoverReplyLost),
+        )
+        .await?;
+        Ok::<_, String>((left, right, snapshot, cutover_reconciled))
+    }
+    .await;
+
+    let (left, right, snapshot, cutover_reconciled) = match staged {
+        Ok(staged) => staged,
+        Err(error) => {
+            return Err(abort_precommit(&shards, &source, &operation_id, &mounted, error).await);
+        }
+    };
     let successors = vec![
         left.endpoint.view.shard_id.clone(),
         right.endpoint.view.shard_id.clone(),
     ];
-    let snapshot = cutover(
-        &directory,
-        vec![source_id.clone()],
-        vec![left.endpoint.clone(), right.endpoint.clone()],
-    )
-    .await?;
-    shards
-        .remove(&source.scope)
-        .await
-        .map_err(|error| error.to_string())?;
+    let retirement = retire_committed(&shards, &source, &faults).await;
 
     Ok(TransitionOutcome {
         removed: vec![source_id.clone()],
@@ -539,38 +668,68 @@ async fn split(
             durable_effects,
             buffered_requests: 0,
             recovered_crash,
+            cutover_reconciled,
+            retirement_reconciled: retirement.reconciled,
+            retirement_pending: retirement.pending,
             source_restart: restart,
         }),
     })
 }
 
 async fn reload(
-    shards: DynamicScopeRef,
-    directory: ActorRef<DirectoryMsg>,
+    transition: TransitionContext,
     source: Member,
     config: ShardConfig,
     epoch: u64,
     crash_during_handoff: bool,
 ) -> Result<TransitionOutcome, String> {
+    let TransitionContext {
+        shards,
+        directory,
+        gate,
+        faults,
+    } = transition;
     let source_id = source.endpoint.view.shard_id.clone();
-    let handoff_id = format!("reload-{source_id}-to-r{}", config.revision);
+    let operation_id = format!("reload-{source_id}-to-r{}-e{epoch}", config.revision);
     let (mut image, restart, recovered_crash) =
-        prepare(&source, handoff_id, crash_during_handoff).await?;
+        match prepare(&source, operation_id.clone(), crash_during_handoff, &gate).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let _ = source.durable.abort_handoff(&operation_id);
+                return Err(error);
+            }
+        };
     let moved_keys = image.values.len();
     let durable_effects = image.applied.len();
     image.config = config;
-    let successor = mount(&shards, image.range, epoch, "blue", image).await?;
-    let successor_id = successor.endpoint.view.shard_id.clone();
-    let snapshot = cutover(
-        &directory,
-        vec![source_id.clone()],
-        vec![successor.endpoint.clone()],
-    )
-    .await?;
-    shards
-        .remove(&source.scope)
-        .await
-        .map_err(|error| error.to_string())?;
+
+    let mut mounted = Vec::new();
+    let staged = async {
+        faults.fail(FailurePoint::FirstMount)?;
+        let successor = mount(&shards, image.range, epoch, "blue", image).await?;
+        mounted.push(successor.clone());
+        let successor_id = successor.endpoint.view.shard_id.clone();
+
+        faults.fail(FailurePoint::BeforeCutover)?;
+        let (snapshot, cutover_reconciled) = cutover(
+            &directory,
+            operation_id.clone(),
+            vec![source_id.clone()],
+            vec![successor.endpoint.clone()],
+            faults.take(FailurePoint::CutoverReplyLost),
+        )
+        .await?;
+        Ok::<_, String>((successor, successor_id, snapshot, cutover_reconciled))
+    }
+    .await;
+
+    let (successor, successor_id, snapshot, cutover_reconciled) = match staged {
+        Ok(staged) => staged,
+        Err(error) => {
+            return Err(abort_precommit(&shards, &source, &operation_id, &mounted, error).await);
+        }
+    };
+    let retirement = retire_committed(&shards, &source, &faults).await;
 
     Ok(TransitionOutcome {
         removed: vec![source_id.clone()],
@@ -584,6 +743,9 @@ async fn reload(
             durable_effects,
             buffered_requests: 0,
             recovered_crash,
+            cutover_reconciled,
+            retirement_reconciled: retirement.reconciled,
+            retirement_pending: retirement.pending,
             source_restart: restart,
         }),
     })
@@ -593,38 +755,55 @@ async fn prepare(
     source: &Member,
     handoff_id: String,
     crash_once: bool,
+    gate: &TransitionGate,
 ) -> Result<(DurableImage, RestartEvidence, bool), String> {
-    let first = source
-        .endpoint
-        .shard
-        .call(
-            |reply| ShardMsg::PrepareHandoff {
-                handoff_id: handoff_id.clone(),
-                crash_once,
-                reply,
-            },
-            CALL_BOUND,
-        )
-        .await;
-    let (image, recovered_crash) = match first {
-        Ok(image) => (image, false),
-        Err(CallError::ReplyDropped { .. }) if crash_once => {
-            let recovered = source
-                .endpoint
-                .shard
-                .call(
-                    |reply| ShardMsg::PrepareHandoff {
-                        handoff_id,
-                        crash_once,
-                        reply,
-                    },
-                    CALL_BOUND,
-                )
-                .await
-                .map_err(|error| format!("handoff recovery failed: {error}"))?;
-            (recovered, true)
+    let deadline = Instant::now() + HANDOFF_BOUND;
+    let starts_before = source.durable.starts();
+    let mut recovered_crash = false;
+    let mut waited_for_recovery = false;
+    let image = loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| "handoff recovery deadline elapsed".to_owned())?;
+        match source
+            .endpoint
+            .shard
+            .call(
+                |reply| ShardMsg::PrepareHandoff {
+                    handoff_id: handoff_id.clone(),
+                    crash_once,
+                    reply,
+                },
+                remaining,
+            )
+            .await
+        {
+            Ok(Ok(image)) => break image,
+            Ok(Err(error)) => return Err(format!("handoff preparation failed: {error}")),
+            Err(CallError::ReplyDropped { .. }) if crash_once => {
+                recovered_crash = true;
+                if !waited_for_recovery {
+                    source
+                        .durable
+                        .wait_for_start_after(starts_before, deadline)
+                        .await?;
+                    gate.pause_recovery_if_armed().await;
+                    waited_for_recovery = true;
+                }
+                tokio::task::yield_now().await;
+            }
+            Err(CallError::ResponseTimedOut { .. }) => {
+                break source
+                    .durable
+                    .wait_for_prepared(&handoff_id, deadline)
+                    .await
+                    .map_err(|error| {
+                        format!("handoff response timed out and reconciliation failed: {error}")
+                    })?;
+            }
+            Err(error) => return Err(format!("handoff preparation failed: {error}")),
         }
-        Err(error) => return Err(format!("handoff preparation failed: {error}")),
     };
 
     let snapshot = source.scope.snapshot();
@@ -642,6 +821,102 @@ async fn prepare(
         },
         recovered_crash,
     ))
+}
+
+struct RetirementStatus {
+    reconciled: bool,
+    pending: bool,
+}
+
+async fn abort_precommit(
+    shards: &DynamicScopeRef,
+    source: &Member,
+    handoff_id: &str,
+    mounted: &[Member],
+    cause: String,
+) -> String {
+    let mut cleanup_errors = Vec::new();
+    for member in mounted.iter().rev() {
+        if let Err(error) = remove_member_reconciled(shards, member).await {
+            cleanup_errors.push(error);
+        }
+    }
+    if let Err(error) = source.durable.abort_handoff(handoff_id) {
+        cleanup_errors.push(error);
+    }
+    if cleanup_errors.is_empty() {
+        cause
+    } else {
+        format!("{cause}; rollback errors: {}", cleanup_errors.join("; "))
+    }
+}
+
+async fn retire_committed(
+    shards: &DynamicScopeRef,
+    source: &Member,
+    faults: &FaultInjector,
+) -> RetirementStatus {
+    let first = if faults.take(FailurePoint::BeforeRetire) {
+        Err("injected retirement failure before apply".to_owned())
+    } else {
+        let result = remove_member_once(shards, source).await;
+        if result.is_ok() && faults.take(FailurePoint::RetireReplyLost) {
+            Err("injected lost retirement reply after apply".to_owned())
+        } else {
+            result
+        }
+    };
+
+    if first.is_ok() {
+        return RetirementStatus {
+            reconciled: false,
+            pending: false,
+        };
+    }
+    if !member_is_present(shards, source) {
+        return RetirementStatus {
+            reconciled: true,
+            pending: false,
+        };
+    }
+    let retry = remove_member_once(shards, source).await;
+    RetirementStatus {
+        reconciled: retry.is_ok() || !member_is_present(shards, source),
+        pending: retry.is_err() && member_is_present(shards, source),
+    }
+}
+
+async fn remove_member_reconciled(shards: &DynamicScopeRef, member: &Member) -> Result<(), String> {
+    let first = remove_member_once(shards, member).await;
+    if first.is_ok() || !member_is_present(shards, member) {
+        return Ok(());
+    }
+    remove_member_once(shards, member).await.or_else(|error| {
+        if member_is_present(shards, member) {
+            Err(error)
+        } else {
+            Ok(())
+        }
+    })
+}
+
+async fn remove_member_once(shards: &DynamicScopeRef, member: &Member) -> Result<(), String> {
+    tokio::time::timeout(PHASE_BOUND, shards.remove(&member.scope))
+        .await
+        .map_err(|_| {
+            format!(
+                "retirement of {} timed out with an unknown outcome",
+                member.endpoint.view.shard_id
+            )
+        })?
+        .map_err(|error| error.to_string())
+}
+
+fn member_is_present(shards: &DynamicScopeRef, member: &Member) -> bool {
+    shards
+        .snapshot()
+        .child(&member.endpoint.view.shard_id)
+        .is_some()
 }
 
 async fn mount(
@@ -667,14 +942,10 @@ async fn mount(
         .add_subtree(id.clone(), tree)
         .await
         .map_err(|error| error.to_string())?;
-    scope
-        .wait_started()
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(Member {
+    let member = Member {
         endpoint: Endpoint {
             view: RouteView {
-                shard_id: id,
+                shard_id: id.clone(),
                 epoch,
                 range,
                 config,
@@ -683,23 +954,59 @@ async fn mount(
         },
         scope,
         durable,
-    })
+    };
+    match tokio::time::timeout(PHASE_BOUND, member.scope.wait_started()).await {
+        Ok(Ok(())) => Ok(member),
+        Ok(Err(error)) => {
+            let cleanup = remove_member_reconciled(shards, &member).await;
+            Err(format!(
+                "startup of {id} failed: {error}; cleanup: {cleanup:?}"
+            ))
+        }
+        Err(error) => {
+            let cleanup = remove_member_reconciled(shards, &member).await;
+            Err(format!(
+                "startup of {id} timed out: {error}; cleanup: {cleanup:?}"
+            ))
+        }
+    }
 }
 
 async fn cutover(
     directory: &ActorRef<DirectoryMsg>,
+    operation_id: String,
     remove: Vec<String>,
     insert: Vec<Endpoint>,
-) -> Result<DirectorySnapshot, String> {
-    directory
+    simulate_reply_lost: bool,
+) -> Result<(DirectorySnapshot, bool), String> {
+    let result = directory
         .call(
             |reply| DirectoryMsg::Cutover {
+                operation_id: operation_id.clone(),
                 remove,
                 insert,
                 reply,
             },
             CALL_BOUND,
         )
-        .await
-        .map_err(|error| error.to_string())?
+        .await;
+    match result {
+        Ok(Ok(snapshot)) if !simulate_reply_lost => Ok((snapshot, false)),
+        Ok(Err(error)) => Err(error),
+        Ok(Ok(_)) | Err(CallError::ResponseTimedOut { .. }) => {
+            let snapshot = directory
+                .call(
+                    |reply| DirectoryMsg::CutoverStatus {
+                        operation_id,
+                        reply,
+                    },
+                    CALL_BOUND,
+                )
+                .await
+                .map_err(|error| format!("directory cutover reconciliation failed: {error}"))?
+                .ok_or_else(|| "directory cutover outcome remained unknown".to_owned())?;
+            Ok((snapshot, true))
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }

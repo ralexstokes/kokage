@@ -27,7 +27,7 @@ mod model;
 mod router;
 mod shard;
 
-use std::{collections::BTreeMap, error::Error, io, time::Duration};
+use std::{collections::BTreeMap, error::Error, io, sync::Once, time::Duration};
 
 use directory::{Directory, DirectoryMsg, Endpoint};
 use kokage::{ActorRef, DynamicScopeRef, DynamicTree, ScopeRef, Strategy, Tree};
@@ -35,11 +35,11 @@ use model::{
     DirectorySnapshot, DurableImage, Key, KeyRange, PlannedChange, ReadReceipt, ShardConfig,
     TransitionReport, Value, Write, WriteReceipt,
 };
-use router::{MembershipRouter, RouterMsg, TransitionGate};
+use router::{FaultInjector, MembershipRouter, RouterMsg, TransitionGate};
 use shard::ShardMsg;
 
-const CALL_BOUND: Duration = Duration::from_secs(5);
-const SCRIPT_BOUND: Duration = Duration::from_secs(20);
+const CALL_BOUND: Duration = Duration::from_secs(25);
+const SCRIPT_BOUND: Duration = Duration::from_secs(60);
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
@@ -54,21 +54,28 @@ struct Acceptance {
 
 #[tokio::main]
 async fn main() -> Result<(), AnyError> {
-    let default_panic_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let deliberate = info
-            .payload()
-            .downcast_ref::<String>()
-            .is_some_and(|message| message.starts_with("scripted shard handoff crash"));
-        if !deliberate {
-            default_panic_hook(info);
-        }
-    }));
+    install_deliberate_panic_filter();
 
     tokio::time::timeout(SCRIPT_BOUND, run())
         .await
         .expect("the shard-store acceptance script must remain bounded")?;
     Ok(())
+}
+
+fn install_deliberate_panic_filter() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let default_panic_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let deliberate = info
+                .payload()
+                .downcast_ref::<String>()
+                .is_some_and(|message| message.starts_with("scripted shard handoff crash"));
+            if !deliberate {
+                default_panic_hook(info);
+            }
+        }));
+    });
 }
 
 async fn run() -> Result<(), AnyError> {
@@ -161,6 +168,9 @@ async fn run() -> Result<(), AnyError> {
     assert_eq!(split_report.durable_effects, 4);
     assert_eq!(split_report.buffered_requests, 3);
     assert!(!split_report.recovered_crash);
+    assert!(!split_report.cutover_reconciled);
+    assert!(!split_report.retirement_reconciled);
+    assert!(!split_report.retirement_pending);
     assert_eq!(split_report.source_restart.child_restarts, 0);
     assert!(write_left.await??.applied);
     assert!(write_right.await??.applied);
@@ -272,6 +282,10 @@ async fn run() -> Result<(), AnyError> {
 }
 
 fn build() -> Result<Acceptance, AnyError> {
+    build_with_faults(FaultInjector::default())
+}
+
+fn build_with_faults(faults: FaultInjector) -> Result<Acceptance, AnyError> {
     let gate = TransitionGate::default();
     let shards_tree = DynamicTree::new();
     let shards = shards_tree.scope();
@@ -283,7 +297,15 @@ fn build() -> Result<Acceptance, AnyError> {
         let shards = shards.clone();
         let directory = directory.clone();
         let gate = gate.clone();
-        move || MembershipRouter::new(shards.clone(), directory.clone(), gate.clone())
+        let faults = faults.clone();
+        move || {
+            MembershipRouter::with_faults(
+                shards.clone(),
+                directory.clone(),
+                gate.clone(),
+                faults.clone(),
+            )
+        }
     });
 
     let outline = tree.outline();
@@ -409,6 +431,9 @@ fn assert_planned_reload(report: &TransitionReport, recovered_crash: bool) {
     assert_eq!(report.sources.len(), 1);
     assert_eq!(report.successors.len(), 1);
     assert_eq!(report.recovered_crash, recovered_crash);
+    assert!(!report.cutover_reconciled);
+    assert!(!report.retirement_reconciled);
+    assert!(!report.retirement_pending);
     if !recovered_crash {
         assert_eq!(report.source_restart.generation, 0);
         assert_eq!(report.source_restart.child_restarts, 0);
@@ -550,4 +575,181 @@ async fn verify_final_state(acceptance: &Acceptance) -> Result<(), AnyError> {
 
 fn app<T>(result: Result<T, String>) -> Result<T, AnyError> {
     result.map_err(|error| io::Error::other(error).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::router::FailurePoint;
+
+    async fn started(faults: FaultInjector) -> Result<Acceptance, AnyError> {
+        let acceptance = build_with_faults(faults)?;
+        acceptance.root.wait_started().await?;
+        Ok(acceptance)
+    }
+
+    async fn split_bootstrapped(acceptance: &Acceptance) -> Result<DirectorySnapshot, AnyError> {
+        let initial = bootstrap(&acceptance.router).await?;
+        split(&acceptance.router, initial.routes[0].shard_id.clone(), 50).await?;
+        directory_snapshot(&acceptance.directory).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn crash_recovery_waits_for_a_fresh_incarnation() -> Result<(), AnyError> {
+        install_deliberate_panic_filter();
+        for _ in 0..128 {
+            let acceptance = started(FaultInjector::default()).await?;
+            let after_split = split_bootstrapped(&acceptance).await?;
+            let source = after_split
+                .routes
+                .iter()
+                .find(|route| route.range.contains(60))
+                .expect("right shard exists")
+                .shard_id
+                .clone();
+            let report = reload(&acceptance.router, source, ShardConfig::reloaded(), true).await?;
+            assert!(report.recovered_crash);
+            assert_eq!(report.source_restart.actor_starts, 2);
+            acceptance.running.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn crash_window_write_is_rejected_then_safely_retried() -> Result<(), AnyError> {
+        install_deliberate_panic_filter();
+        let acceptance = started(FaultInjector::default()).await?;
+        let after_split = split_bootstrapped(&acceptance).await?;
+        let source = after_split
+            .routes
+            .iter()
+            .find(|route| route.range.contains(60))
+            .expect("right shard exists")
+            .shard_id
+            .clone();
+        let old_endpoint = endpoint(&acceptance.directory, 60).await?;
+
+        let ticket = acceptance.gate.arm_recovery();
+        let router = acceptance.router.clone();
+        let transition =
+            tokio::spawn(
+                async move { reload(&router, source, ShardConfig::reloaded(), true).await },
+            );
+        acceptance.gate.wait_recovery_entered(ticket).await;
+
+        let command = Write {
+            effect: 99,
+            key: 60,
+            delta: 11,
+        };
+        let rejected = old_endpoint
+            .shard
+            .call(|reply| ShardMsg::Write { command, reply }, CALL_BOUND)
+            .await?;
+        assert!(
+            rejected
+                .expect_err("the durable handoff fence rejects crash-window writes")
+                .contains("is fenced for active handoff")
+        );
+
+        acceptance.gate.release_recovery();
+        let report = transition.await??;
+        assert!(report.recovered_crash);
+        let image = durable_image(&endpoint(&acceptance.directory, 60).await?).await?;
+        assert!(!image.applied.contains_key(&99));
+
+        assert!(write(&acceptance.router, command).await?.applied);
+        assert!(!write(&acceptance.router, command).await?.applied);
+        acceptance.running.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn precommit_failures_abort_and_cleanup_before_replay() -> Result<(), AnyError> {
+        for point in [
+            FailurePoint::FirstMount,
+            FailurePoint::SecondMount,
+            FailurePoint::BeforeCutover,
+        ] {
+            let faults = FaultInjector::default();
+            let acceptance = started(faults.clone()).await?;
+            let initial = bootstrap(&acceptance.router).await?;
+            assert!(
+                write(
+                    &acceptance.router,
+                    Write {
+                        effect: 1,
+                        key: 10,
+                        delta: 2,
+                    },
+                )
+                .await?
+                .applied
+            );
+
+            faults.arm(point);
+            let ticket = acceptance.gate.arm();
+            let buffered_before = acceptance.gate.buffered();
+            let router = acceptance.router.clone();
+            let source = initial.routes[0].shard_id.clone();
+            let transition = tokio::spawn(async move { split(&router, source, 50).await });
+            acceptance.gate.wait_entered(ticket).await;
+            let buffered = spawn_write(
+                acceptance.router.clone(),
+                Write {
+                    effect: 2,
+                    key: 10,
+                    delta: 3,
+                },
+            );
+            acceptance.gate.wait_buffered(buffered_before + 1).await;
+            acceptance.gate.release();
+
+            let failure = transition.await?;
+            assert!(failure.is_err(), "{point:?} must fail before commit");
+            assert!(buffered.await??.applied);
+            assert_eq!(read(&acceptance.router, 10).await?.value.total, 5);
+            let directory = directory_snapshot(&acceptance.directory).await?;
+            assert_eq!(directory.revision, 1);
+            assert_eq!(directory.routes, initial.routes);
+            assert_eq!(acceptance.shards.snapshot().children.len(), 1);
+            acceptance.running.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn committed_unknown_outcomes_are_reconciled() -> Result<(), AnyError> {
+        for point in [
+            FailurePoint::CutoverReplyLost,
+            FailurePoint::BeforeRetire,
+            FailurePoint::RetireReplyLost,
+        ] {
+            let faults = FaultInjector::default();
+            let acceptance = started(faults.clone()).await?;
+            let initial = bootstrap(&acceptance.router).await?;
+            faults.arm(point);
+            let report = split(&acceptance.router, initial.routes[0].shard_id.clone(), 50).await?;
+            assert_eq!(
+                report.cutover_reconciled,
+                point == FailurePoint::CutoverReplyLost
+            );
+            assert_eq!(
+                report.retirement_reconciled,
+                matches!(
+                    point,
+                    FailurePoint::BeforeRetire | FailurePoint::RetireReplyLost
+                )
+            );
+            assert!(!report.retirement_pending);
+            assert_eq!(acceptance.shards.snapshot().children.len(), 2);
+
+            let directory = directory_snapshot(&acceptance.directory).await?;
+            let source = directory.routes[0].shard_id.clone();
+            let reload = reload(&acceptance.router, source, ShardConfig::reloaded(), false).await?;
+            assert!(!reload.retirement_pending);
+            acceptance.running.shutdown().await?;
+        }
+        Ok(())
+    }
 }

@@ -156,5 +156,8 @@ pub struct TransitionReport {
     pub durable_effects: usize,
     pub buffered_requests: usize,
     pub recovered_crash: bool,
+    pub cutover_reconciled: bool,
+    pub retirement_reconciled: bool,
+    pub retirement_pending: bool,
     pub source_restart: RestartEvidence,
 }

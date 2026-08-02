@@ -12,11 +12,14 @@ persisted its handoff image.
 
 - Planned replacement is intentionally not the same operation as supervised
   restart. Today the application composes `add_subtree`, readiness, a userland
-  directory cutover, and exact-handle `remove`. That is expressive, but every
-  state-owning application must also design rollback for failures between
-  those steps. A future dynamic-scope transaction/helper could mount a
-  successor and retire the predecessor with explicit commit/abort hooks while
-  leaving state transfer application-defined.
+  directory cutover, and exact-handle `remove`. The example now makes that
+  transaction explicit: a durable handoff fence is established before the
+  snapshot; pre-commit failures remove every mounted successor before aborting
+  the fence; directory cutovers are idempotent by operation id; and retirement
+  failures are reconciled against exact membership before the router publishes
+  its outcome. This is safe but substantial application scaffolding. A future
+  dynamic-scope transaction/helper could provide mount/commit/retire hooks and
+  compensating cleanup while leaving state transfer application-defined.
 - `ActorRef` correctly follows crash restarts of one membership but correctly
   does **not** follow a same-id replacement membership. The distinction makes
   stale handles safe, but planned replacement therefore needs an explicit
@@ -29,7 +32,20 @@ persisted its handoff image.
   zero. No runtime change was needed for this distinction; the example keeps
   a domain counter (`planned_rebinds`) beside those runtime counters.
 - There is no durability opinion in the library, which is appropriate. The
-  example keeps a prepared handoff image outside the actor incarnation and
-  retries the stable source ref after `ReplyDropped`. The existing call error
-  taxonomy was sufficient to distinguish the known crash-before-reply case
-  from an unknown timeout outcome.
+  example keeps both its prepared image and active drain fence outside the
+  actor incarnation. `ReplyDropped` is safe to retry because preparation is
+  idempotent, but an immediate single retry can still race the failed mailbox.
+  The example therefore waits for an application-owned actor-start signal and
+  retries only that known-safe outcome under one overall deadline. A
+  `ResponseTimedOut` is not retried: it is reconciled against the durable
+  prepared state. The library's error taxonomy is sufficient, though a public
+  way to await the next `ActorRef` incarnation would remove the need for the
+  application-owned start signal.
+- Calls already offloaded before the router marks a range as transitioning are
+  not part of its buffer. The durable fence closes that race: the shard mutex
+  orders each write either before the snapshot (and therefore includes it) or
+  after the fence (and explicitly rejects it for retry). Focused tests pause
+  between crash recovery and prepare retry to exercise this stale-endpoint
+  window, inject failures before both split mounts and cutover, and reconcile
+  lost cutover and retirement outcomes. The same test target repeats crash
+  recovery 128 times to guard the previously observed `ReplyDropped` flake.
