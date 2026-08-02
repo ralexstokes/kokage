@@ -143,13 +143,17 @@ droppable. When an identity can never run again, its channels are
 pub trait RawActor: Send + 'static {
     type Msg: Send + 'static;
     fn manual_readiness(&self) -> Option<Duration> { None }
-    fn run(&mut self, ctx: RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
+    fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
 }
 ```
 
-`run` owns the entire receive loop: `RawContext` hands it `recv`/`try_recv`,
-`mark_ready`, and ambient capabilities (offload, watch, blocking work,
-scope access). An actor instance is `Send` but not `Sync` or `Clone` — one
+`run` owns the receive-loop control flow but borrows the incarnation-owned
+`RawContext`, which provides `recv`/`try_recv`, `mark_ready`, and ambient
+capabilities (offload, watch, blocking work, scope access). The borrow prevents
+the context from escaping the incarnation and lets a raw-actor decorator
+inspect it after an inner run or re-enter that actor on the same mailbox. Such
+calls share one-shot readiness, stop state, timers, offloads, watches, and
+identity. An actor instance is `Send` but not `Sync` or `Clone` — one
 incarnation moves into one task. Durability across restarts lives in the
 `ActorFactory` (`actor/factory.rs`), which is called once per incarnation to
 build a fresh actor value; any closure `Fn() -> A` is a factory.
@@ -179,8 +183,12 @@ embedded in the message, with acceptance and response timeouts distinguished).
 `actor/graph.rs` (note: historically named — it contains no graph, it is the
 incarnation runner) holds the glue. `TypedRunner::start` creates the mailbox,
 binds it, and *then* calls the factory — so a constructor panic follows the
-same supervision path as a run panic. `RunnableActor` runs one incarnation,
-races readiness/shutdown/abort, and classifies the exit. Finally,
+same supervision path as a run panic. It owns the `RawContext`, lends it to
+`RawActor::run`, and after the outermost run returns closes external intake and
+reports any dropped continuations before destroying the actor. This also keeps
+the context available for explicit teardown after a manual-readiness timeout.
+`RunnableActor` runs one incarnation, races readiness/shutdown/abort, and
+classifies the exit. Finally,
 `actor_child_spec` in `runtime.rs` wraps a `RunnableActor` in a plain
 `TaskSpec` — this is the seam where an actor becomes an ordinary supervised
 task child. The supervisor finds actor metadata again later through generic
@@ -215,8 +223,15 @@ whose `run` is the generated event loop:
    Fairness is explicit: a continuation chain cannot starve external input,
    and already-queued messages get one bounded turn to retract an elapsed
    timer before it fires.
-3. On exit: close external intake, optionally drain remaining messages
-   (handlers see `ctx.draining()`), then `on_stop`.
+3. On observed supervisor shutdown, close external intake to freeze the
+   accepted prefix; optionally drain remaining messages (handlers see
+   `ctx.draining()`), then run `on_stop`. A local stop leaves intake open so an
+   enclosing raw-actor decorator can re-enter on the same context.
+
+After the outermost raw run returns, `TypedRunner` closes intake for every raw
+actor and reports continuations that the handler loop left queued. Final
+incarnation cleanup therefore does not depend on a hand-written raw actor
+remembering the blanket loop's exit protocol.
 
 `Context<A>` (what `handle` receives) deliberately exposes *less* than
 `RawContext`: no `recv` (the loop owns the mailbox), no `mark_ready`, but
@@ -337,6 +352,9 @@ crates/kokage/src/
   `Actor::run` must call `defer_automatic_readiness()` first (see comments in
   `actor/handler.rs` and `actor/graph.rs`); the ordered-startup gate depends
   on it.
+- **One raw context is coextensive with one incarnation.** `TypedRunner` owns
+  it and `RawActor::run` only borrows it. Decorators may re-enter on that same
+  state, but cannot move it into work that outlives the run.
 - **Exactly one exit report per incarnation.** Guard types in `actor/graph.rs`
   guarantee monitors see one exit even on panic or abort.
 - **Public API is runtime-independent.** `just ci` runs
