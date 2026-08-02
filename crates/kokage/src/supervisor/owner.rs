@@ -42,7 +42,7 @@ use crate::{
 /// [`spawn`](Self::spawn) or nesting it under a parent scope transfers that
 /// identity. Clone the handle, not the declaration, when multiple observers
 /// or controllers need to address it.
-pub struct Supervisor {
+pub(crate) struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
     // A built declaration owns abandonment terminality until its channels are
@@ -58,23 +58,23 @@ pub struct Supervisor {
 /// [`handle`](Self::handle) remain non-owning and may be dropped freely.
 /// Retain the owner for as long as the root supervisor should keep running.
 #[must_use = "dropping the running supervisor requests graceful shutdown"]
-pub struct RunningSupervisor {
+pub(crate) struct RunningSupervisor {
     handle: SupervisorHandle,
 }
 
 impl RunningSupervisor {
     /// Returns a non-owning handle for control and observation.
-    pub fn handle(&self) -> SupervisorHandle {
+    pub(crate) fn handle(&self) -> SupervisorHandle {
         self.handle.clone()
     }
 
     /// Requests a graceful shutdown and waits for the supervisor to stop.
-    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+    pub(crate) async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.handle.shutdown_and_wait().await
     }
 
     /// Waits for the supervisor to stop.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    pub(crate) async fn wait(&self) -> Result<(), SupervisorError> {
         self.handle.wait().await
     }
 }
@@ -144,12 +144,12 @@ impl ParentLink {
 
 impl Supervisor {
     /// Starts an ordered-supervisor declaration.
-    pub fn ordered() -> OrderedSupervisorBuilder {
+    pub(crate) fn ordered() -> OrderedSupervisorBuilder {
         OrderedSupervisorBuilder::new()
     }
 
     /// Starts an empty dynamic-supervisor declaration.
-    pub fn dynamic() -> DynamicSupervisorBuilder {
+    pub(crate) fn dynamic() -> DynamicSupervisorBuilder {
         DynamicSupervisorBuilder::new()
     }
 
@@ -177,7 +177,7 @@ impl Supervisor {
     // are unavailable before `spawn`, while declared snapshots and lifecycle
     // watches can already be observed.
     #[cfg(test)]
-    pub fn handle(&self) -> SupervisorHandle {
+    pub(crate) fn handle(&self) -> SupervisorHandle {
         self.channels.handle()
     }
 
@@ -185,7 +185,7 @@ impl Supervisor {
     ///
     /// Dropping the returned [`RunningSupervisor`] requests graceful shutdown.
     /// Handles obtained from it are non-owning.
-    pub fn spawn(self) -> RunningSupervisor {
+    pub(crate) fn spawn(self) -> RunningSupervisor {
         let channels = Arc::clone(&self.channels);
         channels.claim_edge(false);
         channels.mark_root();

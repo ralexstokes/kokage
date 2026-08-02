@@ -59,22 +59,22 @@ pub(crate) mod private {
     }
 }
 
-pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub(crate) use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
 pub use child::{BoxError, OneShotTaskSpec, TaskSpec};
 #[cfg(test)]
-pub use completion::CompletionError;
+pub(crate) use completion::CompletionError;
 pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
-pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
+pub(crate) use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{
     ChildEvent, ChildEventKind, ChildObservationUpdate, ChildObservationWatch, LifecycleEvent,
     LifecycleEventKind, LifecycleObservation, LifecycleWatch,
 };
-pub use owner::{RunningSupervisor, Supervisor};
+pub(crate) use owner::{RunningSupervisor, Supervisor};
 pub use restart::{Backoff, RestartPolicy};
 pub(crate) use runtime::exit::ActorChildReadinessTimedOut;
 pub use scope::{ScopeKind, ScopePathSegment};
@@ -85,8 +85,7 @@ pub use snapshot::{
 };
 pub use strategy::Strategy;
 
-// Keep the former standalone crate's behavioral suite next to the private
-// implementation. These are unit tests now so they can exercise the low-level
-// runtime without restoring that layer to the public API.
+// Keep the low-level runtime's behavioral suite next to its private
+// implementation so unit tests can exercise its internal contracts directly.
 #[cfg(test)]
 mod tests;
