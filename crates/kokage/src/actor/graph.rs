@@ -125,16 +125,18 @@ where
                 );
                 return Ok(());
             };
-            // Binding is deliberately established before construction so a
-            // constructor panic follows the same monitoring and supervision
-            // path as startup and run panics.
+            // Binding is deliberately deferred until this actor task's first
+            // poll, then established before construction so a constructor
+            // panic follows the same monitoring and supervision path as
+            // startup and run panics.
             let mut actor = factory.build();
             let manual_readiness = actor.manual_readiness();
             let ready = ActorReadySignal::new(start.ready, manual_readiness.is_some());
             let monitors = bound_mailbox.monitor_lease();
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
+            let readiness_shutdown = actor_shutdown.clone();
             let ctx = RawContext {
-                id: actor_id.clone(),
+                id: actor_id,
                 mailbox,
                 myself,
                 shutdown: actor_shutdown,
@@ -155,6 +157,10 @@ where
                 tokio::pin!(future);
                 let immediate_ready = ready.clone();
                 let mut first_poll = true;
+                // Immediate readiness is decided only after `run` has had one
+                // poll in which the blanket `Actor` implementation can gate
+                // readiness. Its `defer_automatic_readiness` call must remain
+                // the first operation in that implementation.
                 let managed = std::future::poll_fn(|cx| {
                     let result = future.as_mut().poll(cx);
                     if first_poll {
@@ -169,6 +175,7 @@ where
                         biased;
                         result = &mut managed => result,
                         () = ready.wait() => managed.await,
+                        () = readiness_shutdown.cancelled() => managed.await,
                         () = tokio::time::sleep(timeout) => {
                             Err(ManualReadinessTimedOut(timeout).into())
                         }

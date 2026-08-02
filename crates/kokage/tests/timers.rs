@@ -266,13 +266,18 @@ struct OrderedTimeout {
     release: Arc<Notify>,
     observed: mpsc::UnboundedSender<OrderedMsg>,
     replace: bool,
+    repeat: bool,
 }
 
 impl Actor for OrderedTimeout {
     type Msg = OrderedMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.set_timeout(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        if self.repeat {
+            ctx.set_interval(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        } else {
+            ctx.set_timeout(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
+        }
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(())
@@ -303,6 +308,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
             release: release.clone(),
             observed: observed_tx.clone(),
             replace: false,
+            repeat: false,
         }
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -327,6 +333,42 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn queued_pre_fire_message_retracts_an_elapsed_interval() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let (tree, actor_ref) = build_runtime({
+        let release = release.clone();
+        move || OrderedTimeout {
+            started: started_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+            replace: false,
+            repeat: true,
+        }
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+    started_rx.recv().await.expect("actor started");
+
+    actor_ref
+        .send(OrderedMsg::Clear)
+        .await
+        .expect("clear queued");
+    advance(Duration::from_millis(20)).await;
+    release.notify_one();
+
+    assert_eq!(observed_rx.recv().await, Some(OrderedMsg::Clear));
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "elapsed interval survived a pre-fire clear"
+    );
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
 async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
@@ -338,6 +380,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
             release: release.clone(),
             observed: observed_tx.clone(),
             replace: true,
+            repeat: false,
         }
     });
     let running_tree = tree.spawn().expect("runtime builds");
@@ -541,6 +584,77 @@ async fn timeout_and_interval_replace_each_other_at_the_same_key() {
     running_tree.shutdown().await.expect("clean shutdown");
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntervalPhaseMsg {
+    Replace,
+    Old,
+    New,
+}
+
+struct ReplaceableInterval {
+    started: mpsc::UnboundedSender<()>,
+    observed: mpsc::UnboundedSender<IntervalPhaseMsg>,
+}
+
+const REPLACEABLE_INTERVAL: TimerKey = TimerKey::new("replaceable-interval");
+
+impl Actor for ReplaceableInterval {
+    type Msg = IntervalPhaseMsg;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_interval(
+            REPLACEABLE_INTERVAL,
+            IntervalPhaseMsg::Old,
+            Duration::from_millis(20),
+        );
+        self.started.send(()).expect("test receives start signal");
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
+        match message {
+            IntervalPhaseMsg::Replace => ctx.set_interval(
+                REPLACEABLE_INTERVAL,
+                IntervalPhaseMsg::New,
+                Duration::from_millis(20),
+            ),
+            IntervalPhaseMsg::Old | IntervalPhaseMsg::New => {
+                ctx.clear_timer(REPLACEABLE_INTERVAL);
+            }
+        }
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacing_an_interval_resets_its_phase() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (tree, actor_ref) = build_runtime(move || ReplaceableInterval {
+        started: started_tx.clone(),
+        observed: observed_tx.clone(),
+    });
+    let running_tree = tree.spawn().expect("runtime builds");
+    started_rx.recv().await.expect("actor started");
+
+    advance(Duration::from_millis(10)).await;
+    actor_ref
+        .send(IntervalPhaseMsg::Replace)
+        .await
+        .expect("replacement queued");
+    assert_eq!(observed_rx.recv().await, Some(IntervalPhaseMsg::Replace));
+    assert!(
+        timeout(Duration::from_millis(19), observed_rx.recv())
+            .await
+            .is_err(),
+        "replacement interval retained the old phase"
+    );
+    assert_eq!(observed_rx.recv().await, Some(IntervalPhaseMsg::New));
+
+    running_tree.shutdown().await.expect("clean shutdown");
+}
+
 struct ZeroPeriodKeyedInterval {
     observed: mpsc::UnboundedSender<&'static str>,
 }
@@ -646,14 +760,16 @@ struct RestartingTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-const RESTART_TIMEOUT: TimerKey = TimerKey::new("restart");
+const RESTART_TIMEOUT: TimerKey = TimerKey::new("restart-timeout");
+const RESTART_INTERVAL: TimerKey = TimerKey::new("restart-interval");
 
 impl Actor for RestartingTimer {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            ctx.set_interval(RESTART_TIMEOUT, "old", Duration::from_millis(150));
+            ctx.set_timeout(RESTART_TIMEOUT, "old-timeout", Duration::from_millis(150));
+            ctx.set_interval(RESTART_INTERVAL, "old-interval", Duration::from_millis(150));
             ctx.continue_with("crash");
         } else {
             ctx.set_timeout(RESTART_TIMEOUT, "new", Duration::from_millis(10));

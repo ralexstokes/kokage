@@ -52,7 +52,11 @@ pub trait RawActor: Send + 'static {
     /// Handler-style [`Actor`](crate::Actor) implementations do this
     /// automatically after `on_start`; custom raw actors are ready immediately
     /// unless they return a deadline from this method. Missing that deadline
-    /// fails the actor incarnation and is governed by its restart policy.
+    /// fails the actor incarnation and is governed by its restart policy. A
+    /// shutdown request disarms the readiness deadline so the actor retains
+    /// its configured cooperative shutdown grace. If readiness and the
+    /// deadline are both observable in the same scheduler turn, readiness
+    /// wins.
     fn manual_readiness(&self) -> Option<Duration> {
         None
     }
