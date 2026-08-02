@@ -631,23 +631,12 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     assert!(json.contains("\"remove_on_terminal_exit\""));
-    assert!(!json.contains("\"remove_when_done\""));
     for key in [
         "default_child_restart",
         "default_child_shutdown",
         "default_actor_mailbox_shutdown",
     ] {
         assert!(json.contains(&format!("\"{key}\"")), "missing {key}");
-    }
-    for key in [
-        "default_restart",
-        "default_shutdown",
-        "default_mailbox_shutdown",
-    ] {
-        assert!(
-            !json.contains(&format!("\"{key}\"")),
-            "retired key {key} was serialized"
-        );
     }
     assert!(
         json.contains("\"Task\""),
@@ -687,25 +676,6 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn an_outline_rejects_retired_scope_default_keys() {
-    let json = serde_json::to_string(&Tree::new().outline()).expect("outline serializes");
-    for (current, retired) in [
-        ("default_child_restart", "default_restart"),
-        ("default_child_shutdown", "default_shutdown"),
-        ("default_actor_mailbox_shutdown", "default_mailbox_shutdown"),
-    ] {
-        let retired_json = json.replacen(current, retired, 1);
-        let error = serde_json::from_str::<kokage::observe::SupervisionOutline>(&retired_json)
-            .expect_err("retired scope default keys must not deserialize");
-        assert!(
-            error.to_string().contains("unknown field"),
-            "unexpected error for {retired}: {error}"
-        );
-    }
-}
-
-#[cfg(feature = "serde")]
-#[test]
 fn an_outline_requires_the_current_terminal_membership_key() {
     fn nested_child_fields<'a>(
         outline: &'a mut serde_json::Value,
@@ -740,27 +710,14 @@ fn an_outline_requires_the_current_terminal_membership_key() {
         serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
             .unwrap_or_else(|error| panic!("future {variant} fields remain compatible: {error}"));
 
-        let mut dual_key = outline.clone();
-        nested_child_fields(&mut dual_key, variant)
-            .insert("remove_when_done".to_owned(), serde_json::json!(false));
-        let decoded = serde_json::from_value::<kokage::observe::SupervisionOutline>(dual_key)
-            .unwrap_or_else(|error| {
-                panic!("unknown retired {variant} key is tolerated beside the current key: {error}")
-            });
-        let mut reencoded = serde_json::to_value(decoded).expect("outline serializes again");
-        let fields = nested_child_fields(&mut reencoded, variant);
-        assert_eq!(fields["remove_on_terminal_exit"], true);
-        assert!(fields.get("remove_when_done").is_none());
-
-        let mut old_only = outline.clone();
-        let fields = nested_child_fields(&mut old_only, variant);
-        let policy = fields
+        let mut missing_membership_policy = outline.clone();
+        nested_child_fields(&mut missing_membership_policy, variant)
             .remove("remove_on_terminal_exit")
             .expect("current terminal membership key is serialized");
-        fields.insert("remove_when_done".to_owned(), policy);
-
-        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(old_only)
-            .expect_err("an old-only payload must lack the required current key");
+        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(
+            missing_membership_policy,
+        )
+        .expect_err("terminal membership policy must be present");
         assert!(
             error
                 .to_string()

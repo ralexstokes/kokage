@@ -1,7 +1,4 @@
-#![allow(dead_code)]
-
 use std::{
-    collections::VecDeque,
     fmt::Debug,
     sync::{
         Arc,
@@ -13,12 +10,9 @@ use std::{
 use crate::supervisor::{
     BoxError, ChildEventKind, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind,
     LifecycleWatch, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSnapshotReceiver, TaskSpec,
+    SupervisorSnapshotReceiver,
 };
-use tokio::{
-    sync::{Notify, mpsc},
-    time::timeout,
-};
+use tokio::{sync::mpsc, time::timeout};
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 pub const QUIET_TIMEOUT: Duration = Duration::from_millis(150);
@@ -170,11 +164,6 @@ pub enum ObservedEvent {
         generation: u64,
         delay: Duration,
     },
-    ChildRestarted {
-        id: String,
-        old_generation: u64,
-        new_generation: u64,
-    },
     RestartIntensityExceeded,
 }
 
@@ -215,24 +204,19 @@ pub enum EventRecvError {
 
 pub struct EventWatch {
     lifecycle: LifecycleWatch,
-    pending: VecDeque<ObservedEvent>,
 }
 
 pub fn event_watch(handle: &SupervisorHandle) -> EventWatch {
     EventWatch {
         lifecycle: handle.subscribe_lifecycle(),
-        pending: VecDeque::new(),
     }
 }
 
 impl EventWatch {
     pub async fn recv(&mut self) -> Result<ObservedEvent, EventRecvError> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(event);
-        }
         loop {
             let event = self.lifecycle.next().await.ok_or(EventRecvError::Closed)?;
-            match self.convert(event) {
+            match Self::convert(event) {
                 Ok(Some(event)) => return Ok(event),
                 Ok(None) => {}
                 Err(error) => return Err(error),
@@ -240,48 +224,21 @@ impl EventWatch {
         }
     }
 
-    pub async fn wait_for_event(
-        &mut self,
-        mut predicate: impl FnMut(&ObservedEvent) -> bool,
-    ) -> Result<ObservedEvent, EventRecvError> {
-        loop {
-            let event = self.recv().await?;
-            if predicate(&event) {
-                return Ok(event);
-            }
-        }
-    }
-
-    fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
+    fn convert(event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
         let LifecycleEvent {
             scope_path: path,
             kind,
         } = event;
-        let mut pending = None;
         let leaf = match kind {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
             LifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
             LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
             LifecycleEventKind::Child(child) => match child.kind {
                 ChildEventKind::Added => return Ok(None),
-                ChildEventKind::Started { generation } => {
-                    // This compatibility shim preserves the removed test-event
-                    // shape. It deliberately assumes runtime generations are
-                    // contiguous when synthesizing `ChildRestarted`. If that
-                    // invariant changes, migrate these assertions to the raw
-                    // lifecycle events instead of extending this fiction.
-                    if generation > 0 {
-                        pending = Some(ObservedEvent::ChildRestarted {
-                            id: child.child_id.clone(),
-                            old_generation: generation - 1,
-                            new_generation: generation,
-                        });
-                    }
-                    ObservedEvent::ChildStarted {
-                        id: child.child_id,
-                        generation,
-                    }
-                }
+                ChildEventKind::Started { generation } => ObservedEvent::ChildStarted {
+                    id: child.child_id,
+                    generation,
+                },
                 ChildEventKind::Exited { generation, exit } => ObservedEvent::ChildExited {
                     id: child.child_id,
                     generation,
@@ -303,9 +260,6 @@ impl EventWatch {
                 return Err(EventRecvError::Lagged(dropped));
             }
         };
-        if let Some(pending) = pending {
-            self.pending.push_back(wrap_event(pending, &path));
-        }
         Ok(Some(wrap_event(leaf, &path)))
     }
 }
@@ -334,42 +288,6 @@ pub async fn recv_supervisor_event(events: &mut EventWatch) -> ObservedEvent {
             panic!("supervisor event stream closed unexpectedly");
         }
     }
-}
-
-pub fn fail_on_generations(
-    id: &'static str,
-    trigger_failure: Arc<Notify>,
-    generations_to_fail: u64,
-) -> TaskSpec {
-    TaskSpec::new(id, move |ctx| {
-        let trigger_failure = trigger_failure.clone();
-        async move {
-            if ctx.generation() < generations_to_fail {
-                trigger_failure.notified().await;
-                return Err(test_error("boom"));
-            }
-
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }
-    })
-    .restart(RestartPolicy::on_failure())
-}
-
-pub fn failing_child(
-    id: &'static str,
-    trigger_failure: &Arc<Notify>,
-    error: &'static str,
-) -> TaskSpec {
-    let trigger_failure = trigger_failure.clone();
-    TaskSpec::new(id, move |_ctx| {
-        let trigger_failure = trigger_failure.clone();
-        async move {
-            trigger_failure.notified().await;
-            Err(test_error(error))
-        }
-    })
-    .restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(

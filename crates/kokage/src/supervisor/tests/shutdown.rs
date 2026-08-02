@@ -674,7 +674,7 @@ async fn shutdown_preempts_zero_delay_restart() {
     loop {
         match common::recv_supervisor_event(&mut events).await {
             ObservedEvent::SupervisorStopping => break,
-            ObservedEvent::ChildRestarted { .. } => {
+            ObservedEvent::ChildStarted { generation, .. } if generation > 0 => {
                 panic!("child restarted after shutdown was requested");
             }
             ObservedEvent::RestartIntensityExceeded => {
@@ -741,7 +741,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
     loop {
         match common::recv_supervisor_event(&mut events).await {
             ObservedEvent::SupervisorStopping => break,
-            ObservedEvent::ChildRestarted { id, .. } if id == "flaky" => {
+            ObservedEvent::ChildStarted { id, generation } if id == "flaky" && generation > 0 => {
                 panic!("child restarted after shutdown was requested");
             }
             ObservedEvent::RestartIntensityExceeded => {

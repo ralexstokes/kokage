@@ -600,7 +600,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
 }
 
 #[tokio::test]
-async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
+async fn triggering_child_restart_is_scheduled_before_next_generation_starts() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
 
     let trigger = TaskSpec::new("trigger", move |ctx| {
@@ -659,30 +659,14 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
             ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "trigger" && generation == 1 =>
             {
-                sequence.push("trigger_started");
-            }
-            ObservedEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
-                ..
-            } if id == "trigger" && old_generation == 0 && new_generation == 1 => {
                 saw_trigger_restart = true;
-                sequence.push("trigger_restarted");
+                sequence.push("trigger_started");
             }
             ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "peer" && generation == 1 =>
             {
-                sequence.push("peer_started");
-            }
-            ObservedEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
-                ..
-            } if id == "peer" && old_generation == 0 && new_generation == 1 => {
                 saw_peer_restart = true;
-                sequence.push("peer_restarted");
+                sequence.push("peer_started");
             }
             _ => {}
         }
@@ -700,34 +684,18 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         .iter()
         .position(|event| *event == "trigger_started")
         .expect("trigger restart start should be observed");
-    let trigger_restarted = sequence
-        .iter()
-        .position(|event| *event == "trigger_restarted")
-        .expect("trigger restart should be observed");
     let peer_started = sequence
         .iter()
         .position(|event| *event == "peer_started")
         .expect("peer restart start should be observed");
-    let peer_restarted = sequence
-        .iter()
-        .position(|event| *event == "peer_restarted")
-        .expect("peer restart should be observed");
 
     assert!(
         trigger_exited < trigger_scheduled,
         "failing child exit must precede restart scheduling: {sequence:?}"
     );
     assert!(
-        trigger_scheduled < trigger_restarted && trigger_scheduled < peer_restarted,
-        "trigger restart must be scheduled before any child restart completes: {sequence:?}"
-    );
-    assert!(
-        trigger_started < trigger_restarted,
-        "trigger restart event ordering regressed: {sequence:?}"
-    );
-    assert!(
-        peer_started < peer_restarted,
-        "peer restart event ordering regressed: {sequence:?}"
+        trigger_scheduled < trigger_started && trigger_scheduled < peer_started,
+        "trigger restart must be scheduled before either child starts again: {sequence:?}"
     );
 
     handle.shutdown();
@@ -798,20 +766,10 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             ObservedEvent::ChildRestartScheduled { id, .. } if id == "trigger" => {
                 trigger_restart_scheduled += 1;
             }
-            ObservedEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
-                ..
-            } if id == "trigger" && old_generation == 0 && new_generation == 1 => {
+            ObservedEvent::ChildStarted { id, generation: 1 } if id == "trigger" => {
                 saw_trigger_restart = true;
             }
-            ObservedEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
-                ..
-            } if id == "peer" && old_generation == 0 && new_generation == 1 => {
+            ObservedEvent::ChildStarted { id, generation: 1 } if id == "peer" => {
                 saw_peer_restart = true;
             }
             _ => {}

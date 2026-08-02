@@ -65,6 +65,25 @@ consuming factory while configuring shutdown, readiness, or whether the
 terminal membership remains visible. `add_subtree` accepts a `SubtreeSpec`
 directly when the subtree edge needs policy overrides.
 
+Actors always use a repeatable factory, so there is no one-shot actor
+declaration. For the rare actor that should run until a terminal exit and then
+leave the dynamic scope, spell out both policies:
+
+```rust
+# use kokage::{ActorSpec, RestartPolicy, prelude::*};
+# struct Session;
+# impl Actor for Session {
+#     type Msg = ();
+#     async fn handle(&mut self, _msg: (), _ctx: &mut Context<'_, Self>) -> ExitResult {
+#         Ok(())
+#     }
+# }
+let session = ActorSpec::new("session", || Session)
+    .restart(RestartPolicy::never())
+    .remove_on_terminal_exit();
+# let _ = session;
+```
+
 These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
 be mutated accidentally. They return [`ControlError`] for operational errors:
 `UnknownChildId`, `UnknownChildHandle`, `ChildRemovalInProgress` if you re-add

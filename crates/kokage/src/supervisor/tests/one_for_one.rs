@@ -328,7 +328,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
 }
 
 #[tokio::test]
-async fn restart_events_follow_exit_schedule_start_restart_order() {
+async fn lifecycle_events_follow_exit_schedule_start_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let running = Supervisor::ordered()
@@ -376,25 +376,14 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
             ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "flaky" && generation == 1 =>
             {
-                sequence.push("started");
-            }
-            ObservedEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
-                ..
-            } if id == "flaky" && old_generation == 0 && new_generation == 1 => {
                 saw_restart = true;
-                sequence.push("restarted");
+                sequence.push("started");
             }
             _ => {}
         }
     }
 
-    assert_eq!(
-        sequence,
-        vec!["exited", "scheduled", "started", "restarted"]
-    );
+    assert_eq!(sequence, vec!["exited", "scheduled", "started"]);
 
     handle.shutdown();
     common::wait(&handle, "restart intensity test shutdown")

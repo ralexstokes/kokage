@@ -236,14 +236,6 @@ impl<M: Send + 'static> ActorSpec<M> {
         self
     }
 
-    /// Marks finite dynamic work as non-restarting and removable on terminal exit.
-    #[must_use]
-    pub fn temporary(mut self) -> Self {
-        self.restart = Some(RestartPolicy::never());
-        self.remove_on_terminal_exit = true;
-        self
-    }
-
     /// Removes this membership after an exit its restart policy does not restart.
     ///
     /// By default a terminal child remains visible as an inactive membership.
@@ -560,14 +552,6 @@ mod tests {
         );
         assert_eq!(spec.mailbox_shutdown, Some(MailboxShutdown::Discard));
         assert!(!spec.remove_on_terminal_exit);
-    }
-
-    #[test]
-    fn temporary_is_never_restarting_and_removable() {
-        let spec = ActorSpec::new("temporary", || OpaqueActor).temporary();
-
-        assert_eq!(spec.restart, Some(RestartPolicy::never()));
-        assert!(spec.remove_on_terminal_exit);
     }
 
     #[test]

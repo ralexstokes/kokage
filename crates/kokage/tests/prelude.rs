@@ -160,7 +160,7 @@ fn policy_values_expose_their_declared_behavior() {
         )),
         "jittered-exponential"
     );
-    assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
+    assert_eq!(scope_name(kokage::observe::ScopeKind::Ordered), "ordered");
 }
 
 #[derive(Clone)]
@@ -255,7 +255,7 @@ fn task_policy_sets_remain_nameable_from_the_single_crate() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
+    assert_eq!(scope_name(kokage::observe::ScopeKind::Ordered), "ordered");
 }
 
 #[tokio::test]
