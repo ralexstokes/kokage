@@ -663,7 +663,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_on_terminal_exit_round_trips_and_rejects_the_retired_key() {
+    fn remove_on_terminal_exit_is_required_while_unknown_fields_are_tolerated() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -688,11 +688,20 @@ mod tests {
         serde_json::from_value::<ChildSnapshot>(extended)
             .expect("future child snapshot fields remain forward compatible");
 
-        let retired = value
+        let mut dual_key = value.clone();
+        dual_key
+            .as_object_mut()
+            .expect("child snapshot serializes as an object")
+            .insert("remove_when_done".to_owned(), serde_json::json!(false));
+        let decoded: ChildSnapshot = serde_json::from_value(dual_key)
+            .expect("unknown retired key is tolerated when the current key is present");
+        assert!(decoded.remove_on_terminal_exit);
+
+        let old_only = value
             .to_string()
             .replacen("remove_on_terminal_exit", "remove_when_done", 1);
-        let error = serde_json::from_str::<ChildSnapshot>(&retired)
-            .expect_err("retired terminal membership key must not deserialize");
+        let error = serde_json::from_str::<ChildSnapshot>(&old_only)
+            .expect_err("an old-only payload must lack the required current key");
         assert!(
             error
                 .to_string()

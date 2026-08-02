@@ -22,7 +22,7 @@ mod coverage_probe {
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
             CancellationToken, ChildHandle, ControlError, MailboxShutdown, MonitorEvent,
             MonitorEventKind, OffloadDeadline, OneShotTaskSpec, ReplyError, ReplyReceiver,
-            RestartPolicy, SendError, SendErrorKind, Shutdown, Strategy, SubtreeSpec,
+            RestartPolicy, RunningScope, SendError, SendErrorKind, Shutdown, Strategy, SubtreeSpec,
             SupervisorError, TaskError,
         };
     }

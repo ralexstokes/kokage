@@ -276,7 +276,9 @@ pub use actor::{
     ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{ChildHandle, DynamicScopeRef, RunningTree, ScopeRef, TaskError, TaskRef};
+pub use runtime::{
+    ChildHandle, DynamicScopeRef, RunningScope, RunningTree, ScopeRef, TaskError, TaskRef,
+};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, MailboxShutdown,

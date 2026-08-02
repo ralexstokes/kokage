@@ -1,6 +1,6 @@
 use kokage::prelude::{
     Backoff, CallError, ChildHandle, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
-    OneShotTaskSpec, RestartPolicy, SendError, SendErrorKind, Shutdown, Strategy,
+    OneShotTaskSpec, RestartPolicy, RunningScope, SendError, SendErrorKind, Shutdown, Strategy,
 };
 
 fn main() {}
