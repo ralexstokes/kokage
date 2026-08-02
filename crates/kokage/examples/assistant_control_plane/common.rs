@@ -149,6 +149,10 @@ pub enum Evidence {
         open: bool,
         reason: String,
     },
+    SafetyProbe {
+        healthy: bool,
+        budget_exceeded: bool,
+    },
     HeldWhilePaused {
         chat: String,
         envelope_id: u64,

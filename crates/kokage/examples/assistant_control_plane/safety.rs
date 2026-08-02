@@ -69,11 +69,13 @@ pub enum BudgetMsg {
 pub struct BudgetStatus {
     pub spent: u64,
     pub cap: u64,
+    pub exceeded: bool,
 }
 
 pub struct Budget {
     spent: Arc<AtomicU64>,
     cap: Arc<AtomicU64>,
+    exceeded: Arc<AtomicBool>,
     guard: ActorRef<GuardMsg>,
     evidence: EvidenceTx,
 }
@@ -82,12 +84,14 @@ impl Budget {
     pub fn new(
         spent: Arc<AtomicU64>,
         cap: Arc<AtomicU64>,
+        exceeded: Arc<AtomicBool>,
         guard: ActorRef<GuardMsg>,
         evidence: EvidenceTx,
     ) -> Self {
         Self {
             spent,
             cap,
+            exceeded,
             guard,
             evidence,
         }
@@ -105,6 +109,7 @@ impl Actor for Budget {
                 if allowed {
                     self.spent.fetch_add(tokens, Ordering::AcqRel);
                 } else {
+                    self.exceeded.store(true, Ordering::Release);
                     let _ = self.guard.try_send(GuardMsg::BudgetExceeded);
                 }
                 reply.send(allowed);
@@ -112,6 +117,7 @@ impl Actor for Budget {
             BudgetMsg::Status(reply) => reply.send(BudgetStatus {
                 spent: self.spent.load(Ordering::Acquire),
                 cap: self.cap.load(Ordering::Acquire),
+                exceeded: self.exceeded.load(Ordering::Acquire),
             }),
             BudgetMsg::SetCap { cap, reply } => {
                 self.cap.store(cap, Ordering::Release);
@@ -120,6 +126,7 @@ impl Actor for Budget {
             BudgetMsg::Reset { cap, reply } => {
                 self.spent.store(0, Ordering::Release);
                 self.cap.store(cap, Ordering::Release);
+                self.exceeded.store(false, Ordering::Release);
                 let _ = self.guard.try_send(GuardMsg::BudgetRestored);
                 reply.send(());
             }
@@ -139,7 +146,10 @@ pub enum GuardMsg {
     BudgetExceeded,
     BudgetRestored,
     Probe,
-    ProbeResult(bool),
+    ProbeResult {
+        healthy: bool,
+        budget_exceeded: bool,
+    },
 }
 
 pub struct GuardActor {
@@ -233,13 +243,33 @@ impl Actor for GuardActor {
                         budget
                             .call(BudgetMsg::Status, CALL_BOUND)
                             .await
-                            .map(|status| status.spent <= status.cap && model_available)
-                            .unwrap_or(false)
+                            .map(|status| {
+                                (
+                                    status.spent <= status.cap
+                                        && !status.exceeded
+                                        && model_available,
+                                    status.exceeded,
+                                )
+                            })
+                            .unwrap_or((false, false))
                     },
-                    |result| GuardMsg::ProbeResult(result.unwrap_or(false)),
+                    |result| {
+                        let (healthy, budget_exceeded) = result.unwrap_or((false, false));
+                        GuardMsg::ProbeResult {
+                            healthy,
+                            budget_exceeded,
+                        }
+                    },
                 );
             }
-            GuardMsg::ProbeResult(healthy) => {
+            GuardMsg::ProbeResult {
+                healthy,
+                budget_exceeded,
+            } => {
+                self.evidence.emit(Evidence::SafetyProbe {
+                    healthy,
+                    budget_exceeded,
+                });
                 if healthy {
                     self.failures.clear();
                     self.probe_backoff = Duration::from_millis(20);

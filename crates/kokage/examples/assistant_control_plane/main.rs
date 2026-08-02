@@ -37,7 +37,7 @@ use std::{
     error::Error,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -132,6 +132,7 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
     let tools = Arc::new(ToolState::default());
     let spent = Arc::new(AtomicU64::new(0));
     let budget_cap = Arc::new(AtomicU64::new(10_000));
+    let budget_exceeded = Arc::new(AtomicBool::new(false));
     let model_control = ModelControl::default();
     let scripted_model = ScriptedModel::new(model_control.clone());
     let safety_gate = SafetyGate::new_open();
@@ -186,12 +187,14 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
     let budget_spec = budget_slot.define({
         let spent = Arc::clone(&spent);
         let cap = Arc::clone(&budget_cap);
+        let exceeded = Arc::clone(&budget_exceeded);
         let guard = guard_ref.clone();
         let evidence = evidence_tx.clone();
         move || {
             Budget::new(
                 Arc::clone(&spent),
                 Arc::clone(&cap),
+                Arc::clone(&exceeded),
                 guard.clone(),
                 evidence.clone(),
             )
@@ -683,6 +686,7 @@ impl Acceptance {
         let restarted = self.budget.call(BudgetMsg::Status, CALL_BOUND).await?;
         assert_eq!(restarted.spent, status.spent);
         assert_eq!(restarted.cap, constrained_cap);
+        assert!(!restarted.exceeded);
 
         self.publish(Envelope::new(10, "alpha", "budget breach"))
             .await;
@@ -699,6 +703,17 @@ impl Acceptance {
             )
         })
         .await;
+        self.next_evidence("budget probe remains blocked", |event| {
+            matches!(
+                event,
+                Evidence::SafetyProbe {
+                    healthy: false,
+                    budget_exceeded: true,
+                }
+            )
+        })
+        .await;
+        assert!(!self.safety_gate.is_open());
         self.budget
             .call(|reply| BudgetMsg::Reset { cap: 10_000, reply }, CALL_BOUND)
             .await?;
@@ -708,7 +723,7 @@ impl Acceptance {
         assert!(self.safety_gate.is_open());
         warn!(
             phase = 7,
-            "guard: failure and budget pauses released durable work; budget state survived restart"
+            "guard: budget probes stayed closed until reset; budget state survived restart"
         );
         Ok(())
     }

@@ -31,8 +31,9 @@ kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry), **`assistant_control_plane`** (an LLM-agent control
 plane with offloaded model calls), and **`build_farm`** (a finite dependency
 build over restarting service tasks and dynamic one-shot workers). The first
-two run with `--features metrics,derive`; `build_farm` runs with `--features
-serde` so it can validate and round-trip its declaration outline before spawn.
+two run with `--features metrics,derive`; `build_farm` runs with
+`--features serde` so it can validate and round-trip its declaration outline
+before spawn.
 
 ## Watch a tree live
 
