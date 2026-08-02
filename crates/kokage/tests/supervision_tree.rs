@@ -706,7 +706,7 @@ fn an_outline_rejects_retired_scope_default_keys() {
 
 #[cfg(feature = "serde")]
 #[test]
-fn an_outline_rejects_the_retired_terminal_membership_key() {
+fn an_outline_requires_the_current_terminal_membership_key() {
     fn nested_child_fields<'a>(
         outline: &'a mut serde_json::Value,
         variant: &str,
@@ -740,15 +740,27 @@ fn an_outline_rejects_the_retired_terminal_membership_key() {
         serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
             .unwrap_or_else(|error| panic!("future {variant} fields remain compatible: {error}"));
 
-        let mut retired = outline.clone();
-        let fields = nested_child_fields(&mut retired, variant);
+        let mut dual_key = outline.clone();
+        nested_child_fields(&mut dual_key, variant)
+            .insert("remove_when_done".to_owned(), serde_json::json!(false));
+        let decoded = serde_json::from_value::<kokage::observe::SupervisionOutline>(dual_key)
+            .unwrap_or_else(|error| {
+                panic!("unknown retired {variant} key is tolerated beside the current key: {error}")
+            });
+        let mut reencoded = serde_json::to_value(decoded).expect("outline serializes again");
+        let fields = nested_child_fields(&mut reencoded, variant);
+        assert_eq!(fields["remove_on_terminal_exit"], true);
+        assert!(fields.get("remove_when_done").is_none());
+
+        let mut old_only = outline.clone();
+        let fields = nested_child_fields(&mut old_only, variant);
         let policy = fields
             .remove("remove_on_terminal_exit")
             .expect("current terminal membership key is serialized");
         fields.insert("remove_when_done".to_owned(), policy);
 
-        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(retired)
-            .expect_err("retired terminal membership key must not deserialize");
+        let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(old_only)
+            .expect_err("an old-only payload must lack the required current key");
         assert!(
             error
                 .to_string()
