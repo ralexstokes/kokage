@@ -1773,11 +1773,12 @@ impl SupervisorHandle {
     /// Returns a snapshot and self-recovering direct-child update stream.
     ///
     /// The stream filters transitions already reflected by the initial
-    /// snapshot. If its bounded queue overflows, it yields a complete reset
-    /// snapshot and resumes from that snapshot's sequence boundary. Child
-    /// sequences are local to each scope, so the stream is intentionally
-    /// restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
-    /// for the lower-level recursive history stream and custom recovery policy.
+    /// snapshot. It yields a complete reset when its bounded queue overflows or
+    /// the observed scope changes lifecycle state or incarnation, then resumes
+    /// from that snapshot's sequence boundary. Child sequences are local to
+    /// each scope, so the stream is intentionally restricted to this scope.
+    /// Use [`watch_lifecycle`](Self::watch_lifecycle) for the lower-level
+    /// recursive history stream and custom recovery policy.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
         let snapshots = self.subscribe_snapshots();
         let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());

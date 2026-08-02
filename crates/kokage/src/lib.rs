@@ -117,8 +117,8 @@
 //! ordering, and delivery contract appropriate to its audience.
 //! [`ScopeRef::observe_children`] is the reducer-oriented projection: it
 //! aligns a snapshot with direct-child transitions, suppresses transitions
-//! already represented by that snapshot, and recovers queue overflow with a
-//! complete [`observe::ChildObservationUpdate::Reset`].
+//! already represented by that snapshot, and recovers queue overflow or scope
+//! reincarnation with a complete [`observe::ChildObservationUpdate::Reset`].
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of

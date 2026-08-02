@@ -115,6 +115,13 @@ impl<M> ActorRef<M> {
         &self.identity
     }
 
+    pub(crate) fn current_incarnation_mailbox(&self) -> Option<MailboxRef<M>> {
+        match &*self.binding.borrow() {
+            BindingState::Bound(mailbox) => Some(mailbox.clone()),
+            BindingState::Unbound | BindingState::Terminated => None,
+        }
+    }
+
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///
