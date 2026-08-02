@@ -81,6 +81,7 @@ pub use lifecycle::{
 };
 pub use owner::{RunningSupervisor, Supervisor};
 pub use restart::{Backoff, RestartPolicy};
+pub(crate) use runtime::exit::ActorChildReadinessTimedOut;
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{

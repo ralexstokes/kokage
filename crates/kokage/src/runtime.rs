@@ -11,18 +11,18 @@ use std::{
 use crate::{
     ActorFactory, ActorRef, ActorSpec, ExitResult,
     actor::{
-        ActorNode, ActorOptionsValidationError, RawActor, RunnableActor, RunnableActorBuilder,
-        ScopedActorStats,
+        ActorNode, ActorOptionsValidationError, ActorRunError, RawActor, RunnableActor,
+        RunnableActorBuilder, ScopedActorStats,
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildObservationUpdate,
-        ChildObservationWatch, ChildSnapshot, ChildSpec, ChildStateView, CompletionOnDrop,
-        ControlError, DynamicSupervisorHandle, ExitStatus, Guard, LifecycleEvent,
-        LifecycleEventKind, LifecycleObservation, LifecycleWatch, MailboxShutdown, OneShotTaskSpec,
-        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, Strategy,
-        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
-        SupervisorStateView, TaskSpec,
+        ActorChildReadinessTimedOut, BuildError, CancellationToken, ChildEventKind,
+        ChildMembershipView, ChildObservationUpdate, ChildObservationWatch, ChildSnapshot,
+        ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
+        ExitStatus, Guard, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
+        LifecycleWatch, MailboxShutdown, OneShotTaskSpec, RestartPolicy, RunningSupervisor,
+        ScopeKind, ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
+        SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView, TaskSpec,
     },
 };
 
@@ -1456,7 +1456,12 @@ pub(crate) fn actor_child_spec(
                     || ctx.mark_ready(),
                 )
                 .await
-                .map_err(Into::into)
+                .map_err(|error| match error {
+                    ActorRunError::ReadinessTimedOut { timeout, .. } => {
+                        Box::new(ActorChildReadinessTimedOut(timeout)) as crate::BoxError
+                    }
+                    error => Box::new(error) as crate::BoxError,
+                })
         }
     })
     .into_spec()
