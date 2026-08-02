@@ -36,7 +36,7 @@ struct Frontend {
 impl RawActor for Frontend {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             let worker = self.worker.clone();
@@ -56,7 +56,7 @@ struct Worker {
 impl RawActor for Worker {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         let run = self.starts.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
@@ -146,7 +146,7 @@ struct CleanThenReceive {
 impl RawActor for CleanThenReceive {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<String>) -> ExitResult {
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         if run == 0 {
             send_once(&self.first_exited, ());
@@ -222,7 +222,7 @@ struct NotifyCleanExit {
 impl RawActor for NotifyCleanExit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<()>) -> ExitResult {
         send_once(&self.exited, ());
         Ok(())
     }
@@ -297,7 +297,7 @@ struct RestartingRpc {
 impl RawActor for RestartingRpc {
     type Msg = RpcMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<RpcMsg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<RpcMsg>) -> ExitResult {
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             match message {

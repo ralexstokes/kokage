@@ -34,7 +34,7 @@ struct Finite;
 impl RawActor for Finite {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         Ok(())
     }
 }
@@ -44,7 +44,7 @@ struct Parked;
 impl RawActor for Parked {
     type Msg = Vec<u8>;
 
-    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }

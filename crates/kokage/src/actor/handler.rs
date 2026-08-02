@@ -103,11 +103,11 @@ pub trait Actor: Send + 'static {
 impl<H: Actor> RawActor for H {
     type Msg = H::Msg;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         // This must be the first operation: `ActorReadySignal` decides whether
         // a raw actor is immediately ready after the first poll of `run`.
         ctx.defer_automatic_readiness();
-        self.on_start(&mut Context::new(&mut ctx)).await?;
+        self.on_start(&mut Context::new(ctx)).await?;
         ctx.mark_ready();
 
         let mut stopping = ctx.is_stop_requested();
@@ -151,14 +151,14 @@ impl<H: Actor> RawActor for H {
                 LoopEvent::Message(Some(message)) => {
                     continuation_had_turn = false;
                     ctx.record_received();
-                    self.handle(message, &mut Context::new(&mut ctx)).await?;
+                    self.handle(message, &mut Context::new(ctx)).await?;
                     stopping = ctx.is_stop_requested();
                 }
                 LoopEvent::Message(None) => break,
                 LoopEvent::Continuation(message) => {
                     continuation_had_turn = true;
                     ctx.record_received();
-                    self.handle(message, &mut Context::new(&mut ctx)).await?;
+                    self.handle(message, &mut Context::new(ctx)).await?;
                     stopping = ctx.is_stop_requested();
                     if !stopping {
                         tokio::task::yield_now().await;
@@ -197,7 +197,7 @@ impl<H: Actor> RawActor for H {
                         let Some(message) = message else { break };
                         continuation_had_turn = was_continuation;
                         ctx.record_received();
-                        self.handle(message, &mut Context::new(&mut ctx)).await?;
+                        self.handle(message, &mut Context::new(ctx)).await?;
                         if ctx.is_stop_requested() {
                             stopping = true;
                             break;
@@ -208,14 +208,20 @@ impl<H: Actor> RawActor for H {
                     }
                     if !stopping && let Some(message) = ctx.take_fired_timer(timer) {
                         ctx.record_received();
-                        self.handle(message, &mut Context::new(&mut ctx)).await?;
+                        self.handle(message, &mut Context::new(ctx)).await?;
                         stopping = ctx.is_stop_requested();
                     }
                 }
             }
         }
 
-        ctx.close_external_intake();
+        // Preserve the accepted prefix for graceful shutdown: external intake
+        // closes only after the loop observes supervisor cancellation. A local
+        // stop leaves it open so a raw decorator can re-enter this handler on
+        // the same context before the outermost run returns.
+        if ctx.shutdown.is_cancelled() {
+            ctx.close_external_intake();
+        }
         if ctx.drain_messages {
             // Completions and the mailbox are independent loop-owned sources.
             // Drain whichever is ready until the JoinSet is empty and the
@@ -225,26 +231,15 @@ impl<H: Actor> RawActor for H {
                 // Once stopping begins, later stop requests do not change the
                 // drain decision. Continuations queued by drain handlers are
                 // left for the context to drop with the incarnation, and
-                // reported below. A handler that cares can inspect `status`.
-                self.handle(message, &mut Context::draining(&mut ctx))
-                    .await?;
+                // reported when the outermost raw run returns. A handler that
+                // cares can inspect `status`.
+                self.handle(message, &mut Context::draining(ctx)).await?;
             }
         } else {
             ctx.abort_offloads();
         }
 
-        // Only the receive loop above takes continuations, so anything still
-        // queued here is dropped with the incarnation: pushed by a drain
-        // handler, or by an `on_start` that also requested a stop. Both reach
-        // `continue_with` through a context type that is legitimately able to
-        // queue work at other times, so neither is expressible as a compile
-        // error the way `on_stop` and `RawActor` are. Report it.
-        if !ctx.continuations.is_empty() {
-            ctx.observability
-                .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
-        }
-
-        self.on_stop(&mut StopContext::new(&mut ctx)).await?;
+        self.on_stop(&mut StopContext::new(ctx)).await?;
         Ok(())
     }
 }

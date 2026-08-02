@@ -885,8 +885,8 @@ impl Drop for ActorLifetime {
     }
 }
 
-/// Runtime context passed to a [`RawActor`](crate::raw::RawActor) each time the
-/// actor is run.
+/// Runtime context borrowed by a [`RawActor`](crate::raw::RawActor) each time
+/// the actor is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
 /// the incoming [`mailbox`](Self::recv) and explicit

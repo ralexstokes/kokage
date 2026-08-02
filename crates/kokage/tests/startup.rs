@@ -3,7 +3,7 @@ mod support;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -584,9 +584,164 @@ struct PromptRaw;
 impl RawActor for PromptRaw {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, _ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         Ok(())
     }
+}
+
+struct ExitCleanupProbe {
+    self_ref: Arc<std::sync::Mutex<Option<ActorRef<()>>>>,
+    intake_closed: Arc<AtomicBool>,
+    dropped: Arc<Notify>,
+}
+
+impl RawActor for ExitCleanupProbe {
+    type Msg = ();
+
+    async fn run(&mut self, _ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        Ok(())
+    }
+}
+
+impl Drop for ExitCleanupProbe {
+    fn drop(&mut self) {
+        let intake_closed = self
+            .self_ref
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("the actor ref is installed before spawning")
+            .try_send(())
+            .is_err();
+        self.intake_closed.store(intake_closed, Ordering::SeqCst);
+        self.dropped.notify_one();
+    }
+}
+
+#[tokio::test]
+async fn raw_actor_exit_closes_external_intake_before_dropping_the_actor() {
+    let self_ref = Arc::new(std::sync::Mutex::new(None));
+    let intake_closed = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(Notify::new());
+    let mut graph = Tree::new();
+    let actor = graph.add_actor_spec(ActorSpec::new("ExitCleanupProbe", {
+        let self_ref = Arc::clone(&self_ref);
+        let intake_closed = Arc::clone(&intake_closed);
+        let dropped = Arc::clone(&dropped);
+        move || ExitCleanupProbe {
+            self_ref: Arc::clone(&self_ref),
+            intake_closed: Arc::clone(&intake_closed),
+            dropped: Arc::clone(&dropped),
+        }
+    }));
+    *self_ref.lock().unwrap() = Some(actor);
+
+    let handle = graph
+        .default_child_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), dropped.notified())
+        .await
+        .expect("the raw actor is dropped after returning");
+
+    assert!(intake_closed.load(Ordering::SeqCst));
+    handle.shutdown().await.unwrap();
+}
+
+struct StopsEachRun {
+    starts: Arc<AtomicUsize>,
+    stops: Arc<AtomicUsize>,
+}
+
+impl Actor for StopsEachRun {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        ctx.stop();
+        Ok(())
+    }
+
+    async fn handle(&mut self, _message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        unreachable!("the persistent stop request skips the receive loop")
+    }
+
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ExitResult {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct ReenteringRawActor {
+    inner: StopsEachRun,
+    between_runs: mpsc::UnboundedSender<()>,
+    resume: Arc<Notify>,
+    received: mpsc::UnboundedSender<&'static str>,
+    finished: Arc<Notify>,
+}
+
+impl RawActor for ReenteringRawActor {
+    type Msg = &'static str;
+
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        self.inner.run(ctx).await?;
+        self.between_runs.send(()).unwrap();
+        self.resume.notified().await;
+        self.received
+            .send(ctx.try_recv().expect("message accepted between inner runs"))
+            .unwrap();
+        self.inner.run(ctx).await?;
+        self.finished.notify_one();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn raw_actor_decorator_can_reenter_with_the_same_open_context() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let stops = Arc::new(AtomicUsize::new(0));
+    let (between_runs, mut between_runs_rx) = mpsc::unbounded_channel();
+    let resume = Arc::new(Notify::new());
+    let (received, mut received_rx) = mpsc::unbounded_channel();
+    let finished = Arc::new(Notify::new());
+    let mut graph = Tree::new();
+    let actor = graph.add_actor_spec(ActorSpec::new("ReenteringRawActor", {
+        let starts = Arc::clone(&starts);
+        let stops = Arc::clone(&stops);
+        let between_runs = between_runs.clone();
+        let resume = Arc::clone(&resume);
+        let received = received.clone();
+        let finished = Arc::clone(&finished);
+        move || ReenteringRawActor {
+            inner: StopsEachRun {
+                starts: Arc::clone(&starts),
+                stops: Arc::clone(&stops),
+            },
+            between_runs: between_runs.clone(),
+            resume: Arc::clone(&resume),
+            received: received.clone(),
+            finished: Arc::clone(&finished),
+        }
+    }));
+    let handle = graph
+        .default_child_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
+
+    between_runs_rx.recv().await.expect("the first run returns");
+    actor
+        .send("between")
+        .await
+        .expect("the outer raw run keeps external intake open");
+    resume.notify_one();
+    assert_eq!(received_rx.recv().await, Some("between"));
+    tokio::time::timeout(Duration::from_secs(1), finished.notified())
+        .await
+        .expect("the second run returns");
+    assert_eq!(starts.load(Ordering::SeqCst), 2);
+    assert_eq!(stops.load(Ordering::SeqCst), 2);
+
+    handle.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -621,7 +776,7 @@ impl RawActor for BoundedRawReadiness {
         Some(Duration::from_millis(10))
     }
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             std::future::pending::<()>().await;
         }
@@ -713,7 +868,7 @@ impl RawActor for SlowShutdownRawReadiness {
         Some(Duration::from_millis(10))
     }
 
-    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         let _ = self.started.send(());
         ctx.shutdown_token().cancelled().await;
         tokio::time::sleep(Duration::from_millis(20)).await;

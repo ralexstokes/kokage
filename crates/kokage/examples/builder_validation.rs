@@ -16,7 +16,7 @@ impl<M> Idle<M> {
 impl<M: Send + 'static> RawActor for Idle<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<M>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }

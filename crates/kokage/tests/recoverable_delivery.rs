@@ -24,7 +24,7 @@ struct ParkBeforeReceive {
 impl RawActor for ParkBeforeReceive {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         self.started.send(()).expect("start receiver remains open");
         self.release.notified().await;
         while ctx.recv().await.is_some() {}
@@ -38,7 +38,7 @@ struct Drain;
 impl RawActor for Drain {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -53,7 +53,7 @@ struct FailWithoutReceiving {
 impl RawActor for FailWithoutReceiving {
     type Msg = String;
 
-    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         self.started.send(()).expect("start receiver remains open");
         tokio::select! {
             () = self.fail.notified() => Err(io::Error::other("test failure").into()),
@@ -113,7 +113,7 @@ struct CollectAfterRelease {
 impl RawActor for CollectAfterRelease {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
         self.started.send(()).expect("start receiver remains open");
         self.release.notified().await;
         while let Some(message) = ctx.recv().await {
