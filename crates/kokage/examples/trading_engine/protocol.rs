@@ -195,7 +195,6 @@ pub enum RouterMsg {
     CancelCompleted {
         key: OrderKey,
         result: CancelOutcome,
-        reply: Reply<CancelOutcome>,
     },
     ReconcileAll {
         reply: Reply<ReconcileReport>,
