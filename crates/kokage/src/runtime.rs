@@ -489,10 +489,12 @@ fn task_is_revivable_by_group(snapshot: &SupervisorSnapshot, child: &ChildSnapsh
 /// Use [`scope`](Self::scope) for observation and control through a cheaply
 /// cloneable, non-owning scope reference. Ordered trees use the default
 /// [`ScopeRef`] parameter, while dynamic trees use [`DynamicScopeRef`].
+/// Generic helpers can name the sealed [`RunningScope`] bound to accept either
+/// form without admitting arbitrary scope types.
 /// Dropping a scope reference is inert and does not keep this owner alive;
 /// dropping this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
-pub struct RunningTree<S: sealed::RunningScope = ScopeRef> {
+pub struct RunningTree<S: RunningScope = ScopeRef> {
     supervisor: RunningSupervisor,
     scope: S,
 }
@@ -502,17 +504,17 @@ mod sealed {
         ActorRef, ControlError, DynamicScopeRef, DynamicSupervisorHandle, ScopeRef, TaskRef,
     };
 
-    pub trait RunningScope: Clone {
+    pub trait RunningScopeSealed: Clone {
         fn from_scope(scope: ScopeRef) -> Self;
     }
 
-    impl RunningScope for ScopeRef {
+    impl RunningScopeSealed for ScopeRef {
         fn from_scope(scope: ScopeRef) -> Self {
             scope
         }
     }
 
-    impl RunningScope for DynamicScopeRef {
+    impl RunningScopeSealed for DynamicScopeRef {
         fn from_scope(scope: ScopeRef) -> Self {
             DynamicScopeRef::new(scope)
         }
@@ -577,7 +579,18 @@ mod sealed {
     }
 }
 
-impl<S: sealed::RunningScope> RunningTree<S> {
+/// A scope capability that can be owned by a [`RunningTree`].
+///
+/// This sealed marker trait is implemented only by [`ScopeRef`] and
+/// [`DynamicScopeRef`]. It can be named by downstream generic helpers and
+/// wrappers that accept either running-tree form, but it cannot be implemented
+/// outside Kokage.
+pub trait RunningScope: sealed::RunningScopeSealed {}
+
+impl RunningScope for ScopeRef {}
+impl RunningScope for DynamicScopeRef {}
+
+impl<S: RunningScope> RunningTree<S> {
     pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
         let scope = ScopeRef::new(supervisor.handle(), actors);
         let scope = S::from_scope(scope);
@@ -595,14 +608,14 @@ impl<S: sealed::RunningScope> RunningTree<S> {
     }
 }
 
-impl<S: sealed::RunningScope> RunningTree<S> {
+impl<S: RunningScope> RunningTree<S> {
     /// Returns the running tree's non-owning root scope reference.
     pub fn scope(&self) -> S {
         self.scope.clone()
     }
 }
 
-impl<S: sealed::RunningScope> std::fmt::Debug for RunningTree<S> {
+impl<S: RunningScope> std::fmt::Debug for RunningTree<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunningTree").finish_non_exhaustive()
     }
