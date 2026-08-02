@@ -350,8 +350,8 @@ async fn nested_scope_wait_stopped_follows_parent_driven_restarts() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let fail_first = Arc::new(Notify::new());
     let second_started = Arc::new(Notify::new());
-    let mut nested_tree =
-        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    let mut nested_tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     nested_tree.add_task("worker", {
         let attempts = Arc::clone(&attempts);
         let fail_first = Arc::clone(&fail_first);
