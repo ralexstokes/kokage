@@ -164,7 +164,14 @@ actor protocols:
 - Delivery bypasses mailbox capacity and conflation — a full mailbox cannot
   starve your deadline. A fire counts as received but not accepted mailbox
   traffic.
-- Intervals skip missed ticks rather than accumulating catch-up work.
+- A zero-delay [`set_timeout`] fires immediately. A zero-period [`set_interval`]
+  instead clears its key without arming a timer; [`RawContext::interval`] with
+  a zero period returns a finished guard and does not affect keyed timers.
+- Intervals first fire one full period after arming and skip missed ticks rather
+  than accumulating catch-up work. If an interval stays overdue because its
+  handler takes longer than the period, it can defer offload completions; use
+  [`interval_to`] with `&ctx.myself()` when ordinary delivery scheduling is
+  required.
 - Timers are owned by the current run: they are dropped on stop and restart,
   never fired into a fresh incarnation that doesn't remember arming them.
   Re-arm in `on_start` (as above) if the schedule should survive restarts.
@@ -172,7 +179,8 @@ actor protocols:
 [`send_after_to`] and [`interval_to`] deliberately use ordinary mailbox
 delivery to any `ActorRef`; pass `&ctx.myself()` when backpressure or conflation
 on self-delivery is part of the protocol. These operations are owned by their
-returned [`Guard`], so retain it or call [`Guard::detach`] to keep them alive.
+returned [`Guard`]: dropping it cancels the operation, so retain it for scoped
+ownership or call [`Guard::detach`] to keep it alive independently.
 Raw actors have the same `_to` forms plus self-directed [`RawContext::send_after`]
 and [`RawContext::interval`], because their custom loops do not have the keyed
 timer table.

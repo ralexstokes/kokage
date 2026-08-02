@@ -700,6 +700,8 @@ struct TimerEntry<M> {
 
 struct TimerRepeat<M> {
     period: Duration,
+    // Keep the `M: Clone` requirement local to interval insertion instead of
+    // imposing it on the timer table and one-shot timers.
     clone_message: fn(&M) -> M,
 }
 
@@ -718,13 +720,19 @@ fn next_interval_deadline(deadline: Instant, period: Duration) -> Instant {
     debug_assert!(!period.is_zero());
     let now = Instant::now();
     let elapsed = now.saturating_duration_since(deadline);
+    let advance = interval_advance(elapsed, period);
+    deadline
+        .checked_add(advance)
+        .unwrap_or_else(|| deadline_after(FAR_FUTURE))
+}
+
+fn interval_advance(elapsed: Duration, period: Duration) -> Duration {
+    debug_assert!(!period.is_zero());
     let periods = elapsed.as_nanos() / period.as_nanos() + 1;
     let advance = period.as_nanos().saturating_mul(periods);
     let seconds = u64::try_from(advance / 1_000_000_000).unwrap_or(u64::MAX);
     let nanoseconds = (advance % 1_000_000_000) as u32;
-    deadline
-        .checked_add(Duration::new(seconds, nanoseconds))
-        .unwrap_or_else(|| deadline_after(FAR_FUTURE))
+    Duration::new(seconds, nanoseconds)
 }
 
 fn clone_message<M: Clone>(message: &M) -> M {
@@ -760,8 +768,8 @@ impl<M> TimerTable<M> {
     where
         M: Clone,
     {
-        self.clear(key);
         if period.is_zero() {
+            self.clear(key);
             return;
         }
         self.insert_entry(
@@ -1658,9 +1666,15 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// The timer has the same loop-owned delivery, replacement, statistics,
     /// and incarnation lifetime semantics as [`set_timeout`](Self::set_timeout).
-    /// It clones `message` while re-arming in the actor's timer table before
-    /// each delivery. Missed ticks are skipped instead of accumulating, and a
-    /// zero period clears `key` without arming a timer.
+    /// The first delivery occurs one full `period` after arming. It clones
+    /// `message` while re-arming in the actor's timer table before each
+    /// delivery. Missed ticks are skipped instead of accumulating, and a zero
+    /// period clears `key` without arming a timer.
+    ///
+    /// A continually overdue interval is selected ahead of offload
+    /// completions. Use [`interval_to`](Self::interval_to) with
+    /// `&ctx.myself()` and retain its [`Guard`] when the interval must re-enter
+    /// ordinary delivery scheduling instead.
     pub fn set_interval(&mut self, key: TimerKey, message: A::Msg, period: Duration)
     where
         A::Msg: Clone,
@@ -1820,6 +1834,21 @@ mod tests {
         Mailbox, RestartPolicy,
         actor::binding::{BindingGuard, mailbox},
     };
+
+    #[test]
+    fn interval_advance_caps_whole_seconds_that_exceed_duration_range() {
+        assert_eq!(
+            interval_advance(Duration::MAX, Duration::MAX),
+            Duration::new(u64::MAX, 999_999_998)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_interval_deadline_caps_instant_overflow() {
+        let now = Instant::now();
+
+        assert_eq!(next_interval_deadline(now, Duration::MAX), now + FAR_FUTURE);
+    }
 
     #[test]
     fn actor_ref_try_send_traces_closed_mailbox_reason() {
