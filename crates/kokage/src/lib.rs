@@ -201,6 +201,8 @@
 //!   task-supervisor observability.
 //! - `examples/build_farm/` — a finite dependency build using supervised
 //!   tasks, dynamic one-shot workers, and a durable content-addressed cache.
+//! - `examples/sidecar/` — task-first supervision embedded in a host-owned
+//!   process, with one actor subtree beside raw task children.
 //!
 //! # Cargo features
 //!
