@@ -154,6 +154,12 @@ existing `TaskRef`. A retained membership keeps its child id occupied until
 `scope.remove(&job).await?` removes it or the scope shuts down; the
 `TaskRef` retains the terminal outcome whether or not the membership is kept.
 
+In this policy, a *terminal exit* is one that a running supervisor evaluates
+and declines to restart. The membership option is not applied to exits during
+supervisor shutdown. Likewise, a non-`Never` child that completes while a group
+restart drains its peers remains part of that restart and is respawned with the
+group.
+
 `TaskRef::wait` skips exits followed by the task's restart policy and returns
 the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several
 jobs must finish, then request the enclosing scope's shutdown explicitly.

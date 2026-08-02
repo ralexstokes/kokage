@@ -707,19 +707,41 @@ fn an_outline_rejects_retired_scope_default_keys() {
 #[cfg(feature = "serde")]
 #[test]
 fn an_outline_rejects_the_retired_terminal_membership_key() {
-    let (mut graph, _ingest, _parse) = two_actor_tree();
-    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
-    let outline = serde_json::to_value(graph.outline()).expect("outline serializes");
-
-    for variant in ["Actor", "Task"] {
-        let mut retired = outline.clone();
-        let fields = retired["children"]
+    fn nested_child_fields<'a>(
+        outline: &'a mut serde_json::Value,
+        variant: &str,
+    ) -> &'a mut serde_json::Map<String, serde_json::Value> {
+        outline["children"]
             .as_array_mut()
             .expect("children serialize as an array")
             .iter_mut()
+            .find_map(|child| child.get_mut("Scope"))
+            .and_then(|scope| scope.get_mut("outline"))
+            .and_then(|outline| outline.get_mut("children"))
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("nested scope serializes its children")
+            .iter_mut()
             .find_map(|child| child.get_mut(variant))
             .and_then(serde_json::Value::as_object_mut)
-            .unwrap_or_else(|| panic!("outline contains a {variant} child"));
+            .unwrap_or_else(|| panic!("nested outline contains a {variant} child"))
+    }
+
+    let (mut workers, _ingest, _parse) = two_actor_tree();
+    workers
+        .add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_on_terminal_exit());
+    let mut graph = Tree::new();
+    graph.add_subtree("workers", workers);
+    let outline = serde_json::to_value(graph.outline()).expect("outline serializes");
+
+    for variant in ["Actor", "Task"] {
+        let mut extended = outline.clone();
+        nested_child_fields(&mut extended, variant)
+            .insert("future_observation".to_owned(), serde_json::json!(true));
+        serde_json::from_value::<kokage::observe::SupervisionOutline>(extended)
+            .unwrap_or_else(|error| panic!("future {variant} fields remain compatible: {error}"));
+
+        let mut retired = outline.clone();
+        let fields = nested_child_fields(&mut retired, variant);
         let policy = fields
             .remove("remove_on_terminal_exit")
             .expect("current terminal membership key is serialized");
@@ -728,7 +750,9 @@ fn an_outline_rejects_the_retired_terminal_membership_key() {
         let error = serde_json::from_value::<kokage::observe::SupervisionOutline>(retired)
             .expect_err("retired terminal membership key must not deserialize");
         assert!(
-            error.to_string().contains("unknown field"),
+            error
+                .to_string()
+                .contains("missing field `remove_on_terminal_exit`"),
             "unexpected error for {variant}: {error}"
         );
     }

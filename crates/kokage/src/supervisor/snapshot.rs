@@ -177,7 +177,6 @@ pub struct SupervisorSnapshot {
 /// Point-in-time snapshot of a single child.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[non_exhaustive]
 pub struct ChildSnapshot {
     /// The child's unique identifier.
@@ -197,7 +196,6 @@ pub struct ChildSnapshot {
     #[cfg_attr(feature = "serde", serde(default))]
     pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub remove_on_terminal_exit: bool,
     /// Time remaining until the next scheduled restart, if a backoff delay is
     /// pending.
@@ -663,13 +661,23 @@ mod tests {
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
         assert!(decoded.remove_on_terminal_exit);
 
+        let mut extended = value.clone();
+        extended
+            .as_object_mut()
+            .expect("child snapshot serializes as an object")
+            .insert("future_observation".to_owned(), serde_json::json!(true));
+        serde_json::from_value::<ChildSnapshot>(extended)
+            .expect("future child snapshot fields remain forward compatible");
+
         let retired = value
             .to_string()
             .replacen("remove_on_terminal_exit", "remove_when_done", 1);
         let error = serde_json::from_str::<ChildSnapshot>(&retired)
             .expect_err("retired terminal membership key must not deserialize");
         assert!(
-            error.to_string().contains("unknown field"),
+            error
+                .to_string()
+                .contains("missing field `remove_on_terminal_exit`"),
             "unexpected error: {error}"
         );
     }

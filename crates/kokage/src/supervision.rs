@@ -1169,7 +1169,6 @@ pub struct SupervisionOutline {
 /// One payload-free child declaration.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.
@@ -1184,7 +1183,6 @@ pub enum ChildOutline {
         #[serde(default)]
         mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
         remove_on_terminal_exit: bool,
     },
     /// An arbitrary task child.
@@ -1196,7 +1194,6 @@ pub enum ChildOutline {
         /// Shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
         remove_on_terminal_exit: bool,
     },
     /// A nested ordered or dynamic scope.
