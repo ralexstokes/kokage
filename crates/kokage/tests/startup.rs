@@ -658,6 +658,50 @@ async fn raw_manual_readiness_timeout_restarts_then_accepts_mark_ready() {
     handle.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+#[cfg(feature = "host")]
+async fn ordinary_task_propagating_actor_timeout_remains_an_ordinary_failure() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut tree = Tree::new();
+    let task = tree.add_task_spec(
+        TaskSpec::new("host-wrapper", {
+            let attempts = Arc::clone(&attempts);
+            move |ctx| {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    ctx.mark_ready();
+                    ActorSpec::new("NestedHost", move || BoundedRawReadiness {
+                        attempts: Arc::clone(&attempts),
+                    })
+                    .into_host()
+                    .run_once(std::future::pending::<()>(), Shutdown::abort())
+                    .await?;
+                    Ok(())
+                }
+            }
+        })
+        .manual_readiness(Duration::from_secs(1))
+        .restart(RestartPolicy::never()),
+    );
+
+    let running = tree.spawn().unwrap();
+    task.wait_started()
+        .await
+        .expect("the wrapper task reports its own readiness");
+    let exit = task
+        .wait()
+        .await
+        .expect("the wrapper task exit is retained");
+
+    assert_eq!(exit.readiness_timeout(), None);
+    assert!(matches!(
+        exit,
+        ExitStatus::Failed { message, cancelled: false }
+            if message.contains("actor `NestedHost` did not report readiness")
+    ));
+    running.shutdown().await.unwrap();
+}
+
 struct SlowShutdownRawReadiness {
     started: mpsc::UnboundedSender<()>,
 }

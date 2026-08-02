@@ -524,7 +524,7 @@ async fn child_observation_pump_forwards_resets_and_post_reset_transitions() {
 }
 
 #[tokio::test]
-async fn child_observation_pump_resets_a_restarted_target_incarnation() {
+async fn child_observation_pump_resets_a_restarted_target_while_source_is_quiet() {
     let running_tree = DynamicTree::new().spawn().expect("runtime builds");
     let root = support::dynamic_root(&running_tree);
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
@@ -539,34 +539,52 @@ async fn child_observation_pump_resets_a_restarted_target_incarnation() {
         )
         .await
         .expect("observation sink added");
+    let watched = root
+        .add_subtree("watched", DynamicTree::new())
+        .await
+        .expect("quiet observed scope added");
+    let watched_dynamic = watched.dynamic().expect("observed scope is dynamic");
     running_tree
         .scope()
         .wait_started()
         .await
-        .expect("observation sink starts");
-    let guard = running_tree
-        .scope()
+        .expect("observation sink and observed scope start");
+    let guard = watched
         .observe_children()
         .events
         .forward_to(&sink, ObservationSinkMsg::Update);
 
-    let before_restart = root
-        .add_task("before-target-restart", |ctx| async move {
+    let before_restart = watched_dynamic
+        .add_task("quiet-child", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         })
         .await
-        .expect("pre-restart task added");
-    let (generation, initial) = timeout(Duration::from_secs(2), observed_rx.recv())
-        .await
-        .expect("initial transition is forwarded")
-        .expect("observation receiver remains live");
-    assert_eq!(generation, 0);
-    assert!(matches!(
-        initial,
-        ChildObservationUpdate::Transition(ref child)
-            if child.child_id == "before-target-restart"
-    ));
+        .expect("quiet child added");
+    timeout(
+        Duration::from_secs(2),
+        watched
+            .snapshots()
+            .wait_for_child("quiet-child", |child| child.state.is_running()),
+    )
+    .await
+    .expect("quiet child reaches running")
+    .expect("observed scope remains live");
+    let quiet_sequence = watched.snapshot().lifecycle_seq;
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let (generation, update) = observed_rx.recv().await.expect("observer remains live");
+            assert_eq!(generation, 0);
+            let ChildObservationUpdate::Transition(child) = update else {
+                panic!("the initial target incarnation must not receive a spurious reset");
+            };
+            if child.seq == quiet_sequence {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("all observed-scope transitions drain before target restart");
 
     sink.send(ObservationSinkMsg::Crash)
         .await
@@ -588,11 +606,12 @@ async fn child_observation_pump_resets_a_restarted_target_incarnation() {
     .expect("fresh target incarnation receives a reset");
     assert!(
         reset
-            .child("observation-sink")
-            .is_some_and(|child| child.generation == 1)
+            .child("quiet-child")
+            .is_some_and(|child| child.state.is_running())
     );
+    assert_eq!(reset.lifecycle_seq, quiet_sequence);
 
-    let after_restart = root
+    let after_restart = watched_dynamic
         .add_task("after-target-restart", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -616,10 +635,12 @@ async fn child_observation_pump_resets_a_restarted_target_incarnation() {
     .await
     .expect("post-reset transition reaches fresh target incarnation");
 
-    root.remove(&before_restart)
+    watched_dynamic
+        .remove(&before_restart)
         .await
         .expect("pre-restart task removed");
-    root.remove(&after_restart)
+    watched_dynamic
+        .remove(&after_restart)
         .await
         .expect("post-restart task removed");
     guard.cancel();
