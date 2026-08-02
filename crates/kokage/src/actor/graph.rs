@@ -653,7 +653,7 @@ impl RunnableActor {
     }
 
     /// Returns the actor label.
-    pub fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         &self.inner.actor_id
     }
 

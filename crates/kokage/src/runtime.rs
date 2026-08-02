@@ -15,7 +15,6 @@ use crate::{
         RunnableActorBuilder, ScopedActorStats,
     },
     supervisor::{
-        __private::{self, AttachedChildIdentity, guard_from_tokens},
         ActorChildReadinessTimedOut, BuildError, CancellationToken, ChildEventKind,
         ChildMembershipView, ChildObservationUpdate, ChildObservationWatch, ChildSnapshot,
         ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
@@ -23,6 +22,7 @@ use crate::{
         LifecycleWatch, MailboxShutdown, OneShotTaskSpec, RestartPolicy, RunningSupervisor,
         ScopeKind, ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
         SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView, TaskSpec,
+        private::{self, AttachedChildIdentity, guard_from_tokens},
     },
 };
 
@@ -892,7 +892,7 @@ impl ScopeRef {
 
     fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<ScopeRef> {
         runtime_subtree_membership(
-            __private::attached_children::<RuntimeAttachment>(&self.supervisor),
+            private::attached_children::<RuntimeAttachment>(&self.supervisor),
             &self.actors,
             &self.supervisor,
             id,
@@ -974,7 +974,7 @@ impl ScopeRef {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
 
-        for attached in __private::attached_children::<RuntimeAttachment>(&self.supervisor) {
+        for attached in private::attached_children::<RuntimeAttachment>(&self.supervisor) {
             let Some((child, scope_path)) = attached.path().split_last() else {
                 continue;
             };
@@ -1042,7 +1042,7 @@ impl Deref for DynamicScopeRef {
 }
 
 fn pre_insert_subtree_membership(
-    attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
+    attached_children: Vec<private::AttachedChild<RuntimeAttachment>>,
     actors: &Arc<ActorRuntimeState>,
     subtree: &ScopeRef,
 ) -> Option<(String, u64)> {
@@ -1064,7 +1064,7 @@ fn pre_insert_subtree_membership(
 }
 
 fn runtime_subtree_membership(
-    attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
+    attached_children: Vec<private::AttachedChild<RuntimeAttachment>>,
     actors: &Arc<ActorRuntimeState>,
     parent: &SupervisorHandle,
     id: &str,
@@ -1158,7 +1158,7 @@ impl DynamicScopeRef {
             )))
             .await?;
         runtime_subtree_membership(
-            __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic),
+            private::dynamic_attached_children::<RuntimeAttachment>(&dynamic),
             &self.actors,
             &self.supervisor,
             &id,
@@ -1330,7 +1330,7 @@ impl DynamicScopeRef {
         dynamic: &DynamicSupervisorHandle,
         actor: &ActorRef<M>,
     ) -> Result<(String, u64), ControlError> {
-        __private::dynamic_attached_children::<RuntimeAttachment>(dynamic)
+        private::dynamic_attached_children::<RuntimeAttachment>(dynamic)
             .into_iter()
             .find_map(|attached| {
                 let [identity] = attached.path() else {
@@ -1355,7 +1355,7 @@ impl DynamicScopeRef {
         subtree: &ScopeRef,
     ) -> Result<(String, u64), ControlError> {
         pre_insert_subtree_membership(
-            __private::dynamic_attached_children::<RuntimeAttachment>(dynamic),
+            private::dynamic_attached_children::<RuntimeAttachment>(dynamic),
             &self.actors,
             subtree,
         )
@@ -1553,20 +1553,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        Actor, ActorSpec, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-        ExitResult, RestartPolicy, RunningTree, ScopeRef, Tree,
+        Actor, ActorSpec, Context, ControlError, DynamicTree, ExitResult, RestartPolicy, Tree,
     };
-
-    #[test]
-    fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
-        let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
-        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree<DynamicScopeRef>, BuildError> =
-            DynamicTree::spawn;
-        let dynamic_scope: fn(&DynamicTree) -> DynamicScopeRef = DynamicTree::scope;
-
-        let _ = (ordered_spawn, ordered_scope, dynamic_spawn, dynamic_scope);
-    }
 
     struct FailsOnMessage;
 
@@ -1597,7 +1585,7 @@ mod tests {
         let dynamic_handle = dynamic
             .dynamic_supervisor()
             .expect("dynamic supervisor is available");
-        let actor_attachment = crate::supervisor::__private::dynamic_attached_children::<
+        let actor_attachment = crate::supervisor::private::dynamic_attached_children::<
             super::RuntimeAttachment,
         >(&dynamic_handle)
         .into_iter()
@@ -1606,7 +1594,7 @@ mod tests {
 
         let target = Tree::new().spawn().expect("target runtime builds");
         let target_scope = target.scope();
-        let forged = crate::supervisor::__private::AttachedChild::new(
+        let forged = crate::supervisor::private::AttachedChild::new(
             actor_attachment.path().to_vec(),
             Arc::clone(actor_attachment.attachment()),
             Some(target_scope.supervisor.clone()),

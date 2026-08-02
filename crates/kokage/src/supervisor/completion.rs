@@ -20,7 +20,7 @@ use crate::supervisor::{
 /// Error returned when a direct-child completion condition cannot be satisfied.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
-pub enum CompletionError {
+pub(crate) enum CompletionError {
     /// Future-member mode was requested for an ordered scope.
     #[error("scope has ordered membership")]
     NotDynamic,

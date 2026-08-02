@@ -854,7 +854,8 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
                     starts: Arc::clone(&starts),
                 }
             })
-            .temporary(),
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
         )
         .await
         .expect("explicit actor added");
@@ -916,32 +917,33 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
 }
 
 #[tokio::test]
-async fn temporary_actor_auto_removes_after_failure() {
+async fn non_restarting_actor_auto_removes_after_failure() {
     let running_tree = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
     let release = Arc::new(Notify::new());
     let target = support::dynamic_root(&running_tree)
         .add_actor_spec(
-            ActorSpec::new("temporary", {
+            ActorSpec::new("finite", {
                 let release = release.clone();
                 move || GatedExit {
                     release: release.clone(),
                     fail: true,
                 }
             })
-            .temporary(),
+            .restart(RestartPolicy::never())
+            .remove_on_terminal_exit(),
         )
         .await
-        .expect("temporary actor added");
+        .expect("finite actor added");
 
     release.notify_one();
-    wait_for_child(&running_tree.scope(), "temporary", false).await;
+    wait_for_child(&running_tree.scope(), "finite", false).await;
     assert!(matches!(
         target.send(()).await,
-        Err(SendError { actor_id, .. }) if actor_id == "temporary"
+        Err(SendError { actor_id, .. }) if actor_id == "finite"
     ));
-    shutdown_running_tree(running_tree, "temporary-actor removal test shutdown").await;
+    shutdown_running_tree(running_tree, "finite-actor removal test shutdown").await;
 }
 
 #[tokio::test]

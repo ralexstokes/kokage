@@ -1157,13 +1157,10 @@ pub struct SupervisionOutline {
     /// Restart strategy.
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
-    #[serde(default)]
     pub default_child_restart: RestartPolicy,
     /// Shutdown policy inherited by children without an explicit override.
-    #[serde(default)]
     pub default_child_shutdown: Shutdown,
     /// Mailbox shutdown policy inherited by actors without an explicit override.
-    #[serde(default)]
     pub default_actor_mailbox_shutdown: MailboxShutdown,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
@@ -1172,6 +1169,7 @@ pub struct SupervisionOutline {
 /// One payload-free child declaration.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.
@@ -1183,7 +1181,6 @@ pub enum ChildOutline {
         /// Resolved shutdown policy.
         shutdown: Shutdown,
         /// Resolved actor mailbox shutdown policy.
-        #[serde(default)]
         mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
         remove_on_terminal_exit: bool,
@@ -1204,10 +1201,8 @@ pub enum ChildOutline {
         /// Scope child id.
         id: String,
         /// Resolved policy used by the parent to restart this scope.
-        #[serde(default)]
         restart: RestartPolicy,
         /// Resolved policy used by the parent to stop this scope.
-        #[serde(default)]
         shutdown: Shutdown,
         /// Nested declaration.
         outline: SupervisionOutline,

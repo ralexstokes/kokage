@@ -21,41 +21,36 @@ mod shutdown;
 mod snapshot;
 mod strategy;
 
-/// Internal bridge used by the actor-aware tree layer to attach process-local
-/// metadata without exposing attachment machinery as public API.
-#[doc(hidden)]
-pub mod __private {
+pub(crate) mod private {
     use std::any::Any;
 
-    pub use crate::supervisor::attachment::{AttachedChild, AttachedChildIdentity};
+    pub(crate) use crate::supervisor::attachment::{AttachedChild, AttachedChildIdentity};
     use crate::supervisor::{CancellationToken, DynamicSupervisorHandle, Guard, SupervisorHandle};
 
-    /// Returns process-local metadata from the current supervision tree.
-    pub fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
+    pub(crate) fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,
     {
         handle.attached_children()
     }
 
-    /// Returns process-local metadata from a dynamic supervision tree.
-    pub fn dynamic_attached_children<T>(handle: &DynamicSupervisorHandle) -> Vec<AttachedChild<T>>
+    pub(crate) fn dynamic_attached_children<T>(
+        handle: &DynamicSupervisorHandle,
+    ) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,
     {
         handle.attached_children()
     }
 
-    /// Builds a guard around cancellation and completion tokens for the actor layer.
-    pub fn guard_from_tokens(
+    pub(crate) fn guard_from_tokens(
         cancellation: CancellationToken,
         finished: CancellationToken,
     ) -> Guard {
         Guard::from_tokens(cancellation, finished)
     }
 
-    /// Builds a token-backed guard with a custom cancellation hook.
-    pub fn guard_from_tokens_with_cancel(
+    pub(crate) fn guard_from_tokens_with_cancel(
         cancellation: CancellationToken,
         finished: CancellationToken,
         cancel_action: impl Fn() + Send + Sync + 'static,
@@ -64,22 +59,22 @@ pub mod __private {
     }
 }
 
-pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub(crate) use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
 pub use child::{BoxError, OneShotTaskSpec, TaskSpec};
 #[cfg(test)]
-pub use completion::CompletionError;
+pub(crate) use completion::CompletionError;
 pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
-pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
+pub(crate) use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{
     ChildEvent, ChildEventKind, ChildObservationUpdate, ChildObservationWatch, LifecycleEvent,
     LifecycleEventKind, LifecycleObservation, LifecycleWatch,
 };
-pub use owner::{RunningSupervisor, Supervisor};
+pub(crate) use owner::{RunningSupervisor, Supervisor};
 pub use restart::{Backoff, RestartPolicy};
 pub(crate) use runtime::exit::ActorChildReadinessTimedOut;
 pub use scope::{ScopeKind, ScopePathSegment};
@@ -90,8 +85,7 @@ pub use snapshot::{
 };
 pub use strategy::Strategy;
 
-// Keep the former standalone crate's behavioral suite next to the private
-// implementation. These are unit tests now so they can exercise the low-level
-// runtime without restoring that layer to the public API.
+// Keep the low-level runtime's behavioral suite next to its private
+// implementation so unit tests can exercise its internal contracts directly.
 #[cfg(test)]
 mod tests;

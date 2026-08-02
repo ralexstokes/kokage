@@ -1508,7 +1508,7 @@ pub(crate) enum SupervisorCommand {
 /// [`wait`](Self::wait) does not resolve until the supervisor has drained and
 /// joined its child tasks.
 #[derive(Clone)]
-pub struct SupervisorHandle {
+pub(crate) struct SupervisorHandle {
     channels: Arc<StableSupervisorChannels>,
 }
 
@@ -1562,14 +1562,14 @@ impl SupervisorHandle {
     /// [`shutdown_and_wait`](Self::shutdown_and_wait) to await completion.
     ///
     /// Calling `shutdown` multiple times is harmless.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         if let Some(binding) = self.channels.current_binding() {
             let _ = binding.shutdown_tx.send(true);
         }
     }
 
     /// Requests a graceful shutdown and waits for the supervisor to fully stop.
-    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+    pub(crate) async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.shutdown();
         self.wait().await
     }
@@ -1577,7 +1577,7 @@ impl SupervisorHandle {
     /// Returns this handle's dynamic-membership capability.
     ///
     /// Ordered supervisors have immutable membership and return `None`.
-    pub fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
+    pub(crate) fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
         (self.kind() == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
             handle: self.clone(),
         })
@@ -1590,7 +1590,7 @@ impl SupervisorHandle {
     // The private runtime suite uses this to inspect restart-stable nested
     // identities without restoring nested-handle lookup to the public API.
     #[cfg(test)]
-    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
+    pub(crate) fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
         self.nested_channels()
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1621,7 +1621,7 @@ impl DynamicSupervisorHandle {
     /// scheduled. This operation is supported only by dynamic supervisors,
     /// which spawn it immediately. [`SupervisorHandle::wait_started`] is
     /// available when readiness is required.
-    pub async fn add_child(&self, child: TaskSpec) -> Result<u64, ControlError> {
+    pub(crate) async fn add_child(&self, child: TaskSpec) -> Result<u64, ControlError> {
         self.add_child_spec(child.into_spec()).await
     }
 
@@ -1649,7 +1649,7 @@ impl DynamicSupervisorHandle {
     /// The child is stopped according to its [`Shutdown`](crate::supervisor::Shutdown)
     /// before being removed. Removing the last child is valid; the supervisor
     /// continues idling until shutdown or until another child is added.
-    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
+    pub(crate) async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.handle
             .control_endpoint()?
             .remove_child(id.into(), None)
@@ -1737,7 +1737,7 @@ impl SupervisorHandle {
     /// follow parent-driven reincarnations and resolve only once that identity
     /// cannot be restarted again. A successful return means the final runtime
     /// incarnation has finished draining and joining supervised child tasks.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    pub(crate) async fn wait(&self) -> Result<(), SupervisorError> {
         let mut binding_revision = self.channels.binding_revision_rx();
         let (mut done_rx, join) = loop {
             match self.channels.root_extra() {
@@ -1843,7 +1843,7 @@ impl SupervisorHandle {
     /// terminal exit before readiness, including a manual-readiness timeout
     /// that its restart policy does not replace, or the supervisor stops before
     /// readiness is reported.
-    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
+    pub(crate) async fn wait_started(&self) -> Result<(), SupervisorError> {
         let mut snapshots = self.snapshots_rx();
         let mut binding_revision = self.channels.binding_revision_rx();
         loop {
@@ -1917,7 +1917,7 @@ impl SupervisorHandle {
     /// each scope, so the stream is intentionally restricted to this scope.
     /// Use [`subscribe_lifecycle`](Self::subscribe_lifecycle) for the
     /// lower-level recursive history stream and custom recovery policy.
-    pub fn observe_children(&self) -> crate::supervisor::LifecycleObservation {
+    pub(crate) fn observe_children(&self) -> crate::supervisor::LifecycleObservation {
         let snapshots = self.subscribe_snapshots();
         let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());
         let events = events.direct_children();
@@ -1943,18 +1943,18 @@ impl SupervisorHandle {
     /// buffer for the whole tree; sustained overflow is a tree-wide
     /// [`LifecycleEventKind::Lagged`](crate::supervisor::LifecycleEventKind::Lagged)
     /// marker with an empty path.
-    pub fn subscribe_lifecycle(&self) -> LifecycleWatch {
+    pub(crate) fn subscribe_lifecycle(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch()
     }
 
     /// Returns a clone of the latest [`SupervisorSnapshot`].
-    pub fn snapshot(&self) -> SupervisorSnapshot {
+    pub(crate) fn snapshot(&self) -> SupervisorSnapshot {
         self.snapshots_rx().borrow().clone()
     }
 
     /// Returns a watch receiver that is updated each time the supervisor's
     /// snapshot changes. Useful for polling or `wait_for`-style patterns.
-    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+    pub(crate) fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
         SupervisorSnapshotReceiver::new(self.snapshots_rx())
     }
 

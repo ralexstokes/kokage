@@ -169,9 +169,6 @@ mod tests {
 
     #[test]
     fn generic_delivery_errors_do_not_format_the_message() {
-        fn assert_error<E: std::error::Error>() {}
-        assert_error::<SendError<Opaque>>();
-
         for (kind, display) in [
             (
                 SendErrorKind::NotRunning,

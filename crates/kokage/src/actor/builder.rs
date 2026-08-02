@@ -112,7 +112,7 @@ impl<M> fmt::Debug for ActorOptions<M> {
 
 impl<M> ActorOptions<M> {
     /// Creates options using a FIFO queue without message-size observation.
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             mailbox: Mailbox::inherited_queue(),
             size_hint: None,
@@ -127,7 +127,7 @@ impl<M> ActorOptions<M> {
     }
 
     /// Configures the actor's mailbox storage and capacity.
-    pub fn mailbox(mut self, mailbox: Mailbox<M>) -> Self {
+    fn mailbox(mut self, mailbox: Mailbox<M>) -> Self {
         self.mailbox = mailbox;
         self
     }
@@ -141,7 +141,7 @@ impl<M> ActorOptions<M> {
     /// parameter type is explicit, for example
     /// `.message_size(|message: &Snapshot| message.0.len())`; closures that
     /// capture state are not accepted.
-    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+    fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
         self.size_hint = Some(size_hint);
         self
     }
@@ -233,14 +233,6 @@ impl<M: Send + 'static> ActorSpec<M> {
     #[must_use]
     pub fn mailbox_shutdown(mut self, policy: MailboxShutdown) -> Self {
         self.mailbox_shutdown = Some(policy);
-        self
-    }
-
-    /// Marks finite dynamic work as non-restarting and removable on terminal exit.
-    #[must_use]
-    pub fn temporary(mut self) -> Self {
-        self.restart = Some(RestartPolicy::never());
-        self.remove_on_terminal_exit = true;
         self
     }
 
@@ -560,14 +552,6 @@ mod tests {
         );
         assert_eq!(spec.mailbox_shutdown, Some(MailboxShutdown::Discard));
         assert!(!spec.remove_on_terminal_exit);
-    }
-
-    #[test]
-    fn temporary_is_never_restarting_and_removable() {
-        let spec = ActorSpec::new("temporary", || OpaqueActor).temporary();
-
-        assert_eq!(spec.restart, Some(RestartPolicy::never()));
-        assert!(spec.remove_on_terminal_exit);
     }
 
     #[test]

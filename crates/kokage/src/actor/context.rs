@@ -10,8 +10,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    __private::{guard_from_tokens, guard_from_tokens_with_cancel},
     CancelOnDrop, CancellationToken, CompletionOnDrop, Guard,
+    private::{guard_from_tokens, guard_from_tokens_with_cancel},
 };
 use tokio::{
     sync::{oneshot, watch},

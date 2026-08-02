@@ -130,7 +130,6 @@ pub struct SupervisorSnapshot {
     /// Current lifecycle state of the supervisor.
     pub state: SupervisorStateView,
     /// The supervisor's immutable membership and ordering model.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub kind: ScopeKind,
     /// The restart strategy in use.
     pub strategy: Strategy,
@@ -156,7 +155,6 @@ pub struct SupervisorSnapshot {
     ///
     /// The counter only covers direct children. Restarts inside a nested
     /// supervisor are visible on that nested snapshot's own `total_restarts`.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub total_restarts: u64,
     /// Sequence of the last lifecycle event emitted when this snapshot was
     /// published.
@@ -168,7 +166,6 @@ pub struct SupervisorSnapshot {
     /// A pre-spawn snapshot projects statically configured children before
     /// their first `Added` transition; reducers should apply `Added` as an
     /// idempotent membership upsert.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub lifecycle_seq: u64,
     /// Ordered list of child snapshots, matching the supervisor's child order.
     pub children: Vec<ChildSnapshot>,
@@ -193,7 +190,6 @@ pub struct ChildSnapshot {
     /// Total number of times this child has been restarted.
     pub restart_count: u64,
     /// Policy that determines whether the current exit is eligible to restart.
-    #[cfg_attr(feature = "serde", serde(default))]
     pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
     pub remove_on_terminal_exit: bool,
@@ -663,7 +659,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn remove_on_terminal_exit_is_required_while_unknown_fields_are_tolerated() {
+    fn remove_on_terminal_exit_is_required() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut snapshot = ChildSnapshot::new(
@@ -680,28 +676,14 @@ mod tests {
             serde_json::from_value(value.clone()).expect("child snapshot deserializes");
         assert!(decoded.remove_on_terminal_exit);
 
-        let mut extended = value.clone();
-        extended
+        let mut missing_membership_policy = value;
+        missing_membership_policy
             .as_object_mut()
             .expect("child snapshot serializes as an object")
-            .insert("future_observation".to_owned(), serde_json::json!(true));
-        serde_json::from_value::<ChildSnapshot>(extended)
-            .expect("future child snapshot fields remain forward compatible");
-
-        let mut dual_key = value.clone();
-        dual_key
-            .as_object_mut()
-            .expect("child snapshot serializes as an object")
-            .insert("remove_when_done".to_owned(), serde_json::json!(false));
-        let decoded: ChildSnapshot = serde_json::from_value(dual_key)
-            .expect("unknown retired key is tolerated when the current key is present");
-        assert!(decoded.remove_on_terminal_exit);
-
-        let old_only = value
-            .to_string()
-            .replacen("remove_on_terminal_exit", "remove_when_done", 1);
-        let error = serde_json::from_str::<ChildSnapshot>(&old_only)
-            .expect_err("an old-only payload must lack the required current key");
+            .remove("remove_on_terminal_exit")
+            .expect("current terminal membership key is serialized");
+        let error = serde_json::from_value::<ChildSnapshot>(missing_membership_policy)
+            .expect_err("terminal membership policy must be present");
         assert!(
             error
                 .to_string()

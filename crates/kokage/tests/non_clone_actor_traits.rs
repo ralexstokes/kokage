@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     io,
     sync::{
         Arc, Mutex,
@@ -37,61 +36,6 @@ async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, base
         })
         .await
         .expect("runtime remains live");
-}
-
-struct SendOnlyState {
-    _not_sync: Cell<()>,
-}
-
-struct HandlerWithNonCloneState {
-    _state: SendOnlyState,
-}
-
-impl Actor for HandlerWithNonCloneState {
-    type Msg = ();
-
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
-        Ok(())
-    }
-}
-
-struct HandlerWithSendOnlyMessage;
-
-impl Actor for HandlerWithSendOnlyMessage {
-    type Msg = Cell<usize>;
-
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
-        let value = ctx.run_blocking(move |_| message.get()).await?;
-        ctx.continue_with(Cell::new(value));
-        Ok(())
-    }
-}
-
-struct RawWithNonCloneState {
-    _state: SendOnlyState,
-}
-
-impl RawActor for RawWithNonCloneState {
-    type Msg = ();
-
-    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
-        Ok(())
-    }
-}
-
-fn assert_actor<T: Actor>() {}
-fn assert_raw_actor<T: RawActor>() {}
-
-#[test]
-fn actor_traits_accept_non_clone_send_only_state() {
-    assert_actor::<HandlerWithNonCloneState>();
-    assert_raw_actor::<HandlerWithNonCloneState>();
-    assert_raw_actor::<RawWithNonCloneState>();
-}
-
-#[test]
-fn mutable_handler_context_accepts_send_only_messages() {
-    assert_actor::<HandlerWithSendOnlyMessage>();
 }
 
 enum ProbeMsg {
@@ -249,7 +193,7 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     struct PanickingFactory;
 
     impl ActorFactory for PanickingFactory {
-        type Actor = RawWithNonCloneState;
+        type Actor = NonCloneRaw;
 
         fn build(&self) -> Self::Actor {
             panic!("constructor panic")

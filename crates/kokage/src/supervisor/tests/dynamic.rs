@@ -390,11 +390,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
     fail_trigger.notify_one();
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            ObservedEvent::ChildRestarted {
-                id,
-                new_generation: 1,
-                ..
-            } if id == "trigger" => break,
+            ObservedEvent::ChildStarted { id, generation: 1 } if id == "trigger" => break,
             _ => {}
         }
     }
@@ -1382,7 +1378,9 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
             ObservedEvent::ChildStarted { id, .. } if id == "replacement" => {
                 saw_replacement_start = true;
             }
-            ObservedEvent::ChildRestarted { id, .. } if id == "removable" => {
+            ObservedEvent::ChildStarted { id, generation }
+                if id == "removable" && generation > 0 =>
+            {
                 panic!("restart interleaved before the full queued command batch");
             }
             _ => {}

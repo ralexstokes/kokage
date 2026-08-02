@@ -18,7 +18,7 @@ use crate::supervisor::{
 ///
 /// An ordered supervisor may be built with zero declared children, but its
 /// membership remains immutable. Create one with [`Supervisor::ordered`].
-pub struct OrderedSupervisorBuilder {
+pub(crate) struct OrderedSupervisorBuilder {
     strategy: Strategy,
     default_child_restart: RestartPolicy,
     default_child_shutdown: Shutdown,
@@ -31,7 +31,7 @@ pub struct OrderedSupervisorBuilder {
 /// Dynamic supervisors start empty, use [`Strategy::OneForOne`], and start
 /// and stop children concurrently. Children can be added and removed through
 /// the resulting supervisor's handle. Create one with [`Supervisor::dynamic`].
-pub struct DynamicSupervisorBuilder {
+pub(crate) struct DynamicSupervisorBuilder {
     default_child_restart: RestartPolicy,
     default_child_shutdown: Shutdown,
     channels: Option<Arc<StableSupervisorChannels>>,
@@ -75,24 +75,19 @@ impl OrderedSupervisorBuilder {
     }
 
     /// Returns the stable handle reserved for this scope.
-    pub fn handle(&self) -> SupervisorHandle {
+    pub(crate) fn handle(&self) -> SupervisorHandle {
         self.channels().handle()
     }
 
     /// Projects child ids, restart policies, and terminal-retention flags in
     /// this scope's pre-spawn snapshot.
-    ///
-    /// Not part of the public contract: this exists so `kokage` can project
-    /// the membership its own higher-level builders will lower to, and is
-    /// superseded by the real declaration once the scope is built.
-    #[doc(hidden)]
-    pub fn project_declared_children(&self, children: Vec<(String, RestartPolicy, bool)>) {
+    pub(crate) fn project_declared_children(&self, children: Vec<(String, RestartPolicy, bool)>) {
         self.channels().project_declared_children(children);
     }
 
     /// Sets the restart strategy. See [`Strategy`] for options.
     #[must_use]
-    pub fn strategy(mut self, strategy: Strategy) -> Self {
+    pub(crate) fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
         self.refresh_declaration();
         self
@@ -101,7 +96,7 @@ impl OrderedSupervisorBuilder {
     /// Sets the restart policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
-    pub fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+    pub(crate) fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
         self.default_child_restart = restart;
         self
     }
@@ -109,7 +104,7 @@ impl OrderedSupervisorBuilder {
     /// Sets the shutdown policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
-    pub fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+    pub(crate) fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
         self.default_child_shutdown = shutdown;
         self
     }
@@ -117,7 +112,7 @@ impl OrderedSupervisorBuilder {
     /// Appends a task child to the supervisor. Declaration order determines
     /// sequential startup and group-restart order.
     #[must_use]
-    pub fn child(self, task: TaskSpec) -> Self {
+    pub(crate) fn child(self, task: TaskSpec) -> Self {
         self.child_spec(task.into_spec())
     }
 
@@ -141,7 +136,7 @@ impl OrderedSupervisorBuilder {
     /// Returns [`BuildError`] if:
     /// - Two children share the same id.
     /// - Any restart intensity or backoff configuration is invalid.
-    pub fn build(mut self) -> Result<Supervisor, BuildError> {
+    pub(crate) fn build(mut self) -> Result<Supervisor, BuildError> {
         self.default_child_restart.validate()?;
         let mut ids = HashSet::new();
         for child in &self.children {
@@ -197,7 +192,7 @@ impl DynamicSupervisorBuilder {
     /// A dynamic scope declares no children, so nothing a mutator can change
     /// is visible in the pre-build view; the configuration is applied once, at
     /// [`build`](Self::build).
-    pub fn handle(&self) -> SupervisorHandle {
+    pub(crate) fn handle(&self) -> SupervisorHandle {
         self.channels
             .as_ref()
             .expect("live dynamic supervisor builder owns channels")
@@ -207,7 +202,7 @@ impl DynamicSupervisorBuilder {
     /// Sets the restart policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
-    pub fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
+    pub(crate) fn default_child_restart(mut self, restart: RestartPolicy) -> Self {
         self.default_child_restart = restart;
         self
     }
@@ -215,13 +210,13 @@ impl DynamicSupervisorBuilder {
     /// Sets the shutdown policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
-    pub fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
+    pub(crate) fn default_child_shutdown(mut self, shutdown: Shutdown) -> Self {
         self.default_child_shutdown = shutdown;
         self
     }
 
     /// Validates the configuration and returns an empty dynamic supervisor.
-    pub fn build(mut self) -> Result<Supervisor, BuildError> {
+    pub(crate) fn build(mut self) -> Result<Supervisor, BuildError> {
         self.default_child_restart.validate()?;
         let config = self.config();
         let channels = self
