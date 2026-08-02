@@ -10,7 +10,7 @@
 //! The executable is an assertion-driven acceptance script. It first rolls
 //! back a deliberately failed ordered startup, then embeds, detaches, and
 //! re-embeds the sidecar while the host remains alive. Shutdown proves both
-//! immediate abort and strict grace-expiry behavior.
+//! immediate abort and strict grace-bound escalation behavior.
 
 use std::{
     error::Error,
@@ -24,7 +24,7 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSpec, BoxError, Context, ExitResult, RestartPolicy, RunningTree,
     ScopeRef, Shutdown, StopContext, SubtreeSpec, SupervisorError, TaskContext, TaskSpec, Tree,
-    observe::ExitStatus,
+    observe::{ChildStateView, ExitStatus, SupervisorStateView},
 };
 
 const START_BOUND: Duration = Duration::from_secs(2);
@@ -56,25 +56,6 @@ impl Journal {
             .iter()
             .position(|candidate| candidate == event)
             .unwrap_or_else(|| panic!("missing `{event}` in journal: {:?}", self.events()))
-    }
-}
-
-#[derive(Clone, Default)]
-struct GraceObservations(Arc<Mutex<Vec<Duration>>>);
-
-impl GraceObservations {
-    fn push(&self, elapsed: Duration) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(elapsed);
-    }
-
-    fn values(&self) -> Vec<Duration> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
     }
 }
 
@@ -131,13 +112,12 @@ struct EmbeddedSidecar {
 #[tokio::main]
 async fn main() -> Result<(), AnyError> {
     let journal = Journal::default();
-    let grace = GraceObservations::default();
 
     journal.record("host:init");
     verify_failed_startup_rolls_back(journal.clone()).await?;
 
     journal.record("host:initialized");
-    let first = embed(1, journal.clone(), grace.clone()).await?;
+    let first = embed(1, journal.clone()).await?;
     journal.record("host:started");
     exercise(&first).await?;
     stop(first, &journal).await?;
@@ -145,12 +125,12 @@ async fn main() -> Result<(), AnyError> {
     journal.record("host:sidecar-detached");
     journal.record("host:foreground-work-without-sidecar");
 
-    let second = embed(2, journal.clone(), grace.clone()).await?;
+    let second = embed(2, journal.clone()).await?;
     journal.record("host:sidecar-re-embedded");
     exercise(&second).await?;
     stop(second, &journal).await?;
 
-    verify_host_ownership(&journal, &grace);
+    verify_host_ownership(&journal);
     journal.record("host:teardown");
     assert!(journal.position("2:sidecar:stopped") < journal.position("host:teardown"));
 
@@ -159,46 +139,119 @@ async fn main() -> Result<(), AnyError> {
 }
 
 async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), AnyError> {
-    let grace = GraceObservations::default();
-    let failed = assemble(0, journal.clone(), grace, true)?;
+    let failed = assemble(0, journal.clone(), true)?;
+    let failed_scope = failed.scope.clone();
 
-    let startup = tokio::time::timeout(START_BOUND, failed.scope.wait_started()).await?;
+    let startup = tokio::time::timeout(START_BOUND, failed_scope.wait_started()).await?;
     assert!(matches!(startup, Err(SupervisorError::StartupAborted(_))));
 
-    let snapshot = failed.scope.snapshot();
+    let start_order = [
+        event(0, "config-watcher:started"),
+        event(0, "cache-refresher:started"),
+        event(0, "rotator:started"),
+        event(0, "audit-actor:started"),
+        event(0, "health-prober:start-failed"),
+    ];
+    for adjacent in start_order.windows(2) {
+        assert!(
+            journal.position(&adjacent[0]) < journal.position(&adjacent[1]),
+            "ordered startup must hand readiness from `{}` to `{}`",
+            adjacent[0],
+            adjacent[1]
+        );
+    }
+
+    let terminal_prefix_events = [
+        event(0, "config-watcher:stopped"),
+        event(0, "cache-refresher:stopped"),
+        event(0, "rotator:aborted"),
+        event(0, "audit-actor:stopped"),
+    ];
+    let before_rollback = journal.events();
+    assert!(!before_rollback.contains(&event(0, "health-prober:started")));
+    assert!(
+        terminal_prefix_events
+            .iter()
+            .all(|terminal| !before_rollback.contains(terminal))
+    );
+
+    let snapshot = failed_scope.snapshot();
+    assert_eq!(snapshot.state, SupervisorStateView::Running);
+    for id in ["config-watcher", "cache-refresher", "log-rotator"] {
+        let child = snapshot.child(id).expect("started prefix remains visible");
+        assert!(
+            child.state.is_running(),
+            "`{id}` must remain running until the host requests rollback: {child:?}"
+        );
+    }
+    let actor_services = snapshot
+        .child("actor-services")
+        .expect("started actor subtree remains visible");
+    assert!(actor_services.state.is_running());
+    let actor_scope = failed_scope
+        .subtree("actor-services")
+        .expect("started actor subtree retains its stable scope handle");
+    let actors = actor_scope.snapshot();
+    assert_eq!(actors.state, SupervisorStateView::Running);
+    assert!(
+        actors
+            .child("audit")
+            .is_some_and(|audit| audit.state.is_running()),
+        "audit actor must remain running until explicit host rollback: {actors:?}"
+    );
+
     let failed_prober = snapshot
         .child("health-prober")
         .expect("failed prober remains observable");
     assert!(matches!(
-        failed_prober.state.last_exit(),
-        Some(ExitStatus::Failed { message, cancelled: false })
+        &failed_prober.state,
+        ChildStateView::StartupAborted {
+            exit: ExitStatus::Failed { message, cancelled: false },
+        }
             if message == "scripted health initialization failure"
     ));
 
+    let rollback_requested = event(0, "sidecar:rollback-requested");
+    journal.record(rollback_requested.clone());
     tokio::time::timeout(STOP_BOUND, failed.running.shutdown()).await??;
-    journal.record(event(0, "sidecar:rolled-back"));
+    let rolled_back = event(0, "sidecar:rolled-back");
+    journal.record(rolled_back.clone());
 
-    let events = journal.events();
-    assert!(events.contains(&event(0, "config-watcher:started")));
-    assert!(events.contains(&event(0, "cache-refresher:started")));
-    assert!(events.contains(&event(0, "audit-actor:started")));
-    assert!(events.contains(&event(0, "health-prober:start-failed")));
-    assert!(events.contains(&event(0, "config-watcher:stopped")));
-    assert!(events.contains(&event(0, "cache-refresher:stopped")));
-    assert!(events.contains(&event(0, "audit-actor:stopped")));
-    assert!(events.contains(&event(0, "rotator:aborted")));
+    for terminal in &terminal_prefix_events {
+        assert!(journal.position(&rollback_requested) < journal.position(terminal));
+        assert!(journal.position(terminal) < journal.position(&rolled_back));
+    }
+
+    let snapshot = failed_scope.snapshot();
+    assert_eq!(snapshot.state, SupervisorStateView::Stopped);
+    for id in [
+        "config-watcher",
+        "cache-refresher",
+        "log-rotator",
+        "actor-services",
+    ] {
+        let child = snapshot
+            .child(id)
+            .expect("rolled-back prefix remains visible");
+        assert!(
+            matches!(&child.state, ChildStateView::Stopped { started: true, .. }),
+            "`{id}` must become terminal during explicit host rollback: {child:?}"
+        );
+    }
+    let actors = actor_scope.snapshot();
+    assert_eq!(actors.state, SupervisorStateView::Stopped);
+    assert!(matches!(
+        actors.child("audit").map(|audit| &audit.state),
+        Some(ChildStateView::Stopped { started: true, .. })
+    ));
 
     println!("PHASE 0 OK — ordered startup failure rolled back every started sibling");
     Ok(())
 }
 
-async fn embed(
-    epoch: u8,
-    journal: Journal,
-    grace: GraceObservations,
-) -> Result<EmbeddedSidecar, AnyError> {
+async fn embed(epoch: u8, journal: Journal) -> Result<EmbeddedSidecar, AnyError> {
     journal.record(event(epoch, "sidecar:embedding"));
-    let sidecar = assemble(epoch, journal.clone(), grace, false)?;
+    let sidecar = assemble(epoch, journal.clone(), false)?;
     tokio::time::timeout(START_BOUND, sidecar.scope.wait_started()).await??;
     journal.record(event(epoch, "sidecar:started"));
 
@@ -239,7 +292,6 @@ async fn embed(
 fn assemble(
     epoch: u8,
     journal: Journal,
-    grace: GraceObservations,
     fail_startup: bool,
 ) -> Result<EmbeddedSidecar, kokage::BuildError> {
     let reports = Arc::new(AtomicUsize::new(0));
@@ -262,7 +314,7 @@ fn assemble(
         "actor-services",
         SubtreeSpec::from(actors).restart(RestartPolicy::never()),
     );
-    root.add_task_spec(prober(epoch, journal.clone(), grace, fail_startup));
+    root.add_task_spec(prober(epoch, journal.clone(), fail_startup));
 
     let running = root.spawn()?;
     let scope = running.scope();
@@ -310,10 +362,9 @@ fn rotator(epoch: u8, journal: Journal) -> TaskSpec {
     .manual_readiness(START_BOUND)
 }
 
-fn prober(epoch: u8, journal: Journal, grace: GraceObservations, fail_startup: bool) -> TaskSpec {
+fn prober(epoch: u8, journal: Journal, fail_startup: bool) -> TaskSpec {
     TaskSpec::new("health-prober", move |ctx: TaskContext| {
         let journal = journal.clone();
-        let grace = grace.clone();
         async move {
             if fail_startup {
                 journal.record(event(epoch, "health-prober:start-failed"));
@@ -325,10 +376,7 @@ fn prober(epoch: u8, journal: Journal, grace: GraceObservations, fail_startup: b
             ctx.shutdown_token().cancelled().await;
             journal.record(event(epoch, "health-prober:shutdown-requested"));
 
-            let grace_started = Instant::now();
             ctx.abort_token().cancelled().await;
-            let elapsed = grace_started.elapsed();
-            grace.push(elapsed);
             journal.record(event(epoch, "health-prober:grace-expired"));
             Ok(())
         }
@@ -352,11 +400,17 @@ async fn exercise(sidecar: &EmbeddedSidecar) -> Result<(), AnyError> {
 
 async fn stop(sidecar: EmbeddedSidecar, journal: &Journal) -> Result<(), AnyError> {
     let epoch = sidecar.epoch;
+    let shutdown_started = Instant::now();
     let shutdown = tokio::time::timeout(STOP_BOUND, sidecar.running.shutdown()).await?;
+    let shutdown_elapsed = shutdown_started.elapsed();
     assert!(matches!(
         shutdown,
         Err(SupervisorError::ShutdownTimedOut(ref child)) if child == "health-prober"
     ));
+    assert!(
+        shutdown_elapsed >= PROBER_GRACE,
+        "host-side shutdown must reach the stubborn prober's configured bound: {shutdown_elapsed:?}"
+    );
 
     let snapshot = sidecar.scope.snapshot();
     let prober_exit = snapshot
@@ -403,14 +457,7 @@ async fn stop(sidecar: EmbeddedSidecar, journal: &Journal) -> Result<(), AnyErro
     Ok(())
 }
 
-fn verify_host_ownership(journal: &Journal, grace: &GraceObservations) {
-    let observed = grace.values();
-    assert_eq!(observed.len(), 2);
-    assert!(
-        observed.iter().all(|elapsed| *elapsed >= PROBER_GRACE),
-        "strict cooperative shutdown must preserve each configured grace: {observed:?}"
-    );
-
+fn verify_host_ownership(journal: &Journal) {
     assert!(journal.position("host:init") < journal.position("0:config-watcher:started"));
     assert!(journal.position("0:sidecar:rolled-back") < journal.position("host:initialized"));
     assert!(journal.position("host:initialized") < journal.position("1:sidecar:started"));

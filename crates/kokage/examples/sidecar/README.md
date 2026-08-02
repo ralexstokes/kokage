@@ -16,12 +16,15 @@ sidecar (ordered)
 ```
 
 The script deliberately fails the last ordered child once and makes the host
-roll back the already-started prefix. It then completes two successful
-embed/run/stop cycles with ordinary host work between them. Assertions require
-the rotator's immediate `Shutdown::abort()` classification and the prober's
-full `Shutdown::graceful_for(...)` window, timeout error, and
-`after_grace: true` exit classification. Host teardown is asserted to occur
-only after the second sidecar has stopped.
+observe the declaration-ordered prefix still running before explicitly rolling
+it back. It then completes two successful embed/run/stop cycles with ordinary
+host work between them. Assertions require the rotator's immediate
+`Shutdown::abort()` classification and show, from the host's shutdown boundary,
+that the stubborn prober reaches its configured `Shutdown::graceful_for(...)`
+bound before the timeout error and `after_grace: true` exit classification.
+The prober's own events prove cancellation precedes escalation without treating
+its scheduler-dependent wake time as the start of the grace. Host teardown is
+asserted to occur only after the second sidecar has stopped.
 
 Run it with:
 
@@ -31,14 +34,18 @@ Run it with:
 
 ## API friction and improvement opportunities
 
-- The issue inventory used the draft names `SupervisorBuilder`, `ChildSpec`,
-  `ChildContext`, `ShutdownMode`, and `ShutdownPolicy`. The current public API
-  deliberately exposes supervision through `Tree`, `TaskSpec`, `TaskContext`,
-  and the combined `Shutdown` policy. The required task-only behavior is fully
-  available, but the actor-oriented `Tree` name makes standalone/task-first
-  discovery less obvious. A task-first guide or a discoverability alias could
-  make this embedding mode easier to find without reopening the private
-  supervisor implementation.
+- The issue inventory referred to a separately usable `kokage-supervisor`
+  package and the draft names `SupervisorBuilder`, `ChildSpec`, `ChildContext`,
+  `ShutdownMode`, and `ShutdownPolicy`. The current workspace instead exposes
+  task supervision through the public `kokage` facade as `Tree`, `TaskSpec`,
+  `TaskContext`, and the combined `Shutdown` policy. This example therefore
+  treats the package-level goal as evolved: it proves task-first behavior
+  through the supported facade, not a separately versioned or actor-free
+  dependency, because no such package currently exists. If a package split is
+  still desired, that remains uncovered. Within the current facade, the
+  actor-oriented `Tree` name also makes standalone/task-first discovery less
+  obvious; a task-first guide or discoverability alias could help without
+  reopening the private supervisor implementation.
 - A terminal ordered-startup failure is reported by `wait_started`, but the
   still-owned, partially started tree does not roll itself back. That is
   consistent with host ownership, and this example performs an explicit
