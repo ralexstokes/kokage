@@ -21,7 +21,7 @@ Every feature in this book has a runnable counterpart under
 - `blocking_work`, `blocking_lifecycle` — cooperative and detached blocking
   work.
 - `task_*` — the task-supervision family: strategies, nesting, dynamic
-  children, restart intensity, snapshots, lifecycle watches.
+  children, restart intensity, snapshots, lifecycle event streams.
 - `actor_metrics`, `actor_tracing`, `task_metrics`, `task_tracing`,
   `supervisor_snapshot_trace` — observability patterns ready to adapt.
 - `json_edge` — decoding a byte-oriented edge into typed messages.

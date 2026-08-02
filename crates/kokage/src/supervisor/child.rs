@@ -207,9 +207,12 @@ impl TaskSpec {
     /// policy applies. The sequence waits through a scheduled restart; if the
     /// exit is terminal, the task is marked startup-aborted and the sequence
     /// skips it. Missing the deadline is a startup failure governed by the
-    /// task's ordinary restart policy. Shutdown and control commands remain
-    /// responsive while a supervisor waits for readiness, so a task may await
-    /// a control operation before calling `mark_ready`.
+    /// task's ordinary restart policy. A shutdown request disarms the
+    /// readiness deadline so the task retains its configured cooperative
+    /// shutdown grace. If readiness and the deadline are both observable in
+    /// the same scheduler turn, readiness wins. Shutdown and control commands
+    /// remain responsive while a supervisor waits for readiness, so a task may
+    /// await a control operation before calling `mark_ready`.
     #[must_use]
     pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {
@@ -300,7 +303,10 @@ impl OneShotTaskSpec {
     ///
     /// The dynamic membership remains in its starting state until this signal.
     /// If the task exits or misses the deadline first, it is marked
-    /// startup-aborted and cannot restart.
+    /// startup-aborted and cannot restart. A shutdown request disarms the
+    /// readiness deadline so the task retains its configured cooperative
+    /// shutdown grace. If readiness and the deadline are both observable in
+    /// the same scheduler turn, readiness wins.
     #[must_use]
     pub fn manual_readiness(self, timeout: Duration) -> Self {
         Self {

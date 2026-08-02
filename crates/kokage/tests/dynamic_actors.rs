@@ -1267,18 +1267,25 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 }
 
 #[tokio::test]
-async fn runtime_added_actor_can_override_mailbox_capacity() {
+async fn runtime_added_actors_use_scope_default_and_explicit_mailbox_capacities() {
     let running_tree = DynamicTree::new()
         .default_actor_mailbox_capacity(4)
         .spawn()
         .expect("graphless runtime builds");
-    let sink = support::dynamic_root(&running_tree)
+    let scope = support::dynamic_root(&running_tree);
+    let inherited = scope
+        .add_actor_spec(ActorSpec::new("inherited", Drain::<u64>::new))
+        .await
+        .expect("actor with the scope default is added");
+    let overridden = scope
         .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(9)))
         .await
         .expect("actor with a capacity override is added");
 
-    sink.send(1).await.expect("message accepted");
-    assert_eq!(sink.stats().mailbox_capacity, 9);
+    inherited.send(1).await.expect("message accepted");
+    overridden.send(1).await.expect("message accepted");
+    assert_eq!(inherited.stats().mailbox_capacity, 4);
+    assert_eq!(overridden.stats().mailbox_capacity, 9);
 
     shutdown_running_tree(running_tree, "mailbox capacity override test shutdown").await;
 }

@@ -67,14 +67,14 @@ directly when the subtree edge needs policy overrides.
 
 These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
 be mutated accidentally. They return [`ControlError`] for operational errors:
-`UnknownChildId`, `ChildRemovalInProgress` if you re-add an id whose removal
-hasn't finished, or `Rejected` wrapping the same validation a static `spawn`
-performs. Ids must be unique within the scope at any moment — a removed id may
-be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
+`UnknownChildId`, `UnknownChildHandle`, `ChildRemovalInProgress` if you re-add
+an id whose removal hasn't finished, or `Rejected` wrapping the same validation
+a static `spawn` performs. Ids must be unique within the scope at any moment —
+a removed id may be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
 `scope.dynamic()` to request the mutation capability after checking its kind.
 To retain a nested dynamic subtree's mutation capability, call
-`dynamic_tree.scope()` before moving the declaration into `add_subtree`, as in
-the static-skeleton example below.
+`dynamic_tree.scope()` before moving the declaration into `add_subtree`. The
+same two-step pattern applies whether the parent scope is ordered or dynamic.
 
 ## Mixing static structure with dynamic membership
 

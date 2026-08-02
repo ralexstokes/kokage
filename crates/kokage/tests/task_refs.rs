@@ -244,18 +244,16 @@ async fn one_shot_manual_readiness_timeout_is_failed_and_removed() {
 
     assert_eq!(
         task.wait_started().await,
-        Err(TaskError::StoppedBeforeReady {
+        Err(TaskError::ReadinessTimedOut {
             task_id: "bounded-job".to_owned(),
+            timeout: Duration::from_millis(10),
         })
     );
     let exit = task
         .wait()
         .await
         .expect("terminal timeout remains observable");
-    assert!(
-        exit.failure_message()
-            .is_some_and(|message| message.contains("did not report readiness"))
-    );
+    assert_eq!(exit.readiness_timeout(), Some(Duration::from_millis(10)));
     assert!(task.snapshot().is_none());
 
     running_tree.shutdown().await.expect("tree stops");

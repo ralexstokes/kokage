@@ -115,6 +115,13 @@ impl<M> ActorRef<M> {
         &self.identity
     }
 
+    pub(crate) fn current_incarnation_mailbox(&self) -> Option<MailboxRef<M>> {
+        match &*self.binding.borrow() {
+            BindingState::Bound(mailbox) => Some(mailbox.clone()),
+            BindingState::Unbound | BindingState::Terminated => None,
+        }
+    }
+
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///
@@ -700,6 +707,8 @@ struct TimerEntry<M> {
 
 struct TimerRepeat<M> {
     period: Duration,
+    // Keep the `M: Clone` requirement local to interval insertion instead of
+    // imposing it on the timer table and one-shot timers.
     clone_message: fn(&M) -> M,
 }
 
@@ -718,13 +727,19 @@ fn next_interval_deadline(deadline: Instant, period: Duration) -> Instant {
     debug_assert!(!period.is_zero());
     let now = Instant::now();
     let elapsed = now.saturating_duration_since(deadline);
+    let advance = interval_advance(elapsed, period);
+    deadline
+        .checked_add(advance)
+        .unwrap_or_else(|| deadline_after(FAR_FUTURE))
+}
+
+fn interval_advance(elapsed: Duration, period: Duration) -> Duration {
+    debug_assert!(!period.is_zero());
     let periods = elapsed.as_nanos() / period.as_nanos() + 1;
     let advance = period.as_nanos().saturating_mul(periods);
     let seconds = u64::try_from(advance / 1_000_000_000).unwrap_or(u64::MAX);
     let nanoseconds = (advance % 1_000_000_000) as u32;
-    deadline
-        .checked_add(Duration::new(seconds, nanoseconds))
-        .unwrap_or_else(|| deadline_after(FAR_FUTURE))
+    Duration::new(seconds, nanoseconds)
 }
 
 fn clone_message<M: Clone>(message: &M) -> M {
@@ -760,8 +775,8 @@ impl<M> TimerTable<M> {
     where
         M: Clone,
     {
-        self.clear(key);
         if period.is_zero() {
+            self.clear(key);
             return;
         }
         self.insert_entry(
@@ -894,7 +909,7 @@ pub(crate) struct ActorReadySignal {
 
 impl ActorReadySignal {
     const IMMEDIATE: u8 = 0;
-    const AUTOMATIC_OR_MANUAL: u8 = 1;
+    const GATED: u8 = 1;
     const READY: u8 = 2;
 
     pub(crate) fn new(sender: oneshot::Sender<()>, manual: bool) -> Self {
@@ -903,7 +918,7 @@ impl ActorReadySignal {
             sender: Arc::new(Mutex::new(Some(sender))),
             ready,
             mode: Arc::new(AtomicU8::new(if manual {
-                Self::AUTOMATIC_OR_MANUAL
+                Self::GATED
             } else {
                 Self::IMMEDIATE
             })),
@@ -932,7 +947,7 @@ impl ActorReadySignal {
     pub(crate) fn defer_automatic(&self) {
         let _ = self.mode.compare_exchange(
             Self::IMMEDIATE,
-            Self::AUTOMATIC_OR_MANUAL,
+            Self::GATED,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
@@ -1182,13 +1197,25 @@ impl<M: Send + 'static> RawContext<M> {
     /// Returns this actor's enclosing scope.
     ///
     /// Awaiting scope or child lifecycle progress can deadlock when that
-    /// progress depends on this actor returning from its current work.
+    /// progress depends on this actor returning from its current work. Use
+    /// [`request_scope_shutdown`](Self::request_scope_shutdown) to request
+    /// shutdown of this actor's own scope without waiting.
     /// Actors hosted directly outside a supervisor receive a terminal handle
     /// here. Its control operations return
     /// [`ControlError::Unavailable`](crate::ControlError::Unavailable) and its
     /// observation streams are closed.
     pub fn scope(&self) -> ScopeRef {
         self.supervisor.clone()
+    }
+
+    /// Requests graceful shutdown of this actor's enclosing scope.
+    ///
+    /// The request does not wait for shutdown to finish, so it cannot deadlock
+    /// on this actor's own exit. Observe completion from outside the scope. If
+    /// this actor is hosted directly without a supervisor, its terminal scope
+    /// handle makes this request a no-op.
+    pub fn request_scope_shutdown(&self) {
+        self.scope().request_shutdown();
     }
 
     /// Returns a sender targeting this actor's own mailbox.
@@ -1627,9 +1654,10 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// [`ScopeRef::shutdown_and_wait`](crate::ScopeRef::shutdown_and_wait): an
     /// actor cannot await its own enclosing scope's termination because its
     /// exit is part of that termination condition. Observe completion from
-    /// outside the scope instead.
+    /// outside the scope instead. If this actor is hosted directly without a
+    /// supervisor, its terminal scope handle makes this request a no-op.
     pub fn request_scope_shutdown(&self) {
-        self.cx.scope().request_shutdown();
+        self.cx.request_scope_shutdown();
     }
 
     /// Runs blocking work on Tokio's blocking pool.
@@ -1759,9 +1787,15 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// The timer has the same loop-owned delivery, replacement, statistics,
     /// and incarnation lifetime semantics as [`set_timeout`](Self::set_timeout).
-    /// It clones `message` while re-arming in the actor's timer table before
-    /// each delivery. Missed ticks are skipped instead of accumulating, and a
-    /// zero period clears `key` without arming a timer.
+    /// The first delivery occurs one full `period` after arming. It clones
+    /// `message` while re-arming in the actor's timer table before each
+    /// delivery. Missed ticks are skipped instead of accumulating, and a zero
+    /// period clears `key` without arming a timer.
+    ///
+    /// A continually overdue interval is selected ahead of offload
+    /// completions. Use [`interval_to`](Self::interval_to) with
+    /// `&ctx.myself()` and retain its [`Guard`] when the interval must re-enter
+    /// ordinary delivery scheduling instead.
     pub fn set_interval(&mut self, key: TimerKey, message: A::Msg, period: Duration)
     where
         A::Msg: Clone,
@@ -1887,10 +1921,22 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     /// Cooperative removal detaches this child only after this hook returns,
     /// so awaiting anything that depends on that detach — scope termination,
     /// this child's completion, its own removal — resolves only once the
-    /// shutdown grace period expires. Request fire-and-forget control here and
-    /// observe the outcome from outside the scope.
+    /// shutdown grace period expires. Use
+    /// [`request_scope_shutdown`](Self::request_scope_shutdown) for
+    /// fire-and-forget control here and observe the outcome from outside the
+    /// scope.
     pub fn scope(&self) -> ScopeRef {
         self.cx.scope()
+    }
+
+    /// Requests graceful shutdown of this actor's enclosing scope.
+    ///
+    /// The request does not wait for shutdown to finish, so the stop hook can
+    /// return and allow teardown to proceed. Observe completion from outside
+    /// the scope. If this actor is hosted directly without a supervisor, its
+    /// terminal scope handle makes this request a no-op.
+    pub fn request_scope_shutdown(&self) {
+        self.cx.request_scope_shutdown();
     }
 }
 
@@ -1921,6 +1967,21 @@ mod tests {
         Mailbox, RestartPolicy,
         actor::binding::{BindingGuard, mailbox},
     };
+
+    #[test]
+    fn interval_advance_caps_whole_seconds_that_exceed_duration_range() {
+        assert_eq!(
+            interval_advance(Duration::MAX, Duration::MAX),
+            Duration::new(u64::MAX, 999_999_998)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_interval_deadline_caps_instant_overflow() {
+        let now = Instant::now();
+
+        assert_eq!(next_interval_deadline(now, Duration::MAX), now + FAR_FUTURE);
+    }
 
     #[test]
     fn actor_ref_try_send_traces_closed_mailbox_reason() {

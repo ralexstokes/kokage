@@ -43,6 +43,9 @@ pub enum ControlError {
     /// No child with this id is known to the supervisor.
     #[error("unknown child id: {0}")]
     UnknownChildId(String),
+    /// The supplied handle does not identify a current membership in this scope.
+    #[error("child handle does not identify a current membership in this scope")]
+    UnknownChildHandle,
     /// A removal request for this child is already in progress.
     #[error("child removal already in progress: {0}")]
     ChildRemovalInProgress(String),

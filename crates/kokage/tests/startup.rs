@@ -13,6 +13,7 @@ use kokage::raw::ActorRunError;
 use kokage::{
     ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
     SupervisorError, TaskSpec,
+    observe::ExitStatus,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -650,12 +651,56 @@ async fn raw_manual_readiness_timeout_restarts_then_accepts_mark_ready() {
         .child("BoundedRawReadiness")
         .and_then(|child| child.state.last_exit())
         .expect("replacement retains the readiness timeout");
-    assert!(
-        previous_exit
-            .failure_message()
-            .is_some_and(|message| message.contains("did not report readiness"))
+    assert_eq!(
+        previous_exit.readiness_timeout(),
+        Some(Duration::from_millis(10))
     );
     handle.shutdown().await.unwrap();
+}
+
+struct SlowShutdownRawReadiness {
+    started: mpsc::UnboundedSender<()>,
+}
+
+impl RawActor for SlowShutdownRawReadiness {
+    type Msg = ();
+
+    fn manual_readiness(&self) -> Option<Duration> {
+        Some(Duration::from_millis(10))
+    }
+
+    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+        let _ = self.started.send(());
+        ctx.shutdown_token().cancelled().await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_actor_shutdown_disarms_a_short_manual_readiness_deadline() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let mut graph = Tree::new();
+    graph.add_actor_spec(
+        ActorSpec::new("SlowShutdownRawReadiness", move || {
+            SlowShutdownRawReadiness {
+                started: started_tx.clone(),
+            }
+        })
+        .shutdown(Shutdown::graceful_for(Duration::from_millis(50))),
+    );
+
+    let running = graph.spawn().unwrap();
+    let scope = running.scope();
+    started_rx.recv().await.expect("actor starts");
+    running.shutdown().await.unwrap();
+
+    let snapshot = scope.snapshot();
+    let exit = snapshot
+        .child("SlowShutdownRawReadiness")
+        .and_then(|child| child.state.last_exit())
+        .expect("shutdown records the pre-ready actor exit");
+    assert!(matches!(exit, ExitStatus::Completed { cancelled: true }));
 }
 
 #[tokio::test(start_paused = true)]
@@ -709,7 +754,7 @@ impl Actor for DefaultPolicy {
 }
 
 #[test]
-fn the_default_child_shutdown_drains() {
+fn the_shutdown_default_drains() {
     assert_eq!(
         Shutdown::default(),
         Shutdown::graceful_for(std::time::Duration::from_secs(5))

@@ -190,22 +190,22 @@ impl SupervisorRuntime {
             async move {
                 let result = match kind {
                     ChildKind::Task(factory) => {
+                        let shutdown = ctx.shutdown_token().clone();
                         let future = factory.make(ctx);
                         if let ChildReadiness::Manual(timeout) = readiness {
-                            let ready_signal = ready_signal
-                                .expect("manual readiness carries a ready signal");
+                            let ready_signal =
+                                ready_signal.expect("manual readiness carries a ready signal");
                             tokio::pin!(future);
                             tokio::select! {
                                 biased;
                                 result = &mut future => result,
                                 () = ready_signal.wait() => future.await,
+                                () = shutdown.cancelled() => future.await,
                                 () = tokio::time::sleep(timeout) => {
-                                    Err(std::io::Error::new(
-                                        std::io::ErrorKind::TimedOut,
-                                        format!(
-                                            "task `{timeout_child_id}` did not report readiness within {timeout:?}"
-                                        ),
-                                    )
+                                    Err(super::exit::TaskReadinessTimedOut {
+                                        task_id: timeout_child_id,
+                                        timeout,
+                                    }
                                     .into())
                                 }
                             }
