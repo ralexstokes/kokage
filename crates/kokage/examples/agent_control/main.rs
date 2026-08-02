@@ -210,8 +210,10 @@ async fn build_app() -> Result<App, AnyError> {
     let router_slot = ActorSlot::<RouterMsg>::new("router");
     let router = router_slot.actor_ref();
 
+    let sessions_tree = DynamicTree::new();
+    let sessions = sessions_tree.scope();
     let mut tree = Tree::new();
-    let sessions = tree.add_dynamic_subtree("sessions", DynamicTree::new());
+    tree.add_subtree("sessions", sessions_tree);
 
     let mut gateway_tree = Tree::new().strategy(Strategy::RestForOne);
     let outbound = gateway_tree.add_actor_spec(

@@ -111,9 +111,11 @@ async fn slots_resolve_cyclic_refs_across_nested_tree_wiring() {
         move || Right { left: left.clone() }
     }));
 
+    let sessions_tree = DynamicTree::new();
+    let sessions = sessions_tree.scope();
     let mut tree = Tree::new();
     let root = tree.scope();
-    let sessions = tree.add_dynamic_subtree("sessions", DynamicTree::new());
+    tree.add_subtree("sessions", sessions_tree);
     let workers = tree.add_subtree("workers", workers_tree);
     tree.add_actor_spec(probe_slot.define({
         let left = left.clone();
