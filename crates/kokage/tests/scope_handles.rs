@@ -10,11 +10,14 @@ use std::{
 
 use kokage::{
     Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-    ExitResult, RestartPolicy, ScopeRef, StopContext, Strategy, SubtreeSpec, SupervisorError,
-    TaskSpec, Tree,
+    ExitResult, RestartPolicy, ScopeRef, Shutdown, StopContext, Strategy, SubtreeSpec,
+    SupervisorError, TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    sync::{Notify, mpsc},
+    time::timeout,
+};
 
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -316,9 +319,8 @@ async fn nested_scope_wait_stopped_joins_after_shutdown_completed_elsewhere() {
 
 #[tokio::test]
 async fn nested_scope_late_waiters_receive_the_terminal_error() {
-    let nested_tree = Tree::new()
+    let mut nested_tree = Tree::new()
         .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
-    let mut nested_tree = nested_tree;
     nested_tree.add_task("worker", |_| async {
         Err(std::io::Error::other("worker failed").into())
     });
@@ -341,6 +343,97 @@ async fn nested_scope_late_waiters_receive_the_terminal_error() {
         "subsequent waiters receive the same terminal result"
     );
     running_tree.shutdown().await.expect("root stops");
+}
+
+#[tokio::test]
+async fn nested_scope_wait_stopped_follows_parent_driven_restarts() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let fail_first = Arc::new(Notify::new());
+    let second_started = Arc::new(Notify::new());
+    let mut nested_tree = Tree::new()
+        .default_child_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    nested_tree.add_task("worker", {
+        let attempts = Arc::clone(&attempts);
+        let fail_first = Arc::clone(&fail_first);
+        let second_started = Arc::clone(&second_started);
+        move |ctx| {
+            let attempts = Arc::clone(&attempts);
+            let fail_first = Arc::clone(&fail_first);
+            let second_started = Arc::clone(&second_started);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    fail_first.notified().await;
+                    return Err(std::io::Error::other("first incarnation failed").into());
+                }
+                second_started.notify_one();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    });
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree(
+        "nested",
+        SubtreeSpec::from(nested_tree)
+            .restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
+    );
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    nested
+        .wait_started()
+        .await
+        .expect("first incarnation starts");
+
+    let waiting_scope = nested.clone();
+    let mut waiting = tokio::spawn(async move { waiting_scope.wait_stopped().await });
+    fail_first.notify_one();
+    timeout(WAIT, second_started.notified())
+        .await
+        .expect("parent restarts the nested scope");
+    assert!(
+        timeout(Duration::from_millis(20), &mut waiting)
+            .await
+            .is_err(),
+        "wait_stopped must not return for a restartable incarnation exit"
+    );
+
+    nested.request_shutdown();
+    timeout(WAIT, waiting)
+        .await
+        .expect("identity-scoped wait remains bounded")
+        .expect("wait task joins")
+        .expect("the final incarnation stops cleanly");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    running_tree.shutdown().await.expect("root stops");
+}
+
+#[tokio::test]
+async fn nested_scope_late_waiter_receives_hard_abort_timeout() {
+    let mut nested_tree = Tree::new();
+    nested_tree.add_task_spec(
+        TaskSpec::new("stubborn", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
+    );
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree(
+        "nested",
+        SubtreeSpec::from(nested_tree).shutdown(Shutdown::graceful_for(Duration::from_millis(20))),
+    );
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    nested.wait_started().await.expect("nested scope starts");
+
+    assert_eq!(
+        running_tree.shutdown().await,
+        Err(SupervisorError::ShutdownTimedOut("nested".to_owned()))
+    );
+    assert_eq!(
+        nested.wait_stopped().await,
+        Err(SupervisorError::ShutdownTimedOut("nested".to_owned())),
+        "late waiters receive the wrapper result rather than a plumbing error"
+    );
 }
 
 #[tokio::test]
@@ -499,6 +592,26 @@ async fn subtree_removal_rejects_a_foreign_parent_membership() {
 }
 
 #[tokio::test]
+async fn pre_insert_ordered_scope_handle_removes_its_membership() {
+    let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
+    let scope = running_tree.scope();
+    let child_tree = Tree::new();
+    let child = child_tree.scope();
+
+    scope
+        .add_subtree("workers", child_tree)
+        .await
+        .expect("ordered subtree added");
+    scope
+        .remove(&child)
+        .await
+        .expect("pre-insert ordered scope handle removes its membership");
+    assert!(scope.snapshot().child("workers").is_none());
+
+    running_tree.shutdown().await.expect("dynamic root stops");
+}
+
+#[tokio::test]
 async fn pre_insert_dynamic_scope_handles_remove_only_their_exact_membership() {
     let first_tree = DynamicTree::new().spawn().expect("first root builds");
     let first = first_tree.scope();
@@ -531,10 +644,10 @@ async fn pre_insert_dynamic_scope_handles_remove_only_their_exact_membership() {
         .expect("replacement dynamic subtree is visible")
         .lineage;
     assert_ne!(first_lineage, replacement_lineage);
-    assert!(matches!(
+    assert_eq!(
         first.remove(&child).await,
-        Err(ControlError::UnknownChildId(id)) if id == "<root>"
-    ));
+        Err(ControlError::UnknownChildHandle)
+    );
     assert!(first.snapshot().child("workers").is_some());
 
     let second_tree = DynamicTree::new().spawn().expect("second root builds");
@@ -546,15 +659,15 @@ async fn pre_insert_dynamic_scope_handles_remove_only_their_exact_membership() {
         .await
         .expect("foreign dynamic subtree added");
 
-    assert!(matches!(
+    assert_eq!(
         second.remove(&replacement).await,
-        Err(ControlError::UnknownChildId(id)) if id == "<root>"
-    ));
+        Err(ControlError::UnknownChildHandle)
+    );
     assert!(second.snapshot().child("workers").is_some());
-    assert!(matches!(
+    assert_eq!(
         first.remove(&foreign).await,
-        Err(ControlError::UnknownChildId(id)) if id == "<root>"
-    ));
+        Err(ControlError::UnknownChildHandle)
+    );
     assert!(first.snapshot().child("workers").is_some());
 
     first
@@ -623,17 +736,61 @@ async fn task_removal_rejects_a_same_id_and_lineage_from_another_scope() {
 }
 
 #[tokio::test]
-async fn actor_removal_reports_an_unavailable_stopped_scope() {
+async fn removal_checks_a_stopped_scope_before_inspecting_any_handle() {
     let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
     let scope = running_tree.scope();
     let actor = scope
         .add_actor("worker", || Idle)
         .await
         .expect("actor added");
+    let task = scope
+        .add_task("task", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("task added");
+    let subtree = scope
+        .add_subtree("ordered", Tree::new())
+        .await
+        .expect("ordered subtree added");
+    let dynamic_tree = DynamicTree::new();
+    let dynamic = dynamic_tree.scope();
+    scope
+        .add_subtree("dynamic", dynamic_tree)
+        .await
+        .expect("dynamic subtree added");
+
+    let foreign_tree = DynamicTree::new().spawn().expect("foreign root builds");
+    let foreign_scope = foreign_tree.scope();
+    let foreign_task = foreign_scope
+        .add_task("foreign-task", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("foreign task added");
+    let foreign_subtree = foreign_scope
+        .add_subtree("foreign-subtree", Tree::new())
+        .await
+        .expect("foreign subtree added");
 
     running_tree.shutdown().await.expect("dynamic root stops");
 
     assert_eq!(scope.remove(&actor).await, Err(ControlError::Unavailable));
+    assert_eq!(scope.remove(&task).await, Err(ControlError::Unavailable));
+    assert_eq!(scope.remove(&subtree).await, Err(ControlError::Unavailable));
+    assert_eq!(scope.remove(&dynamic).await, Err(ControlError::Unavailable));
+    assert_eq!(
+        scope.remove(&foreign_task).await,
+        Err(ControlError::Unavailable)
+    );
+    assert_eq!(
+        scope.remove(&foreign_subtree).await,
+        Err(ControlError::Unavailable)
+    );
+
+    foreign_tree.shutdown().await.expect("foreign root stops");
 }
 
 #[tokio::test]
@@ -778,7 +935,7 @@ impl Actor for StopScopeProbe {
         // fire-and-forget control are what a scope handle is good for here.
         let scope: ScopeRef = ctx.scope();
         let visible = scope.snapshot().child("probe").is_some();
-        scope.request_shutdown();
+        ctx.request_scope_shutdown();
         self.observed
             .send((scope.kind(), visible))
             .expect("test receiver open");

@@ -8,8 +8,8 @@ The corresponding `actor-factory-pass/` directory contains compile-success
 probes not already exercised by the integration tests.
 
 `prelude/` holds compile-fail cases run by `tests/prelude_ui.rs`. They ensure
-policy, error, monitoring, and one-shot task types remain explicit crate-root
-imports instead of silently expanding the common prelude.
+deliberately excluded types remain explicit crate-root imports instead of
+silently expanding the common prelude.
 
 ## Updating snapshots on a toolchain bump
 

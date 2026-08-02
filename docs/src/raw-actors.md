@@ -72,7 +72,8 @@ The contract you take on:
   finished initializing, override `manual_readiness()` to return a deadline
   and call `ctx.mark_ready()` when ready — the raw analogue of a task's
   `manual_readiness`. Missing the deadline fails the incarnation under its
-  restart policy.
+  restart policy; shutdown disarms the startup deadline so the actor keeps its
+  configured cooperative shutdown grace.
 
 ## Hosting an actor without a tree
 

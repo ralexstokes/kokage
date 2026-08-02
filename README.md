@@ -94,8 +94,10 @@ immediately.
 `running_tree.scope()` returns a cheap, cloneable, non-owning reference, parallel to
 an `ActorRef`. `ScopeRef` is the common observation and control surface:
 snapshots, lifecycle observation, subtree traversal, and either non-waiting
-`request_shutdown()` or waiting `shutdown_and_wait().await`. A scope that was
-stopped elsewhere can be joined with `wait_stopped().await`. Dynamic scopes
+`request_shutdown()` or waiting `shutdown_and_wait().await`. A stable scope
+identity that was stopped elsewhere can be joined with `wait_stopped().await`;
+the wait follows parent-driven reincarnations until the scope is terminal.
+Dynamic scopes
 return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
 `add_task`, `spawn_once`, exact-handle `remove`, and the `remove_named`
 escape hatch. A scope found through untyped tree traversal can request that
@@ -121,8 +123,8 @@ request-acceptance and response deadlines beneath `ActorRef::call`;
 `raw::RawActor` provides a custom receive loop beneath `Actor`; and
 `ScopeRef::subscribe_lifecycle` provides ordered lifecycle history, while
 `observe_children` aligns a current snapshot with direct-child updates and
-automatically replaces missing history with a fresh reset for consumers that
-need to maintain their own reducer.
+automatically replaces missing history or a superseded scope incarnation with
+a fresh reset for consumers that need to maintain their own reducer.
 
 ## The crates
 

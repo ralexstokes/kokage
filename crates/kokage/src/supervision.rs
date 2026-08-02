@@ -252,7 +252,7 @@ macro_rules! tree_common_methods {
             self
         }
 
-        /// Sets the mailbox shutdown policy inherited by actors in this scope.
+        /// Sets the mailbox shutdown policy inherited by actors directly in this scope.
         ///
         /// This actor-only default does not apply to tasks or subtree edges.
         /// Nested scopes do not inherit it; configure each subtree explicitly
@@ -1144,6 +1144,9 @@ impl std::fmt::Debug for DebugChild<'_> {
 }
 
 /// Serializable, payload-free declaration tree for persisted comparison.
+///
+/// Deserialization rejects unknown scope and child declaration fields, so
+/// schema changes require coordinated updates to readers and writers.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1169,7 +1172,6 @@ pub struct SupervisionOutline {
 /// One payload-free child declaration.
 #[cfg(feature = "serde")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.
@@ -1184,7 +1186,6 @@ pub enum ChildOutline {
         #[serde(default)]
         mailbox_shutdown: MailboxShutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
         remove_on_terminal_exit: bool,
     },
     /// An arbitrary task child.
@@ -1196,7 +1197,6 @@ pub enum ChildOutline {
         /// Shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
-        #[serde(default)]
         remove_on_terminal_exit: bool,
     },
     /// A nested ordered or dynamic scope.

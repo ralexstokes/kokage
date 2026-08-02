@@ -67,14 +67,14 @@ directly when the subtree edge needs policy overrides.
 
 These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
 be mutated accidentally. They return [`ControlError`] for operational errors:
-`UnknownChildId`, `ChildRemovalInProgress` if you re-add an id whose removal
-hasn't finished, or `Rejected` wrapping the same validation a static `spawn`
-performs. Ids must be unique within the scope at any moment — a removed id may
-be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
+`UnknownChildId`, `UnknownChildHandle`, `ChildRemovalInProgress` if you re-add
+an id whose removal hasn't finished, or `Rejected` wrapping the same validation
+a static `spawn` performs. Ids must be unique within the scope at any moment —
+a removed id may be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
 `scope.dynamic()` to request the mutation capability after checking its kind.
 To retain a nested dynamic subtree's mutation capability, call
-`dynamic_tree.scope()` before moving the declaration into `add_subtree`, as in
-the static-skeleton example below.
+`dynamic_tree.scope()` before moving the declaration into `add_subtree`. The
+same two-step pattern applies whether the parent scope is ordered or dynamic.
 
 ## Mixing static structure with dynamic membership
 
@@ -153,6 +153,12 @@ scope-level snapshot observers must discover the terminal state without an
 existing `TaskRef`. A retained membership keeps its child id occupied until
 `scope.remove(&job).await?` removes it or the scope shuts down; the
 `TaskRef` retains the terminal outcome whether or not the membership is kept.
+
+In this policy, a *terminal exit* is one that a running supervisor evaluates
+and declines to restart. The membership option is not applied to exits during
+supervisor shutdown. Likewise, a non-`Never` child that completes while a group
+restart drains its peers remains part of that restart and is respawned with the
+group.
 
 `TaskRef::wait` skips exits followed by the task's restart policy and returns
 the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several

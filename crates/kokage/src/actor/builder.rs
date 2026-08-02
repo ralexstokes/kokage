@@ -250,6 +250,10 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// This setting is independent of the selected [`RestartPolicy`].
     /// It does not turn an otherwise eligible restart into a terminal exit;
     /// exhausting the restart budget still fails the enclosing scope.
+    /// Here, terminal means an exit a running supervisor evaluates and declines
+    /// to restart. The option is not applied during supervisor shutdown, and a
+    /// non-`Never` child completing during a group-restart drain is respawned
+    /// with the group.
     #[must_use]
     pub fn remove_on_terminal_exit(mut self) -> Self {
         self.remove_on_terminal_exit = true;

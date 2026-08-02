@@ -1,5 +1,5 @@
 use kokage::prelude::{
-    Backoff, CallError, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
+    Backoff, CallError, ChildHandle, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
     OneShotTaskSpec, RestartPolicy, SendError, SendErrorKind, Shutdown, Strategy,
 };
 

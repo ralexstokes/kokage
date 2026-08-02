@@ -154,6 +154,79 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     running_tree.shutdown().await.expect("tree stops");
 }
 
+#[tokio::test]
+async fn retained_one_shot_failures_are_visible_to_scope_snapshot_observers() {
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let scope = running_tree.scope();
+    let mut snapshots = scope.subscribe_snapshots();
+    let failed = scope
+        .spawn_once_spec(
+            OneShotTaskSpec::new("failed-job", |_| async {
+                Err(std::io::Error::other("retained one-shot failure").into())
+            })
+            .retain_on_terminal_exit(),
+        )
+        .await
+        .expect("failing one-shot task is inserted");
+    let panicked = scope
+        .spawn_once_spec(
+            OneShotTaskSpec::new("panicked-job", |_| async {
+                panic!("retained one-shot panic");
+            })
+            .retain_on_terminal_exit(),
+        )
+        .await
+        .expect("panicking one-shot task is inserted");
+
+    let snapshot = timeout(
+        WAIT,
+        snapshots.wait_for(|snapshot| {
+            let failed_is_visible = snapshot.child("failed-job").is_some_and(|child| {
+                child.state.is_terminal()
+                    && child
+                        .state
+                        .last_exit()
+                        .and_then(|exit| exit.failure_message())
+                        .is_some_and(|message| message.contains("retained one-shot failure"))
+            });
+            let panic_is_visible = snapshot.child("panicked-job").is_some_and(|child| {
+                child.state.is_terminal()
+                    && child.state.last_exit().is_some_and(ExitStatus::is_panicked)
+            });
+            failed_is_visible && panic_is_visible
+        }),
+    )
+    .await
+    .expect("retained failures reach a scope snapshot observer")
+    .expect("snapshot stream remains open");
+    assert!(
+        snapshot
+            .child("failed-job")
+            .is_some_and(|child| !child.remove_on_terminal_exit)
+    );
+    assert!(
+        snapshot
+            .child("panicked-job")
+            .is_some_and(|child| !child.remove_on_terminal_exit)
+    );
+    assert!(
+        failed
+            .wait()
+            .await
+            .expect("failed outcome is retained")
+            .is_failure()
+    );
+    assert!(
+        panicked
+            .wait()
+            .await
+            .expect("panicked outcome is retained")
+            .is_panicked()
+    );
+
+    running_tree.shutdown().await.expect("tree stops");
+}
+
 #[tokio::test(start_paused = true)]
 async fn one_shot_manual_readiness_timeout_is_failed_and_removed() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
@@ -171,18 +244,16 @@ async fn one_shot_manual_readiness_timeout_is_failed_and_removed() {
 
     assert_eq!(
         task.wait_started().await,
-        Err(TaskError::StoppedBeforeReady {
+        Err(TaskError::ReadinessTimedOut {
             task_id: "bounded-job".to_owned(),
+            timeout: Duration::from_millis(10),
         })
     );
     let exit = task
         .wait()
         .await
         .expect("terminal timeout remains observable");
-    assert!(
-        exit.failure_message()
-            .is_some_and(|message| message.contains("did not report readiness"))
-    );
+    assert_eq!(exit.readiness_timeout(), Some(Duration::from_millis(10)));
     assert!(task.snapshot().is_none());
 
     running_tree.shutdown().await.expect("tree stops");

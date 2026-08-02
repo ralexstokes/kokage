@@ -11,18 +11,19 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, ChildHandle, Context, DynamicScopeRef, DynamicTree,
-            ExitResult, Guard, Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext,
-            TaskRef, TaskSpec, TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, Context, DynamicScopeRef, DynamicTree, ExitResult, Guard,
+            Mailbox, Reply, RunningTree, ScopeRef, StopContext, TaskContext, TaskRef, TaskSpec,
+            TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, MailboxShutdown, MonitorEvent, MonitorEventKind,
-            OffloadDeadline, OneShotTaskSpec, ReplyError, ReplyReceiver, RestartPolicy, SendError,
-            SendErrorKind, Shutdown, Strategy, SubtreeSpec, SupervisorError, TaskError,
+            CancellationToken, ChildHandle, ControlError, MailboxShutdown, MonitorEvent,
+            MonitorEventKind, OffloadDeadline, OneShotTaskSpec, ReplyError, ReplyReceiver,
+            RestartPolicy, SendError, SendErrorKind, Shutdown, Strategy, SubtreeSpec,
+            SupervisorError, TaskError,
         };
     }
 
@@ -354,6 +355,12 @@ fn task_policy_types_cover_common_configuration() {
         RestartPolicy::on_failure()
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
+    );
+    assert_eq!(
+        RestartPolicy::never()
+            .limit(9, Duration::from_secs(9))
+            .backoff(Backoff::fixed(Duration::from_millis(50))),
+        RestartPolicy::Never
     );
     let policy = RestartPolicy::on_failure();
     let RestartPolicy::OnFailure {
