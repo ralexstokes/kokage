@@ -26,10 +26,13 @@ Every feature in this book has a runnable counterpart under
   `supervisor_snapshot_trace` — observability patterns ready to adapt.
 - `json_edge` — decoding a byte-oriented edge into typed messages.
 
-Two larger examples put everything together the way this book did, and are
+Three larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
-reconciler, telemetry) and **`agent_control`** (an LLM-agent control loop
-with offloaded model calls) — both run with `--features metrics,derive`.
+reconciler, telemetry), **`agent_control`** (an LLM-agent control loop with
+offloaded model calls), and **`build_farm`** (a finite dependency build over
+restarting service tasks and dynamic one-shot workers). The first two run with
+`--features metrics,derive`; `build_farm` runs with `--features serde` so it
+can validate and round-trip its declaration outline before spawn.
 
 ## Watch a tree live
 

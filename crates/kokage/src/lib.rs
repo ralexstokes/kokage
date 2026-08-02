@@ -199,6 +199,8 @@
 //!   `examples/task_nested_supervisor.rs` — dynamic and nested task scopes.
 //! - `examples/task_metrics.rs` and `examples/task_tracing.rs` —
 //!   task-supervisor observability.
+//! - `examples/build_farm/` — a finite dependency build using supervised
+//!   tasks, dynamic one-shot workers, and a durable content-addressed cache.
 //!
 //! # Cargo features
 //!
