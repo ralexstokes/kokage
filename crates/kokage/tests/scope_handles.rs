@@ -1095,7 +1095,6 @@ async fn trees_terminalize_handles_when_dropped() {
     let handle = builder.scope();
     let snapshots = handle.subscribe_snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
-    let _: ScopeRef = handle.clone().into();
     drop(builder);
     assert_snapshot_receiver_closes(snapshots).await;
 

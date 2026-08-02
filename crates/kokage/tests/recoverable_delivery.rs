@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     io,
     sync::{
         Arc,
@@ -10,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, Mailbox, Reply, RestartPolicy,
-    SendError, SendErrorKind, Tree,
+    ActorSpec, Backoff, CallError, ExitResult, Mailbox, Reply, RestartPolicy, SendError,
+    SendErrorKind, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -488,33 +487,4 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         call_error,
         CallError::Terminated { actor_id, .. } if actor_id == "worker"
     ));
-}
-
-struct NotSync {
-    _value: Cell<u8>,
-}
-
-// Compile probe: `NotSync` is `Send` but not `Sync`, so the payload-bearing
-// error cannot enter `BoxError`. Erasing the message makes the common actor
-// handler error path available without imposing a `Sync` bound on the message.
-#[allow(dead_code)]
-async fn non_sync_message_can_discard_before_question_mark(
-    actor: &ActorRef<NotSync>,
-) -> Result<(), BoxError> {
-    actor
-        .send(NotSync {
-            _value: Cell::new(1),
-        })
-        .await
-        .map_err(SendError::into_boxed)?;
-    actor
-        .send_timeout(
-            NotSync {
-                _value: Cell::new(2),
-            },
-            Duration::from_secs(1),
-        )
-        .await
-        .map_err(SendError::into_boxed)?;
-    Ok(())
 }

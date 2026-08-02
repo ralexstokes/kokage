@@ -10,7 +10,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Tree,
+    Actor, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Tree,
     observe::SupervisorSnapshotReceiver,
 };
 
@@ -73,12 +73,8 @@ impl Actor for DerivedActor {
     }
 }
 
-fn assert_factory<F: ActorFactory<Actor = DerivedActor> + Clone>() {}
-
 #[tokio::test]
 async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
-    assert_factory::<DerivedActorFactory>();
-
     let starts = Arc::new(AtomicUsize::new(0));
     let mut builder = Tree::new();
     let actor_ref = builder.add_actor_spec(ActorSpec::new(

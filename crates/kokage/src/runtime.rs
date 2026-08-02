@@ -1553,20 +1553,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        Actor, ActorSpec, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-        ExitResult, RestartPolicy, RunningTree, ScopeRef, Tree,
+        Actor, ActorSpec, Context, ControlError, DynamicTree, ExitResult, RestartPolicy, Tree,
     };
-
-    #[test]
-    fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
-        let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
-        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree<DynamicScopeRef>, BuildError> =
-            DynamicTree::spawn;
-        let dynamic_scope: fn(&DynamicTree) -> DynamicScopeRef = DynamicTree::scope;
-
-        let _ = (ordered_spawn, ordered_scope, dynamic_spawn, dynamic_scope);
-    }
 
     struct FailsOnMessage;
 

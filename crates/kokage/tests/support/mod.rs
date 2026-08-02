@@ -1,3 +1,6 @@
+// Each integration test compiles this shared module independently and uses a
+// different subset of its fixtures, so helpers used by other test crates can
+// appear dead in any one crate.
 #![allow(dead_code)]
 
 use kokage::{
