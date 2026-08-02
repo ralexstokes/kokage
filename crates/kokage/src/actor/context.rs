@@ -1641,6 +1641,8 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// actor sees the middleware actor's [`id`](Self::id), and both layers
     /// share the timer-key namespace and continuation queue. Middleware layers
     /// that arm timers must therefore coordinate disjoint [`TimerKey`] values.
+    /// A [`stop`](Self::stop) requested through either view stops the shared
+    /// incarnation; a wrapper cannot veto its inner actor's stop.
     ///
     /// The drain phase is preserved, so [`is_draining`](Self::is_draining)
     /// reports the same value through either view.
@@ -1924,9 +1926,8 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     ///
     /// This lets a middleware or decorator actor delegate `on_stop` to its
     /// inner actor. Like [`Context::for_actor`], the returned context is a view
-    /// of the same incarnation: the inner actor sees the middleware actor's
-    /// [`id`](Self::id), and the layers used the same timer-key namespace and
-    /// continuation queue during earlier lifecycle stages.
+    /// of the same incarnation, so the inner actor sees the middleware actor's
+    /// [`id`](Self::id).
     pub fn for_actor<B: Actor<Msg = A::Msg> + ?Sized>(&mut self) -> StopContext<'_, B> {
         StopContext { cx: self.cx }
     }
