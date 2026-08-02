@@ -21,7 +21,8 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
-            OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError, TaskError,
+            OffloadDeadline, ReplyError, ReplyReceiver, RunningScope, SubtreeSpec, SupervisorError,
+            TaskError,
         };
     }
 
