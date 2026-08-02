@@ -20,6 +20,9 @@
 //! Every ref is minted from an [`ActorSlot`] before any factory is defined.
 //! That makes the feed/reconciler and gateway/core dependency cycles explicit
 //! without a registry or late `Option<ActorRef<_>>` wiring.
+//!
+//! Phases 2 and 6 deliberately panic feed actors. Their panic messages and
+//! the resulting WARN-level restart traces are expected acceptance evidence.
 
 mod market;
 mod orders;
@@ -57,6 +60,13 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTHY_VENUE_BOUND: Duration = Duration::from_millis(250);
 const URGENT_CONTROL_BOUND: Duration = Duration::from_millis(300);
 const VENUE_MAILBOX: usize = 16;
+const VENUE_RESTART_LIMIT: usize = 4;
+
+// Phase 2 crashes venue A once. Phase 6 then alternates at most
+// BREAKER_THRESHOLD crashes across both feeds. Keep the per-child budget
+// strictly above that worst-case count so the breaker, not restart intensity,
+// owns the safety decision.
+const _: () = assert!(VENUE_RESTART_LIMIT > 1 + BREAKER_THRESHOLD.div_ceil(2));
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
@@ -187,8 +197,9 @@ fn build_app() -> Result<App, AnyError> {
         })
         .mailbox(Mailbox::queue(VENUE_MAILBOX));
 
-    let mut venue_tree = Tree::new()
-        .default_child_restart(RestartPolicy::on_failure().limit(4, Duration::from_secs(30)));
+    let mut venue_tree = Tree::new().default_child_restart(
+        RestartPolicy::on_failure().limit(VENUE_RESTART_LIMIT, Duration::from_secs(30)),
+    );
     venue_tree.add_actor_spec(feed_a_spec);
     venue_tree.add_actor_spec(gateway_a_spec);
     venue_tree.add_actor_spec(feed_b_spec);
@@ -517,9 +528,10 @@ async fn phase_6_restart_breaker(app: &App) -> Result<(), AnyError> {
         crashes += 1;
     }
     await_until(|| async {
+        let restart_total = app.venues.snapshot().total_restarts;
         health_report(&app.health)
             .await
-            .is_ok_and(|report| report.tripped)
+            .is_ok_and(|report| report.tripped && report.observed_total == restart_total)
             && !app.intake_gate.load(Ordering::Acquire)
             && app.exchange_b.status(&open) == Some(OrderStatus::Cancelled)
     })
@@ -575,9 +587,16 @@ async fn phase_7_shutdown_and_telemetry(app: App, metrics: Snapshotter) -> Resul
     for name in ["feed.queue", "feed.handle", "gateway.handle", "fill.queue"] {
         assert!(latency.get(name).is_some_and(|series| series.count > 0));
     }
-    let selected_metrics = metrics
-        .snapshot()
-        .into_vec()
+    let metric_snapshot = metrics.snapshot().into_vec();
+    for name in ["actor.message.bytes_accepted", "supervisor.restarts"] {
+        assert!(
+            metric_snapshot
+                .iter()
+                .any(|(key, _, _, _)| key.key().name() == name),
+            "missing expected metric {name}"
+        );
+    }
+    let selected_metrics = metric_snapshot
         .into_iter()
         .filter(|(key, _, _, _)| {
             matches!(
@@ -586,16 +605,6 @@ async fn phase_7_shutdown_and_telemetry(app: App, metrics: Snapshotter) -> Resul
             )
         })
         .collect::<Vec<_>>();
-    assert!(
-        selected_metrics
-            .iter()
-            .any(|(key, _, _, _)| { key.key().name() == "actor.message.bytes_accepted" })
-    );
-    assert!(
-        selected_metrics
-            .iter()
-            .any(|(key, _, _, _)| key.key().name() == "supervisor.restarts")
-    );
     println!(
         "telemetry evidence: latency_series={}, metrics={}, samples={}, actors={}, root_children={}, actor_stats={}",
         latency.len(),

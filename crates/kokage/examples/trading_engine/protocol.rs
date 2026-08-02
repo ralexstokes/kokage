@@ -14,6 +14,7 @@ pub const NORMAL_ORDER: Symbol = "NORMAL";
 pub const KEEP_OPEN: Symbol = "KEEP-OPEN";
 pub const STALL_FOREVER: Symbol = "STALL-FOREVER";
 pub const ACCEPT_NO_ACK: Symbol = "ACCEPT-NO-ACK";
+const FEED_CONTROL_KEY: Symbol = "__feed-control__";
 
 pub const GATEWAY_DEADLINE: Duration = Duration::from_millis(400);
 pub const OFFLOAD_DEADLINE: Duration = Duration::from_millis(450);
@@ -45,8 +46,9 @@ pub fn feed_message_size(message: &FeedMsg) -> usize {
 pub fn feed_message_key(message: &FeedMsg) -> Symbol {
     match message {
         FeedMsg::Tick(tick) => tick.symbol,
-        // A flood of data symbols cannot replace unread control traffic.
-        FeedMsg::Crash => "__feed-control__",
+        // Same-symbol latest-wins updates cannot replace unread control
+        // traffic; bounded distinct-key eviction remains mailbox policy.
+        FeedMsg::Crash => FEED_CONTROL_KEY,
     }
 }
 

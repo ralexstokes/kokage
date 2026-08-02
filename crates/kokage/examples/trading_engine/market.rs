@@ -143,6 +143,9 @@ impl Actor for MarketReconciler {
                     MonitorEventKind::Lagged { dropped } => {
                         tracing::warn!(venue, dropped, "feed lifecycle watch lagged");
                     }
+                    // `MonitorEventKind` is non-exhaustive. Started, Exited,
+                    // Removed, and Lagged are the only current variants; a
+                    // future informational variant does not change health.
                     _ => {}
                 }
                 self.rearm_staleness(ctx);

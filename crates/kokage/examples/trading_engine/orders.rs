@@ -333,11 +333,10 @@ impl Actor for OrderRouter {
                 }
             }
             RouterMsg::QueryCompleted { sweep, key, result } => {
-                if self.sweep.as_ref().map(|active| active.id) != Some(sweep)
-                    || !self
-                        .sweep
-                        .as_ref()
-                        .is_some_and(|active| active.remaining.contains(&key))
+                if !self
+                    .sweep
+                    .as_ref()
+                    .is_some_and(|active| active.id == sweep && active.remaining.contains(&key))
                 {
                     return Ok(());
                 }

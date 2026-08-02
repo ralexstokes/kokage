@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -40,37 +40,35 @@ struct ExchangeState {
 pub struct ExchangeSim(Arc<Mutex<ExchangeState>>);
 
 impl ExchangeSim {
+    fn state(&self) -> MutexGuard<'_, ExchangeState> {
+        self.0.lock().expect("exchange lock poisoned")
+    }
+
     fn open_feed_session(&self) {
-        self.0.lock().expect("exchange lock poisoned").feed_sessions += 1;
+        self.state().feed_sessions += 1;
     }
 
     fn open_gateway_session(&self) {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
-            .gateway_sessions += 1;
+        self.state().gateway_sessions += 1;
     }
 
     pub fn feed_sessions(&self) -> u64 {
-        self.0.lock().expect("exchange lock poisoned").feed_sessions
+        self.state().feed_sessions
     }
 
     pub fn gateway_sessions(&self) -> u64 {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
-            .gateway_sessions
+        self.state().gateway_sessions
     }
 
     fn note_place_attempt(&self, key: &str) -> usize {
-        let mut state = self.0.lock().expect("exchange lock poisoned");
+        let mut state = self.state();
         let attempts = state.place_attempts.entry(key.to_owned()).or_default();
         *attempts += 1;
         *attempts
     }
 
     fn accept(&self, key: &str, quantity: i64) -> bool {
-        let mut state = self.0.lock().expect("exchange lock poisoned");
+        let mut state = self.state();
         if state.orders.contains_key(key) {
             return false;
         }
@@ -87,7 +85,7 @@ impl ExchangeSim {
     }
 
     fn fill(&self, key: &str) -> bool {
-        let mut state = self.0.lock().expect("exchange lock poisoned");
+        let mut state = self.state();
         let Some(order) = state.orders.get_mut(key) else {
             return false;
         };
@@ -100,9 +98,7 @@ impl ExchangeSim {
     }
 
     fn query(&self, key: &str) -> QueryOutcome {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
+        self.state()
             .orders
             .get(key)
             .map_or(QueryOutcome::NotFound, |order| {
@@ -111,7 +107,7 @@ impl ExchangeSim {
     }
 
     fn cancel(&self, key: &str) -> CancelOutcome {
-        let mut state = self.0.lock().expect("exchange lock poisoned");
+        let mut state = self.state();
         let Some(order) = state.orders.get_mut(key) else {
             return CancelOutcome::NotFound;
         };
@@ -124,7 +120,7 @@ impl ExchangeSim {
     }
 
     fn cancel_all(&self) -> Vec<OrderKey> {
-        let mut state = self.0.lock().expect("exchange lock poisoned");
+        let mut state = self.state();
         let keys = state.open.drain().collect::<Vec<_>>();
         for key in &keys {
             state.orders.get_mut(key).expect("open order exists").status = OrderStatus::Cancelled;
@@ -133,9 +129,7 @@ impl ExchangeSim {
     }
 
     pub fn accept_count(&self, key: &str) -> usize {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
+        self.state()
             .accept_counts
             .get(key)
             .copied()
@@ -143,9 +137,7 @@ impl ExchangeSim {
     }
 
     pub fn place_attempts(&self, key: &str) -> usize {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
+        self.state()
             .place_attempts
             .get(key)
             .copied()
@@ -153,12 +145,7 @@ impl ExchangeSim {
     }
 
     pub fn status(&self, key: &str) -> Option<OrderStatus> {
-        self.0
-            .lock()
-            .expect("exchange lock poisoned")
-            .orders
-            .get(key)
-            .map(|order| order.status)
+        self.state().orders.get(key).map(|order| order.status)
     }
 }
 
