@@ -12,6 +12,8 @@ pub(crate) enum ExitKind {
     Completed,
     /// The child returned an `Err`. The string is the error's `Display` output.
     Failed(String),
+    /// The child missed its manual-readiness deadline.
+    ReadinessTimedOut(Duration),
     /// The child task panicked.
     Panicked,
     /// The child task was aborted by the supervisor.

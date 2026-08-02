@@ -494,9 +494,7 @@ async fn manual_readiness_timeout_emits_a_failed_exit_without_started() {
         child_kind(&exited),
         Some(ChildEventKind::Exited { exit, .. })
             if !exit.cancelled()
-                && exit
-                    .failure_message()
-                    .is_some_and(|message| message.contains("did not report readiness"))
+                && exit.readiness_timeout() == Some(Duration::from_millis(10))
     ));
     assert_eq!(exited.seq(), added.seq().map(|seq| seq + 1));
 

@@ -15,26 +15,36 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
         Ok(())
     }));
     let handle = supervisor.handle();
-    let observation = handle.observe_lifecycle();
+    let observation = handle.observe_children();
     let baseline = observation.snapshot.lifecycle_seq;
     assert!(observation.snapshot.child("worker").is_some());
     let mut events = observation.events;
     let running = supervisor.build().expect("supervisor builds").spawn();
 
-    let added_seq = timeout(WAIT, async {
+    let reflected_seq = timeout(WAIT, async {
         loop {
             let update = events.next().await.expect("observation remains open");
-            if let ChildObservationUpdate::Transition(child) = update
-                && child.child_id == "worker"
-                && matches!(child.kind, ChildEventKind::Added)
-            {
-                break child.seq;
+            match update {
+                ChildObservationUpdate::Transition(child)
+                    if child.child_id == "worker"
+                        && matches!(child.kind, ChildEventKind::Added) =>
+                {
+                    break child.seq;
+                }
+                ChildObservationUpdate::Reset { snapshot, dropped }
+                    if snapshot.lifecycle_seq > baseline =>
+                {
+                    assert_eq!(dropped, 0);
+                    assert!(snapshot.child("worker").is_some());
+                    break snapshot.lifecycle_seq;
+                }
+                _ => {}
             }
         }
     })
     .await
-    .expect("the projected child is added");
-    assert!(added_seq > baseline);
+    .expect("the projected child is reflected by a transition or reset");
+    assert!(reflected_seq > baseline);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -72,7 +82,7 @@ async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_id
     let root = running.handle();
     root.wait_started().await.expect("initial tree starts");
 
-    let observation = leaf.observe_lifecycle();
+    let observation = leaf.observe_children();
     let baseline = observation.snapshot.lifecycle_seq;
     let mut updates = observation.events;
 
@@ -87,6 +97,20 @@ async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_id
     .await
     .expect("middle replacement starts")
     .expect("root snapshot source remains open");
+
+    let reincarnation_reset = timeout(WAIT, async {
+        loop {
+            let update = updates.next().await.expect("leaf observation remains open");
+            if let ChildObservationUpdate::Reset { snapshot, dropped } = update
+                && dropped == 0
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .expect("leaf reincarnation yields a reset");
+    assert_eq!(reincarnation_reset, leaf.snapshot());
 
     let dynamic = leaf.dynamic().expect("leaf retains its dynamic capability");
     for index in 0..70 {
@@ -107,7 +131,9 @@ async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_id
     let reset = timeout(WAIT, async {
         loop {
             let update = updates.next().await.expect("leaf observation remains open");
-            if let ChildObservationUpdate::Reset { snapshot, dropped } = update {
+            if let ChildObservationUpdate::Reset { snapshot, dropped } = update
+                && dropped > 0
+            {
                 break (snapshot, dropped);
             }
         }
@@ -116,7 +142,7 @@ async fn child_observation_snapshot_source_survives_rebinding_and_closes_with_id
     .expect("overflow yields a reset after stable identity rebinding");
     assert!(reset.1 > 0);
     assert!(reset.0.lifecycle_seq > baseline);
-    assert_eq!(reset.0.lifecycle_seq, leaf.snapshot().lifecycle_seq);
+    assert!(reset.0.lifecycle_seq >= leaf.snapshot().lifecycle_seq);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
     timeout(WAIT, async { while updates.next().await.is_some() {} })

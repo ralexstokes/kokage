@@ -8,8 +8,9 @@ down.
 ## The owner and the references
 
 Both `Tree::spawn` and `DynamicTree::spawn` return a [`RunningTree`] — the
-unique **owner** of the whole supervision tree. The inferred root-scope type is
-`ScopeRef` for an ordered tree and `DynamicScopeRef` for a dynamic tree.
+unique **owner** of the whole supervision tree. Each spawn method fixes the
+root-scope type: `ScopeRef` for an ordered tree and `DynamicScopeRef` for a
+dynamic tree.
 Ownership here is literal Rust ownership:
 
 - Keep it alive for as long as the application should run.
@@ -29,15 +30,15 @@ actor. `running_tree.scope()` gives you a cloneable root ref for observation and
 control. `scope.subtree("press-room")` navigates down, and trees hand refs out
 even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
 means nothing. What it does carry is *control capability*: observation
-(snapshots, lifecycle watches, stats — see [Observability](observability.md))
-and targeted shutdown. A [`DynamicScopeRef`] additionally carries membership
-mutation. [`scope.shutdown_and_wait().await`] on a subtree stops just that
-compartment, whose parent then sees a completed child. [`scope.wait_stopped()`]
-only waits for a stop requested elsewhere, while [`scope.request_shutdown()`]
-requests shutdown without waiting. Nested scope references identify stable
-memberships rather than individual runtime incarnations: `wait_stopped()`
-follows parent-driven restarts and returns only when the scope identity is
-terminal, with the final incarnation's result.
+(snapshots, lifecycle event streams, stats — see
+[Observability](observability.md)) and targeted shutdown. A [`DynamicScopeRef`]
+additionally carries membership mutation. [`scope.shutdown_and_wait().await`]
+on a subtree stops just that compartment, whose parent then sees a completed
+child. [`scope.wait_stopped()`] only waits for a stop requested elsewhere,
+while [`scope.request_shutdown()`] requests shutdown without waiting. Nested
+scope references identify stable memberships rather than individual runtime
+incarnations: `wait_stopped()` follows parent-driven restarts and returns only
+when the scope identity is terminal, with the final incarnation's result.
 
 An actor must not await either waiting method on its own enclosing scope: the
 actor's exit is itself part of the condition being awaited. During shutdown,

@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{ChildSpec, ExitStatus, RestartPolicy, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{
+    ChildSpec, ExitStatus, RestartPolicy, Shutdown, Strategy, Supervisor, TaskSpec,
+};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::common;
@@ -124,9 +126,7 @@ async fn terminal_manual_readiness_timeout_aborts_startup() {
         .child("bounded")
         .and_then(|child| child.state.last_exit())
         .expect("timed-out startup records an exit");
-    assert!(
-        matches!(exit, ExitStatus::Failed { message, .. } if message.contains("did not report readiness"))
-    );
+    assert_eq!(exit.readiness_timeout(), Some(Duration::from_millis(10)));
     common::shutdown_and_wait(&handle, "terminal readiness timeout shutdown")
         .await
         .unwrap();
@@ -163,28 +163,30 @@ async fn manual_readiness_reported_at_the_deadline_wins_over_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn shutdown_cancels_far_future_manual_readiness_without_timeout_failure() {
+async fn shutdown_disarms_a_short_manual_readiness_deadline() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let task = TaskSpec::new("far-future", move |ctx| {
+    let task = TaskSpec::new("slow-stop", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             let _ = started_tx.send(());
             ctx.shutdown_token().cancelled().await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
             Ok(())
         }
     })
-    .manual_readiness(Duration::MAX);
+    .shutdown(Shutdown::graceful_for(Duration::from_millis(50)))
+    .manual_readiness(Duration::from_millis(10));
 
     let owner = Supervisor::ordered().child(task).build().unwrap().spawn();
     let handle = owner.handle();
     started_rx.recv().await.expect("task begins waiting");
-    common::shutdown_and_wait(&handle, "far-future readiness shutdown")
+    common::shutdown_and_wait(&handle, "short readiness deadline shutdown")
         .await
         .unwrap();
 
     let snapshot = handle.snapshot();
     let exit = snapshot
-        .child("far-future")
+        .child("slow-stop")
         .and_then(|child| child.state.last_exit())
         .expect("shutdown records the pre-ready exit");
     assert!(matches!(exit, ExitStatus::Completed { cancelled: true }));
