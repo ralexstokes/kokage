@@ -115,13 +115,6 @@ impl<M> ActorRef<M> {
         &self.identity
     }
 
-    pub(crate) fn current_incarnation_mailbox(&self) -> Option<MailboxRef<M>> {
-        match &*self.binding.borrow() {
-            BindingState::Bound(mailbox) => Some(mailbox.clone()),
-            BindingState::Unbound | BindingState::Terminated => None,
-        }
-    }
-
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///
@@ -503,6 +496,30 @@ impl<M> ActorRef<M> {
             match binding.borrow().clone() {
                 BindingState::Bound(mailbox) => return Ok(mailbox),
                 BindingState::Unbound => {}
+                BindingState::Terminated => return Err(()),
+            }
+
+            binding.changed().await.map_err(drop)?;
+        }
+    }
+
+    /// Waits for a bound mailbox distinct from `previous`.
+    ///
+    /// `None` establishes the first observed incarnation. Ordinary unbound
+    /// restart windows are skipped, while permanent termination ends the wait.
+    pub(crate) async fn wait_for_incarnation_after(
+        &self,
+        previous: Option<&MailboxRef<M>>,
+    ) -> Result<MailboxRef<M>, ()> {
+        let mut binding = self.binding.clone();
+        loop {
+            match binding.borrow().clone() {
+                BindingState::Bound(mailbox)
+                    if previous.is_none_or(|previous| !previous.same_channel(&mailbox)) =>
+                {
+                    return Ok(mailbox);
+                }
+                BindingState::Bound(_) | BindingState::Unbound => {}
                 BindingState::Terminated => return Err(()),
             }
 
