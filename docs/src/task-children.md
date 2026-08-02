@@ -92,7 +92,8 @@ one having *finished doing something* — the API above needs the cache warm —
 pair [`manual_readiness`] on the spec with [`mark_ready`] in the task: the
 supervisor holds back the next declared child until the mark. The supplied
 deadline bounds startup; missing it is a failure handled by the task's restart
-policy.
+policy. Once shutdown is requested, that startup deadline is disarmed and the
+task receives its configured cooperative shutdown grace.
 
 ## Supervised service policies
 

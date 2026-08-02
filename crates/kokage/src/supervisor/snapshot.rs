@@ -305,6 +305,14 @@ pub enum ExitStatus {
         /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
+    /// The child did not report manual startup readiness within its declared
+    /// bound.
+    ReadinessTimedOut {
+        /// Configured manual-readiness bound.
+        timeout: Duration,
+        /// Whether shutdown was requested for this generation.
+        cancelled: bool,
+    },
     /// The child task panicked.
     Panicked {
         /// Whether shutdown was requested for this generation.
@@ -324,6 +332,7 @@ impl ExitStatus {
         match status {
             ExitKind::Completed => Self::Completed { cancelled },
             ExitKind::Failed(message) => Self::Failed { message, cancelled },
+            ExitKind::ReadinessTimedOut(timeout) => Self::ReadinessTimedOut { timeout, cancelled },
             ExitKind::Panicked => Self::Panicked { cancelled },
             ExitKind::Aborted { after_grace } => Self::Aborted {
                 after_grace,
@@ -350,6 +359,15 @@ impl ExitStatus {
         }
     }
 
+    /// Returns the configured bound when this exit was caused by a missed
+    /// manual-readiness deadline.
+    pub fn readiness_timeout(&self) -> Option<Duration> {
+        match self {
+            Self::ReadinessTimedOut { timeout, .. } => Some(*timeout),
+            _ => None,
+        }
+    }
+
     /// Returns whether the child task panicked.
     pub fn is_panicked(&self) -> bool {
         matches!(self, Self::Panicked { .. })
@@ -372,6 +390,7 @@ impl ExitStatus {
         match self {
             Self::Completed { cancelled }
             | Self::Failed { cancelled, .. }
+            | Self::ReadinessTimedOut { cancelled, .. }
             | Self::Panicked { cancelled }
             | Self::Aborted { cancelled, .. } => *cancelled,
         }

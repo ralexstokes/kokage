@@ -1696,18 +1696,21 @@ impl SupervisorHandle {
     /// Manually gated children complete startup when they call
     /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
     /// before the deadline configured by
-    /// [`TaskSpec::manual_readiness`](crate::supervisor::TaskSpec::manual_readiness);
-    /// ordinary children are ready as soon as they are spawned. Readiness
-    /// remains latched after a child exits, and resets when that child restarts.
-    /// Nested supervisors report ready only after their own children are ready.
-    /// An empty supervisor is ready immediately only after it has bound; a
-    /// pre-bind empty supervisor waits for its first incarnation to bind.
+    /// [`TaskSpec::manual_readiness`](crate::supervisor::TaskSpec::manual_readiness).
+    /// Framework-gated children, including actor hosts and nested supervisors,
+    /// complete their own startup protocols before reporting ready and do not
+    /// necessarily carry a deadline. Ordinary children are ready as soon as
+    /// they are spawned. Readiness remains latched after a child exits, and
+    /// resets when that child restarts. An empty supervisor is ready immediately
+    /// only after it has bound; a pre-bind empty supervisor waits for its first
+    /// incarnation to bind.
     ///
     /// # Errors
     ///
-    /// Returns [`SupervisorError::StartupAborted`] if a gated child exits,
-    /// misses its readiness deadline without a permitted restart, or the
-    /// supervisor stops before readiness is reported.
+    /// Returns [`SupervisorError::StartupAborted`] if a gated child reaches a
+    /// terminal exit before readiness, including a manual-readiness timeout
+    /// that its restart policy does not replace, or the supervisor stops before
+    /// readiness is reported.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         let mut snapshots = self.snapshots_rx();
         let mut binding_revision = self.channels.binding_revision_rx();
@@ -1776,11 +1779,12 @@ impl SupervisorHandle {
     /// Returns a snapshot and self-recovering direct-child update stream.
     ///
     /// The stream filters transitions already reflected by the initial
-    /// snapshot. If its bounded queue overflows, it yields a complete reset
-    /// snapshot and resumes from that snapshot's sequence boundary. Child
-    /// sequences are local to each scope, so the stream is intentionally
-    /// restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
-    /// for the lower-level recursive history stream and custom recovery policy.
+    /// snapshot. It yields a complete reset when its bounded queue overflows or
+    /// the observed scope changes lifecycle state or incarnation, then resumes
+    /// from that snapshot's sequence boundary. Child sequences are local to
+    /// each scope, so the stream is intentionally restricted to this scope.
+    /// Use [`watch_lifecycle`](Self::watch_lifecycle) for the lower-level
+    /// recursive history stream and custom recovery policy.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
         let snapshots = self.subscribe_snapshots();
         let (snapshot, events) = self.lifecycle_hub().observe(|| snapshots.latest());

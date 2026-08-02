@@ -104,6 +104,8 @@ impl<H: Actor> RawActor for H {
     type Msg = H::Msg;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        // This must be the first operation: `ActorReadySignal` decides whether
+        // a raw actor is immediately ready after the first poll of `run`.
         ctx.defer_automatic_readiness();
         self.on_start(&mut Context::new(&mut ctx)).await?;
         ctx.mark_ready();
