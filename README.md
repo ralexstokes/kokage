@@ -94,8 +94,10 @@ immediately.
 `running_tree.scope()` returns a cheap, cloneable, non-owning reference, parallel to
 an `ActorRef`. `ScopeRef` is the common observation and control surface:
 snapshots, lifecycle observation, subtree traversal, and either non-waiting
-`request_shutdown()` or waiting `shutdown_and_wait().await`. A scope that was
-stopped elsewhere can be joined with `wait_stopped().await`. Dynamic scopes
+`request_shutdown()` or waiting `shutdown_and_wait().await`. A stable scope
+identity that was stopped elsewhere can be joined with `wait_stopped().await`;
+the wait follows parent-driven reincarnations until the scope is terminal.
+Dynamic scopes
 return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
 `add_task`, `spawn_once`, exact-handle `remove`, and the `remove_named`
 escape hatch. A scope found through untyped tree traversal can request that

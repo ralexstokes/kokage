@@ -163,12 +163,15 @@ enum StartupSnapshot {
 
 /// What [`SupervisorHandle::wait`] should do for a non-root identity.
 enum WaitTarget {
-    /// An incarnation is bound; await its completion channel.
-    Bound(DoneReceiver),
+    /// An incarnation is bound. Wait for a binding transition rather than
+    /// returning its incarnation-local result: the stable scope identity may
+    /// be rebound by its parent's restart policy.
+    Bound,
     /// Nothing has ever bound, so the scope has not started yet. The caller
     /// waits for a first incarnation rather than reporting a failure.
     NeverBound,
-    /// A previous incarnation ended and no replacement has bound yet.
+    /// A previous incarnation ended and the parent has not yet either bound a
+    /// replacement or declared the stable identity terminal.
     BetweenIncarnations,
     /// No incarnation can ever run again. A previously bound identity retains
     /// its final completion channel for late waiters.
@@ -644,8 +647,8 @@ impl StableSupervisorChannels {
         let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             WaitTarget::Terminal(binding.last_done_rx.clone())
-        } else if let Some(current) = binding.current.as_ref() {
-            WaitTarget::Bound(current.done_rx.clone())
+        } else if binding.current.is_some() {
+            WaitTarget::Bound
         } else if binding.bound_once {
             WaitTarget::BetweenIncarnations
         } else {
@@ -1206,6 +1209,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_wait_follows_restart_gaps_until_the_identity_is_terminal() {
+        use std::time::Duration;
+
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
+        let handle = channels.handle();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+        let first_done_tx = initial.done_tx;
+        let first = channels
+            .bind(
+                0,
+                initial.shutdown_tx,
+                initial.command_tx,
+                initial.done_rx,
+                snapshot.clone(),
+                Vec::new(),
+            )
+            .expect("first incarnation binds");
+
+        let mut waiting = Box::pin(handle.wait());
+        first_done_tx
+            .send(Some(Err(SupervisorError::RestartIntensityExceeded)))
+            .expect("first completion is observed");
+        drop(first);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "an incarnation exit must not complete an identity-scoped wait"
+        );
+
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (done_tx, done_rx) = watch::channel(None);
+        let second = channels
+            .bind(1, shutdown_tx, command_tx, done_rx, snapshot, Vec::new())
+            .expect("replacement incarnation binds");
+        done_tx
+            .send(Some(Ok(())))
+            .expect("replacement completion is observed");
+        drop(second);
+        channels.terminal();
+
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("wait follows the replacement to terminality")
+            .expect("the final incarnation completed successfully");
+    }
+
+    #[tokio::test]
+    async fn terminalization_of_a_live_binding_retains_its_later_result() {
+        use std::time::Duration;
+
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
+        let handle = channels.handle();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+        let done_tx = initial.done_tx;
+        let _bound = channels
+            .bind(
+                0,
+                initial.shutdown_tx,
+                initial.command_tx,
+                initial.done_rx,
+                snapshot,
+                Vec::new(),
+            )
+            .expect("live incarnation binds");
+
+        channels.terminal();
+        let mut waiting = Box::pin(handle.wait());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err(),
+            "terminalization waits for the live incarnation to publish its result"
+        );
+        done_tx
+            .send(Some(Err(SupervisorError::RestartIntensityExceeded)))
+            .expect("terminal completion is observed");
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("terminal wait resolves"),
+            Err(SupervisorError::RestartIntensityExceeded)
+        );
+    }
+
+    #[tokio::test]
     async fn cancelled_add_terminalizes_when_the_queued_supervisor_is_dropped() {
         let child = crate::supervisor::Supervisor::dynamic();
         let retained = child.handle();
@@ -1622,12 +1729,14 @@ impl SupervisorHandle {
         }
     }
 
-    /// Waits for the supervisor to stop.
+    /// Waits for the stable supervisor identity to stop.
     ///
     /// The first caller to `wait` joins the underlying Tokio task. Subsequent
     /// callers (including concurrent ones from cloned handles) receive the
-    /// same result via a shared watch channel. A successful return means the
-    /// runtime has finished draining and joining supervised child tasks.
+    /// same result via a shared watch channel. For a nested identity, waits
+    /// follow parent-driven reincarnations and resolve only once that identity
+    /// cannot be restarted again. A successful return means the final runtime
+    /// incarnation has finished draining and joining supervised child tasks.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         let mut binding_revision = self.channels.binding_revision_rx();
         let (mut done_rx, join) = loop {
@@ -1651,7 +1760,13 @@ impl SupervisorHandle {
                     })?;
                 }
                 RootExtraSlot::NotRoot => match self.channels.wait_target() {
-                    WaitTarget::Bound(done_rx) => break (done_rx, None),
+                    WaitTarget::Bound => {
+                        binding_revision.changed().await.map_err(|_| {
+                            SupervisorError::Internal(
+                                "supervisor binding channel closed while running".to_owned(),
+                            )
+                        })?;
+                    }
                     // A reserved identity that has never bound has not
                     // started, so waiting for it to stop means waiting for it
                     // to run first. This mirrors `wait_started`, which also
@@ -1664,9 +1779,11 @@ impl SupervisorHandle {
                         })?;
                     }
                     WaitTarget::BetweenIncarnations => {
-                        return Err(SupervisorError::Internal(
-                            "supervisor incarnation is unavailable".to_owned(),
-                        ));
+                        binding_revision.changed().await.map_err(|_| {
+                            SupervisorError::Internal(
+                                "supervisor binding channel closed between incarnations".to_owned(),
+                            )
+                        })?;
                     }
                     WaitTarget::Terminal(Some(done_rx)) => break (done_rx, None),
                     WaitTarget::Terminal(None) => {

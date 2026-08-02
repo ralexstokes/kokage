@@ -642,11 +642,20 @@ impl<S> RunningTree<S> {
     }
 
     /// Requests graceful shutdown and waits for completion, consuming the owner.
+    ///
+    /// This owner method keeps the concise `shutdown` name because consuming
+    /// the [`RunningTree`] makes the wait explicit. The cloneable, non-owning
+    /// [`ScopeRef`] instead uses [`ScopeRef::shutdown_and_wait`] to distinguish
+    /// waiting from [`ScopeRef::request_shutdown`].
     pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
     /// Waits for the running tree to stop, consuming the owner.
+    ///
+    /// Unlike a nested [`ScopeRef::wait_stopped`] that follows a stable scope
+    /// identity across parent-driven restarts, a `RunningTree` owns one root
+    /// runtime and cannot be reincarnated by a parent.
     pub async fn wait(self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
@@ -808,7 +817,13 @@ impl ScopeRef {
         )
     }
 
-    /// Waits for this scope to stop without requesting shutdown.
+    /// Waits for this stable scope identity to stop without requesting shutdown.
+    ///
+    /// A nested scope can have multiple runtime incarnations when its parent
+    /// restarts it. This wait follows those restart gaps and resolves only
+    /// when the parent determines that the identity cannot be restarted again.
+    /// It returns the final incarnation's completion result. Root scopes have
+    /// only one incarnation.
     ///
     /// Awaiting this from an actor callback in the same scope deadlocks because
     /// the actor's own exit is part of the wait condition. If shutdown is

@@ -34,7 +34,10 @@ and targeted shutdown. A [`DynamicScopeRef`] additionally carries membership
 mutation. [`scope.shutdown_and_wait().await`] on a subtree stops just that
 compartment, whose parent then sees a completed child. [`scope.wait_stopped()`]
 only waits for a stop requested elsewhere, while [`scope.request_shutdown()`]
-requests shutdown without waiting.
+requests shutdown without waiting. Nested scope references identify stable
+memberships rather than individual runtime incarnations: `wait_stopped()`
+follows parent-driven restarts and returns only when the scope identity is
+terminal, with the final incarnation's result.
 
 An actor must not await either waiting method on its own enclosing scope: the
 actor's exit is itself part of the condition being awaited. During shutdown,
@@ -44,7 +47,8 @@ blocking the callback, but still cannot deliver the result: the actor must exit
 before the wait resolves, and its offloads are cancelled while it stops. Use
 [`ctx.request_scope_shutdown()`] inside an actor and observe the scope's
 completion from outside it. Waiting on a different scope is safe when that
-scope can stop independently of the actor.
+scope can stop independently of the actor. The same non-waiting helper is
+available on [`RawContext`] and [`StopContext`].
 
 ## Shutdown policies: how children stop
 
@@ -188,3 +192,5 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 [`scope.wait_stopped()`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.wait_stopped
 [`scope.request_shutdown()`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.request_shutdown
 [`ctx.request_scope_shutdown()`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.request_scope_shutdown
+[`RawContext`]: https://stokes.io/kokage/api/kokage/raw/struct.RawContext.html
+[`StopContext`]: https://stokes.io/kokage/api/kokage/struct.StopContext.html

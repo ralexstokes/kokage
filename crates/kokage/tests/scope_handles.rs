@@ -10,11 +10,14 @@ use std::{
 
 use kokage::{
     Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
-    ExitResult, RestartPolicy, ScopeRef, StopContext, Strategy, SubtreeSpec, SupervisorError,
-    TaskSpec, Tree,
+    ExitResult, RestartPolicy, ScopeRef, Shutdown, StopContext, Strategy, SubtreeSpec,
+    SupervisorError, TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    sync::{Notify, mpsc},
+    time::timeout,
+};
 
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -316,9 +319,8 @@ async fn nested_scope_wait_stopped_joins_after_shutdown_completed_elsewhere() {
 
 #[tokio::test]
 async fn nested_scope_late_waiters_receive_the_terminal_error() {
-    let nested_tree =
+    let mut nested_tree =
         Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
-    let mut nested_tree = nested_tree;
     nested_tree.add_task("worker", |_| async {
         Err(std::io::Error::other("worker failed").into())
     });
@@ -341,6 +343,97 @@ async fn nested_scope_late_waiters_receive_the_terminal_error() {
         "subsequent waiters receive the same terminal result"
     );
     running_tree.shutdown().await.expect("root stops");
+}
+
+#[tokio::test]
+async fn nested_scope_wait_stopped_follows_parent_driven_restarts() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let fail_first = Arc::new(Notify::new());
+    let second_started = Arc::new(Notify::new());
+    let mut nested_tree =
+        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    nested_tree.add_task("worker", {
+        let attempts = Arc::clone(&attempts);
+        let fail_first = Arc::clone(&fail_first);
+        let second_started = Arc::clone(&second_started);
+        move |ctx| {
+            let attempts = Arc::clone(&attempts);
+            let fail_first = Arc::clone(&fail_first);
+            let second_started = Arc::clone(&second_started);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    fail_first.notified().await;
+                    return Err(std::io::Error::other("first incarnation failed").into());
+                }
+                second_started.notify_one();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    });
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree(
+        "nested",
+        SubtreeSpec::from(nested_tree)
+            .restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
+    );
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    nested
+        .wait_started()
+        .await
+        .expect("first incarnation starts");
+
+    let waiting_scope = nested.clone();
+    let mut waiting = tokio::spawn(async move { waiting_scope.wait_stopped().await });
+    fail_first.notify_one();
+    timeout(WAIT, second_started.notified())
+        .await
+        .expect("parent restarts the nested scope");
+    assert!(
+        timeout(Duration::from_millis(20), &mut waiting)
+            .await
+            .is_err(),
+        "wait_stopped must not return for a restartable incarnation exit"
+    );
+
+    nested.request_shutdown();
+    timeout(WAIT, waiting)
+        .await
+        .expect("identity-scoped wait remains bounded")
+        .expect("wait task joins")
+        .expect("the final incarnation stops cleanly");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    running_tree.shutdown().await.expect("root stops");
+}
+
+#[tokio::test]
+async fn nested_scope_late_waiter_receives_hard_abort_timeout() {
+    let mut nested_tree = Tree::new();
+    nested_tree.add_task_spec(
+        TaskSpec::new("stubborn", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
+    );
+    let mut tree = Tree::new();
+    let nested = tree.add_subtree(
+        "nested",
+        SubtreeSpec::from(nested_tree).shutdown(Shutdown::graceful_for(Duration::from_millis(20))),
+    );
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    nested.wait_started().await.expect("nested scope starts");
+
+    assert_eq!(
+        running_tree.shutdown().await,
+        Err(SupervisorError::ShutdownTimedOut("nested".to_owned()))
+    );
+    assert_eq!(
+        nested.wait_stopped().await,
+        Err(SupervisorError::ShutdownTimedOut("nested".to_owned())),
+        "late waiters receive the wrapper result rather than a plumbing error"
+    );
 }
 
 #[tokio::test]
@@ -778,7 +871,7 @@ impl Actor for StopScopeProbe {
         // fire-and-forget control are what a scope handle is good for here.
         let scope: ScopeRef = ctx.scope();
         let visible = scope.snapshot().child("probe").is_some();
-        scope.request_shutdown();
+        ctx.request_scope_shutdown();
         self.observed
             .send((scope.kind(), visible))
             .expect("test receiver open");

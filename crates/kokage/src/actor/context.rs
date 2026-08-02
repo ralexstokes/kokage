@@ -1182,13 +1182,25 @@ impl<M: Send + 'static> RawContext<M> {
     /// Returns this actor's enclosing scope.
     ///
     /// Awaiting scope or child lifecycle progress can deadlock when that
-    /// progress depends on this actor returning from its current work.
+    /// progress depends on this actor returning from its current work. Use
+    /// [`request_scope_shutdown`](Self::request_scope_shutdown) to request
+    /// shutdown of this actor's own scope without waiting.
     /// Actors hosted directly outside a supervisor receive a terminal handle
     /// here. Its control operations return
     /// [`ControlError::Unavailable`](crate::ControlError::Unavailable) and its
     /// observation streams are closed.
     pub fn scope(&self) -> ScopeRef {
         self.supervisor.clone()
+    }
+
+    /// Requests graceful shutdown of this actor's enclosing scope.
+    ///
+    /// The request does not wait for shutdown to finish, so it cannot deadlock
+    /// on this actor's own exit. Observe completion from outside the scope. If
+    /// this actor is hosted directly without a supervisor, its terminal scope
+    /// handle makes this request a no-op.
+    pub fn request_scope_shutdown(&self) {
+        self.scope().request_shutdown();
     }
 
     /// Returns a sender targeting this actor's own mailbox.
@@ -1627,9 +1639,10 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// [`ScopeRef::shutdown_and_wait`](crate::ScopeRef::shutdown_and_wait): an
     /// actor cannot await its own enclosing scope's termination because its
     /// exit is part of that termination condition. Observe completion from
-    /// outside the scope instead.
+    /// outside the scope instead. If this actor is hosted directly without a
+    /// supervisor, its terminal scope handle makes this request a no-op.
     pub fn request_scope_shutdown(&self) {
-        self.cx.scope().request_shutdown();
+        self.cx.request_scope_shutdown();
     }
 
     /// Runs blocking work on Tokio's blocking pool.
@@ -1887,10 +1900,22 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     /// Cooperative removal detaches this child only after this hook returns,
     /// so awaiting anything that depends on that detach — scope termination,
     /// this child's completion, its own removal — resolves only once the
-    /// shutdown grace period expires. Request fire-and-forget control here and
-    /// observe the outcome from outside the scope.
+    /// shutdown grace period expires. Use
+    /// [`request_scope_shutdown`](Self::request_scope_shutdown) for
+    /// fire-and-forget control here and observe the outcome from outside the
+    /// scope.
     pub fn scope(&self) -> ScopeRef {
         self.cx.scope()
+    }
+
+    /// Requests graceful shutdown of this actor's enclosing scope.
+    ///
+    /// The request does not wait for shutdown to finish, so the stop hook can
+    /// return and allow teardown to proceed. Observe completion from outside
+    /// the scope. If this actor is hosted directly without a supervisor, its
+    /// terminal scope handle makes this request a no-op.
+    pub fn request_scope_shutdown(&self) {
+        self.cx.request_scope_shutdown();
     }
 }
 

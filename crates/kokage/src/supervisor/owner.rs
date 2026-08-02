@@ -377,6 +377,12 @@ impl Supervisor {
         };
         nested_task_on_drop.disarm();
 
+        // The inner task normally publishes its own result. When this wrapper
+        // hard-aborts that task, it instead owns the synthesized timeout (and
+        // likewise any join failure), so publish the wrapper's final result
+        // before retiring the binding. Late stable-identity waiters then see
+        // the same outcome as the parent that joined this child.
+        let _ = done_tx.send(Some(result.clone()));
         drop(binding);
         result.map_err(|error| Box::new(error) as crate::supervisor::BoxError)
     }
