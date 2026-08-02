@@ -1,4 +1,4 @@
-use std::{io, net::SocketAddr, time::Duration};
+use std::{fmt, io, net::SocketAddr, time::Duration};
 
 use kokage::{
     ActorRef, DynamicScopeRef, ExitResult, OneShotActorSpec, RestartPolicy, SendErrorKind,
@@ -11,9 +11,95 @@ use tokio::{
     sync::watch,
 };
 
-use crate::model::{Evidence, TelemetryEvent};
+use crate::model::{Evidence, IngressOutcome, MalformedKind, TelemetryEvent};
 
 const MAX_FRAME_BYTES: usize = 4 * 1024;
+
+#[derive(Debug)]
+enum ReadEvent {
+    CleanEof,
+    Event(TelemetryEvent),
+}
+
+#[derive(Debug)]
+enum ProtocolError {
+    PartialHeader { received: usize },
+    TruncatedBody { expected: usize, received: usize },
+    OversizedLength { declared: usize, maximum: usize },
+    InvalidJson(serde_json::Error),
+}
+
+impl ProtocolError {
+    fn kind(&self) -> MalformedKind {
+        match self {
+            Self::PartialHeader { .. } => MalformedKind::PartialHeader,
+            Self::TruncatedBody { .. } => MalformedKind::TruncatedBody,
+            Self::OversizedLength { .. } => MalformedKind::OversizedLength,
+            Self::InvalidJson(_) => MalformedKind::InvalidJson,
+        }
+    }
+}
+
+impl fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PartialHeader { received } => {
+                write!(
+                    formatter,
+                    "partial frame header: received {received} of 4 bytes"
+                )
+            }
+            Self::TruncatedBody { expected, received } => write!(
+                formatter,
+                "truncated frame body: received {received} of {expected} bytes"
+            ),
+            Self::OversizedLength { declared, maximum } => write!(
+                formatter,
+                "frame length {declared} exceeds maximum {maximum}"
+            ),
+            Self::InvalidJson(error) => write!(formatter, "invalid JSON frame: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidJson(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ReadEventError {
+    Protocol(ProtocolError),
+    Transport(io::Error),
+}
+
+impl fmt::Display for ReadEventError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Protocol(error) => error.fmt(formatter),
+            Self::Transport(error) => write!(formatter, "connection transport error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ReadEventError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Protocol(error) => Some(error),
+            Self::Transport(error) => Some(error),
+        }
+    }
+}
+
+impl From<io::Error> for ReadEventError {
+    fn from(error: io::Error) -> Self {
+        Self::Transport(error)
+    }
+}
 
 pub enum ConnectionMsg {}
 
@@ -43,23 +129,26 @@ impl RawActor for Connection {
                     None => return Ok(()),
                     Some(never) => match never {},
                 },
-                frame = read_frame(&mut self.stream) => {
-                    let Some(frame) = frame? else {
-                        self.evidence.clean_disconnect();
-                        return Ok(());
+                read = read_event(&mut self.stream) => {
+                    let event = match read {
+                        Ok(ReadEvent::CleanEof) => {
+                            self.evidence.clean_disconnect();
+                            return Ok(());
+                        }
+                        Ok(ReadEvent::Event(event)) => event,
+                        Err(ReadEventError::Protocol(error)) => {
+                            self.evidence.malformed_client(error.kind());
+                            return Err(Box::new(error));
+                        }
+                        Err(ReadEventError::Transport(error)) => return Err(error.into()),
                     };
-                    let event = serde_json::from_slice(&frame).map_err(|error| {
-                        self.evidence.malformed_client();
-                        io::Error::new(io::ErrorKind::InvalidData, error)
-                    })?;
-                    self.evidence.valid_frame();
                     match self.intake.try_send(event) {
-                        Ok(()) => self.evidence.frame_accepted(),
+                        Ok(()) => self.evidence.valid_frame(IngressOutcome::Accepted),
                         Err(error) if error.kind == SendErrorKind::Full => {
-                            self.evidence.frame_shed_full();
+                            self.evidence.valid_frame(IngressOutcome::ShedFull);
                         }
                         Err(error) => {
-                            self.evidence.degraded_connection();
+                            self.evidence.valid_frame(IngressOutcome::Degraded);
                             return Err(error.into_boxed());
                         }
                     }
@@ -92,6 +181,7 @@ pub fn listener(
                     _ = ctx.shutdown_token().cancelled() => return Ok(()),
                     accepted = listener.accept() => {
                         let (stream, _) = accepted?;
+                        evidence.connection_accepted();
                         stream.set_nodelay(true)?;
                         let id = next_connection.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         connections.spawn_actor_once_spec(
@@ -102,7 +192,6 @@ pub fn listener(
                             })
                             .shutdown(Shutdown::graceful_for(Duration::from_millis(250))),
                         ).await?;
-                        evidence.connection_accepted();
                     }
                 }
             }
@@ -112,23 +201,47 @@ pub fn listener(
     .restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
 }
 
-async fn read_frame(stream: &mut TcpStream) -> io::Result<Option<Vec<u8>>> {
+async fn read_event(stream: &mut TcpStream) -> Result<ReadEvent, ReadEventError> {
     let mut header = [0_u8; 4];
-    match stream.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error),
+    let header_bytes = read_up_to(stream, &mut header).await?;
+    if header_bytes == 0 {
+        return Ok(ReadEvent::CleanEof);
+    }
+    if header_bytes < header.len() {
+        return Err(ReadEventError::Protocol(ProtocolError::PartialHeader {
+            received: header_bytes,
+        }));
     }
     let length = u32::from_be_bytes(header) as usize;
     if length > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("frame length {length} exceeds {MAX_FRAME_BYTES}"),
-        ));
+        return Err(ReadEventError::Protocol(ProtocolError::OversizedLength {
+            declared: length,
+            maximum: MAX_FRAME_BYTES,
+        }));
     }
     let mut frame = vec![0; length];
-    stream.read_exact(&mut frame).await?;
-    Ok(Some(frame))
+    let body_bytes = read_up_to(stream, &mut frame).await?;
+    if body_bytes < frame.len() {
+        return Err(ReadEventError::Protocol(ProtocolError::TruncatedBody {
+            expected: frame.len(),
+            received: body_bytes,
+        }));
+    }
+    let event = serde_json::from_slice(&frame)
+        .map_err(|error| ReadEventError::Protocol(ProtocolError::InvalidJson(error)))?;
+    Ok(ReadEvent::Event(event))
+}
+
+async fn read_up_to(stream: &mut TcpStream, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let read = stream.read(&mut buffer[filled..]).await?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
 }
 
 pub async fn write_event(stream: &mut TcpStream, event: &TelemetryEvent) -> io::Result<()> {
@@ -136,8 +249,23 @@ pub async fn write_event(stream: &mut TcpStream, event: &TelemetryEvent) -> io::
     write_frame(stream, &frame).await
 }
 
-pub async fn write_malformed(stream: &mut TcpStream) -> io::Result<()> {
-    write_frame(stream, br#"{"id": definitely-not-json}"#).await
+pub async fn write_malformed(stream: &mut TcpStream, kind: MalformedKind) -> io::Result<()> {
+    match kind {
+        MalformedKind::PartialHeader => stream.write_all(&[0, 0]).await?,
+        MalformedKind::TruncatedBody => {
+            stream.write_all(&8_u32.to_be_bytes()).await?;
+            stream.write_all(b"bad").await?;
+        }
+        MalformedKind::OversizedLength => {
+            let oversized = u32::try_from(MAX_FRAME_BYTES + 1)
+                .expect("maximum scripted frame size fits in u32");
+            stream.write_all(&oversized.to_be_bytes()).await?;
+        }
+        MalformedKind::InvalidJson => {
+            return write_frame(stream, br#"{"id": definitely-not-json}"#).await;
+        }
+    }
+    stream.flush().await
 }
 
 async fn write_frame(stream: &mut TcpStream, frame: &[u8]) -> io::Result<()> {
@@ -146,4 +274,68 @@ async fn write_frame(stream: &mut TcpStream, frame: &[u8]) -> io::Result<()> {
     stream.write_all(&length.to_be_bytes()).await?;
     stream.write_all(frame).await?;
     stream.flush().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn read_loopback(bytes: &[u8]) -> Result<ReadEvent, ReadEventError> {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("loopback listener binds");
+        let address = listener.local_addr().expect("listener has an address");
+        let (client, accepted) = tokio::join!(TcpStream::connect(address), listener.accept());
+        let mut client = client.expect("client connects");
+        let mut server = accepted.expect("server accepts").0;
+        client.write_all(bytes).await.expect("script bytes write");
+        client.shutdown().await.expect("client write half closes");
+        read_event(&mut server).await
+    }
+
+    fn framed(payload: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(payload.len())
+            .expect("test payload length fits in u32")
+            .to_be_bytes()
+            .to_vec();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    #[tokio::test]
+    async fn loopback_read_distinguishes_clean_eof_and_protocol_errors() {
+        assert!(matches!(read_loopback(&[]).await, Ok(ReadEvent::CleanEof)));
+        assert!(matches!(
+            read_loopback(&[0, 0]).await,
+            Err(ReadEventError::Protocol(ProtocolError::PartialHeader {
+                received: 2
+            }))
+        ));
+
+        let mut truncated = 8_u32.to_be_bytes().to_vec();
+        truncated.extend_from_slice(b"bad");
+        assert!(matches!(
+            read_loopback(&truncated).await,
+            Err(ReadEventError::Protocol(ProtocolError::TruncatedBody {
+                expected: 8,
+                received: 3
+            }))
+        ));
+
+        let oversized = u32::try_from(MAX_FRAME_BYTES + 1)
+            .expect("maximum test frame size fits in u32")
+            .to_be_bytes();
+        assert!(matches!(
+            read_loopback(&oversized).await,
+            Err(ReadEventError::Protocol(ProtocolError::OversizedLength {
+                declared,
+                maximum: MAX_FRAME_BYTES,
+            })) if declared == MAX_FRAME_BYTES + 1
+        ));
+
+        assert!(matches!(
+            read_loopback(&framed(br#"{"id": definitely-not-json}"#)).await,
+            Err(ReadEventError::Protocol(ProtocolError::InvalidJson(_)))
+        ));
+    }
 }

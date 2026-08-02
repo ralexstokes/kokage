@@ -12,9 +12,10 @@
 //!
 //! Scripted clients send length-prefixed JSON over real TCP. The script holds
 //! the sink, fills every FIFO from the far end back to ingress, and then
-//! asserts exact `ActorStats` while `try_send` sheds only `Full` frames. A bad
-//! client fails only its connection actor. Run with `--console` to keep the
-//! verified tree attached to `kokage-console` until Ctrl-C.
+//! asserts exact `ActorStats` while `try_send` sheds only `Full` frames.
+//! Malformed clients fail only their own connection actors. Run with
+//! `--console` to keep the verified tree attached to `kokage-console` until
+//! Ctrl-C.
 
 mod model;
 mod network;
@@ -34,7 +35,7 @@ use kokage::{
 use kokage_console::{ConsoleBuilder, ConsoleHandle};
 use tokio::{net::TcpStream, sync::watch, time::timeout};
 
-use model::{Evidence, GatewayReport, PipelineGate, TelemetryEvent};
+use model::{Evidence, GatewayReport, MalformedKind, PipelineGate, TelemetryEvent};
 use pipeline::{BatchMsg, Batcher, Enricher, ScriptedSink, ShipBatch};
 
 const ACCEPTANCE_BOUND: Duration = Duration::from_secs(5);
@@ -133,6 +134,10 @@ async fn main() -> Result<(), AnyError> {
         .skip(1)
         .any(|argument| argument == "--console");
 
+    run_acceptance(console_enabled).await
+}
+
+async fn run_acceptance(console_enabled: bool) -> Result<(), AnyError> {
     let mut gateway = assemble()?;
     let mut lifecycle = gateway
         .lifecycle
@@ -245,16 +250,19 @@ async fn main() -> Result<(), AnyError> {
     .await?;
     drop(flood);
 
-    let mut malformed = TcpStream::connect(address).await?;
-    network::write_malformed(&mut malformed).await?;
-    drop(malformed);
-    timeout(
-        ACCEPTANCE_BOUND,
-        gateway
-            .evidence
-            .wait_for(|report| report.malformed_clients == 1),
-    )
-    .await?;
+    for (index, kind) in MalformedKind::ALL.into_iter().enumerate() {
+        let mut malformed = TcpStream::connect(address).await?;
+        network::write_malformed(&mut malformed, kind).await?;
+        drop(malformed);
+        let expected = u64::try_from(index + 1).expect("scripted malformed count fits in u64");
+        timeout(
+            ACCEPTANCE_BOUND,
+            gateway
+                .evidence
+                .wait_for(|report| report.malformed_clients == expected),
+        )
+        .await?;
+    }
 
     let mut healthy = TcpStream::connect(address).await?;
     for id in 100..=101 {
@@ -269,7 +277,7 @@ async fn main() -> Result<(), AnyError> {
     )
     .await?;
     wait_for_empty_scope(&gateway.connections).await?;
-    println!("PHASE 3 OK — malformed client failed alone; healthy peer still shipped");
+    println!("PHASE 3 OK — malformed clients failed alone; healthy peer still shipped");
 
     let final_report = gateway.evidence.snapshot();
     assert_report(&final_report);
@@ -424,6 +432,11 @@ async fn wait_for_empty_scope(scope: &DynamicScopeRef) -> Result<(), AnyError> {
 }
 
 fn assert_overload_stats(gateway: &Gateway, report: &GatewayReport) {
+    assert_eq!(
+        report.frames_accepted + report.frames_shed_full + report.degraded_connections,
+        report.valid_frames,
+        "every valid frame has a published ingress outcome: {report:?}"
+    );
     assert_eq!(report.frames_accepted, 13, "{report:?}");
     assert_eq!(report.frames_shed_full, 8, "{report:?}");
     assert_eq!(report.degraded_connections, 0, "{report:?}");
@@ -449,9 +462,13 @@ fn assert_overload_stats(gateway: &Gateway, report: &GatewayReport) {
 }
 
 fn assert_report(report: &GatewayReport) {
-    assert_eq!(report.connections_accepted, 3, "{report:?}");
+    assert_eq!(report.connections_accepted, 6, "{report:?}");
     assert_eq!(report.clean_disconnects, 2, "{report:?}");
-    assert_eq!(report.malformed_clients, 1, "{report:?}");
+    assert_eq!(report.malformed_clients, 4, "{report:?}");
+    assert_eq!(report.malformed_partial_headers, 1, "{report:?}");
+    assert_eq!(report.malformed_truncated_bodies, 1, "{report:?}");
+    assert_eq!(report.malformed_oversized_lengths, 1, "{report:?}");
+    assert_eq!(report.malformed_json_frames, 1, "{report:?}");
     assert_eq!(report.valid_frames, 23, "{report:?}");
     assert_eq!(report.frames_accepted, 15, "{report:?}");
     assert_eq!(report.frames_shed_full, 8, "{report:?}");
@@ -483,7 +500,30 @@ fn assert_lifecycle(report: &LifecycleReport) {
         report.sink_restart_delays[1] >= report.sink_restart_delays[0],
         "{report:?}"
     );
-    assert_eq!(report.connection_failed_exits, 1, "{report:?}");
-    assert_eq!(report.connection_removals, 3, "{report:?}");
+    assert_eq!(report.connection_failed_exits, 4, "{report:?}");
+    assert_eq!(report.connection_removals, 6, "{report:?}");
     assert!(report.sink_failed_exits < SINK_RESTART_LIMIT as u64);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_concurrency_acceptance_preserves_ingress_partition() {
+        const STRESS_RUNS: usize = 25;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(32)
+            .enable_all()
+            .build()
+            .expect("stress runtime builds");
+        runtime.block_on(async {
+            for _ in 0..STRESS_RUNS {
+                run_acceptance(false)
+                    .await
+                    .expect("high-concurrency acceptance passes");
+            }
+        });
+    }
 }

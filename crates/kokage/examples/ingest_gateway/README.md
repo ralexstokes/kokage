@@ -21,20 +21,21 @@ The script asserts:
 
 - a supervised listener owns the loopback socket and creates one one-shot raw
   actor per accepted `TcpStream` in a dynamic connection scope;
-- one malformed JSON frame fails and removes only its connection actor, while
-  a later healthy client still reaches the sink;
+- partial-header, truncated-body, oversized-length, and invalid-JSON clients
+  each fail and remove only their own connection actor, while a later healthy
+  client still reaches the sink;
 - the sink's first two connection attempts fail and restart beneath equal-
   jitter exponential delays that remain inside the configured intensity
   budget and expected delay intervals;
 - holding the sink fills the shipper, batcher, and enricher FIFO mailboxes in
   order, propagating backpressure to the edge;
 - ingress deliberately sheds only `SendErrorKind::Full`; the application-owned
-  report distinguishes those replaceable overload losses from pipeline
-  unavailability, which degrades (fails) a connection instead;
+  report distinguishes intentional overload loss of non-replaceable events
+  from pipeline unavailability, which degrades (fails) a connection instead;
 - live `ActorStats` exactly match each full mailbox's accepted, received,
   rejected, depth, and capacity values; and
-- lifecycle events account for the two sink failures/restarts, the isolated
-  malformed-client failure, and all three connection removals without lag.
+- lifecycle events account for the two sink failures/restarts, four isolated
+  malformed-client failures, and all six connection removals without lag.
 
 ## API friction and findings
 
@@ -59,6 +60,12 @@ membership removal is the default.
   connection actors correctly accumulate in the enricher's accepted/rejected
   counters. Dynamic connection stats disappear when their membership is
   removed, while the application report retains end-to-end evidence.
+- The ingress report publishes each valid frame and its terminal `try_send`
+  outcome in one update. Waiting for the valid-frame count therefore also
+  orders the exact `ActorStats` assertions after the corresponding send.
+- Length-prefixed input needs to distinguish clean EOF before a frame from a
+  partial header, truncated body, oversized declaration, and invalid JSON.
+  Each protocol error is typed and counted once before its connection fails.
 - Equal jitter is deliberately random. Deterministic acceptance should assert
   each lifecycle-reported delay's documented interval and generation order,
   not a specific duration.
@@ -72,3 +79,12 @@ membership removal is the default.
   fails so the client can reconnect.
 - Partial-batch flush remains application protocol, appropriately expressed as
   a bounded actor call before shutdown.
+
+### Residual coverage
+
+The scripted sink failures happen during readiness, before ingress begins.
+This makes jittered backoff load-bearing for tree startup and exercises restart
+intensity and lifecycle evidence without making delivery semantics ambiguous.
+Failure after a sink has accepted an in-flight batch remains deliberately out
+of scope: demonstrating that case needs an explicit acknowledgement/replay
+protocol rather than implying that mailbox restart alone preserves delivery.

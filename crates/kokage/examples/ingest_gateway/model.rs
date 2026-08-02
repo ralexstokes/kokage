@@ -31,6 +31,10 @@ pub struct GatewayReport {
     pub connections_accepted: u64,
     pub clean_disconnects: u64,
     pub malformed_clients: u64,
+    pub malformed_partial_headers: u64,
+    pub malformed_truncated_bodies: u64,
+    pub malformed_oversized_lengths: u64,
+    pub malformed_json_frames: u64,
     pub valid_frames: u64,
     pub frames_accepted: u64,
     pub frames_shed_full: u64,
@@ -38,6 +42,30 @@ pub struct GatewayReport {
     pub sink_connect_attempts: u64,
     pub shipped_batches: u64,
     pub shipped_ids: Vec<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MalformedKind {
+    PartialHeader,
+    TruncatedBody,
+    OversizedLength,
+    InvalidJson,
+}
+
+impl MalformedKind {
+    pub const ALL: [Self; 4] = [
+        Self::PartialHeader,
+        Self::TruncatedBody,
+        Self::OversizedLength,
+        Self::InvalidJson,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IngressOutcome {
+    Accepted,
+    ShedFull,
+    Degraded,
 }
 
 #[derive(Clone, Default)]
@@ -73,24 +101,27 @@ impl Evidence {
         self.update(|report| report.clean_disconnects += 1);
     }
 
-    pub fn malformed_client(&self) {
-        self.update(|report| report.malformed_clients += 1);
+    pub fn malformed_client(&self, kind: MalformedKind) {
+        self.update(|report| {
+            report.malformed_clients += 1;
+            match kind {
+                MalformedKind::PartialHeader => report.malformed_partial_headers += 1,
+                MalformedKind::TruncatedBody => report.malformed_truncated_bodies += 1,
+                MalformedKind::OversizedLength => report.malformed_oversized_lengths += 1,
+                MalformedKind::InvalidJson => report.malformed_json_frames += 1,
+            }
+        });
     }
 
-    pub fn valid_frame(&self) {
-        self.update(|report| report.valid_frames += 1);
-    }
-
-    pub fn frame_accepted(&self) {
-        self.update(|report| report.frames_accepted += 1);
-    }
-
-    pub fn frame_shed_full(&self) {
-        self.update(|report| report.frames_shed_full += 1);
-    }
-
-    pub fn degraded_connection(&self) {
-        self.update(|report| report.degraded_connections += 1);
+    pub fn valid_frame(&self, outcome: IngressOutcome) {
+        self.update(|report| {
+            report.valid_frames += 1;
+            match outcome {
+                IngressOutcome::Accepted => report.frames_accepted += 1,
+                IngressOutcome::ShedFull => report.frames_shed_full += 1,
+                IngressOutcome::Degraded => report.degraded_connections += 1,
+            }
+        });
     }
 
     pub fn sink_connect_attempt(&self) {

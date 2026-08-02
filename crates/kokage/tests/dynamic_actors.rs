@@ -412,6 +412,44 @@ impl RawActor for CompleteOnce {
     }
 }
 
+struct FailsOnStartOnce {
+    starts: Arc<AtomicUsize>,
+}
+
+impl Actor for FailsOnStartOnce {
+    type Msg = ();
+
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        Err(io::Error::other("one-shot startup failure").into())
+    }
+
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
+        Ok(())
+    }
+}
+
+struct DropProbe(Arc<AtomicUsize>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct HoldsUniqueResource {
+    _resource: DropProbe,
+}
+
+impl RawActor for HoldsUniqueResource {
+    type Msg = ();
+
+    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+        while ctx.recv().await.is_some() {}
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn one_shot_actor_consumes_unique_resource_and_removes_membership() {
     let running_tree = DynamicTree::new().spawn().expect("runtime builds");
@@ -453,6 +491,75 @@ async fn one_shot_actor_consumes_unique_resource_and_removes_membership() {
         .expect("retained actor removed");
 
     shutdown_running_tree(running_tree, "one-shot actor test shutdown").await;
+}
+
+#[tokio::test]
+async fn one_shot_actor_constructor_and_startup_failures_are_terminal() {
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
+    let scope = support::dynamic_root(&running_tree);
+
+    let constructor_calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_factory = constructor_calls.clone();
+    let constructor_panics = scope
+        .spawn_actor_once("constructor-panics", move || -> CompleteOnce {
+            calls_for_factory.fetch_add(1, Ordering::SeqCst);
+            panic!("one-shot constructor panic");
+        })
+        .await
+        .expect("panicking one-shot actor membership inserted");
+    wait_for_child(&scope, "constructor-panics", false).await;
+    assert_eq!(constructor_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        constructor_panics.send(()).await,
+        Err(SendError {
+            kind: SendErrorKind::Terminated,
+            ..
+        })
+    ));
+
+    let startup_calls = Arc::new(AtomicUsize::new(0));
+    let starts_for_actor = startup_calls.clone();
+    let startup_fails = scope
+        .spawn_actor_once("startup-fails", move || FailsOnStartOnce {
+            starts: starts_for_actor,
+        })
+        .await
+        .expect("failing one-shot actor membership inserted");
+    wait_for_child(&scope, "startup-fails", false).await;
+    assert_eq!(startup_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        startup_fails.send(()).await,
+        Err(SendError {
+            kind: SendErrorKind::Terminated,
+            ..
+        })
+    ));
+
+    shutdown_running_tree(running_tree, "one-shot failure test shutdown").await;
+}
+
+#[tokio::test]
+async fn one_shot_actor_resource_drops_once_when_shutdown_races_start() {
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
+    let scope = support::dynamic_root(&running_tree);
+    let constructions = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let constructions_for_factory = constructions.clone();
+    let resource = DropProbe(drops.clone());
+
+    let _actor = scope
+        .spawn_actor_once("shutdown-race", move || {
+            constructions_for_factory.fetch_add(1, Ordering::SeqCst);
+            HoldsUniqueResource {
+                _resource: resource,
+            }
+        })
+        .await
+        .expect("one-shot actor membership inserted");
+    shutdown_running_tree(running_tree, "one-shot immediate shutdown").await;
+
+    assert!(constructions.load(Ordering::SeqCst) <= 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
