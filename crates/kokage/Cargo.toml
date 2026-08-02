@@ -50,6 +50,10 @@ name = "build_farm"
 required-features = ["serde"]
 
 [[example]]
+name = "shard_store"
+required-features = ["serde"]
+
+[[example]]
 name = "actor_tracing"
 required-features = ["host"]
 
