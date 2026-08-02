@@ -190,13 +190,12 @@ lifetime tasks, and monitor leases before actor state and before reporting the
 exit, while the mailbox binding remains installed through actor destruction.
 This also keeps the context available for explicit teardown after a
 manual-readiness timeout. `RunnableActor` runs one incarnation, races
-readiness/shutdown/abort, and
-classifies the exit. Finally,
-`actor_child_spec` in `runtime.rs` wraps a `RunnableActor` in a plain
-`TaskSpec` — this is the seam where an actor becomes an ordinary supervised
-task child. The supervisor finds actor metadata again later through generic
-*attachments* (`supervisor/attachment.rs`), process-local `Any` values hung
-off a child — the engine itself never learns what an actor is.
+readiness/shutdown/abort, and classifies the exit. Finally, `actor_child_spec`
+in `runtime.rs` wraps a `RunnableActor` in a plain `TaskSpec` — this is the seam
+where an actor becomes an ordinary supervised task child. The supervisor finds
+actor metadata again later through generic *attachments*
+(`supervisor/attachment.rs`), process-local `Any` values hung off a child — the
+engine itself never learns what an actor is.
 
 `ActorHost` (behind the `host` feature, same file) is the escape hatch that
 runs incarnations directly without a supervisor.
