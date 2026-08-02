@@ -46,6 +46,10 @@ name = "agent_control"
 required-features = ["derive", "metrics"]
 
 [[example]]
+name = "build_farm"
+required-features = ["serde"]
+
+[[example]]
 name = "actor_tracing"
 required-features = ["host"]
 

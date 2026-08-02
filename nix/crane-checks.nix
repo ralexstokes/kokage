@@ -75,6 +75,7 @@ in
         cargo test --locked --workspace --doc --all-features
         cargo run --locked -p kokage --example trading_engine --features metrics,derive
         cargo run --locked -p kokage --example agent_control --features metrics,derive
+        cargo run --locked -p kokage --example build_farm --features serde
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
         bash scripts/test-docs.sh
       '';
