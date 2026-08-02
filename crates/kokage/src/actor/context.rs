@@ -1633,6 +1633,24 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         Self { cx, draining: true }
     }
 
+    /// Reborrows this context for another actor with the same message type.
+    ///
+    /// This lets a middleware or decorator actor delegate `on_start` and
+    /// `handle` to its inner actor without changing the message type. The
+    /// returned context is another view of the same incarnation: the inner
+    /// actor sees the middleware actor's [`id`](Self::id), and both layers
+    /// share the timer-key namespace and continuation queue. Middleware layers
+    /// that arm timers must therefore coordinate disjoint [`TimerKey`] values.
+    ///
+    /// The drain phase is preserved, so [`is_draining`](Self::is_draining)
+    /// reports the same value through either view.
+    pub fn for_actor<B: Actor<Msg = A::Msg> + ?Sized>(&mut self) -> Context<'_, B> {
+        Context {
+            cx: self.cx,
+            draining: self.draining,
+        }
+    }
+
     /// Returns the actor's identifier within its scope.
     pub fn id(&self) -> &str {
         self.cx.id()
@@ -1900,6 +1918,17 @@ pub struct StopContext<'a, A: Actor + ?Sized> {
 impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     pub(crate) fn new(cx: &'a mut RawContext<A::Msg>) -> Self {
         Self { cx }
+    }
+
+    /// Reborrows this stop context for another actor with the same message type.
+    ///
+    /// This lets a middleware or decorator actor delegate `on_stop` to its
+    /// inner actor. Like [`Context::for_actor`], the returned context is a view
+    /// of the same incarnation: the inner actor sees the middleware actor's
+    /// [`id`](Self::id), and the layers used the same timer-key namespace and
+    /// continuation queue during earlier lifecycle stages.
+    pub fn for_actor<B: Actor<Msg = A::Msg> + ?Sized>(&mut self) -> StopContext<'_, B> {
+        StopContext { cx: self.cx }
     }
 
     /// Returns the actor's identifier within its scope.
