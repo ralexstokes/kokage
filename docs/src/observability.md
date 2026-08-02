@@ -104,7 +104,7 @@ while let Some(update) = updates.next().await {
     match update {
         ChildObservationUpdate::Transition(child) => state.apply(child),
         ChildObservationUpdate::Reset { snapshot, dropped } => {
-            tracing::warn!(dropped, "child observation recovered from lag");
+            tracing::info!(dropped, "child observation state replaced");
             state.replace(snapshot);
         }
         _ => {}
@@ -113,12 +113,16 @@ while let Some(update) = updates.next().await {
 ```
 
 The watch suppresses transitions already reflected by the initial snapshot.
-If its bounded queue overflows, it reads the latest stable snapshot, advances
-its sequence floor, and yields `Reset`; transitions already reflected by that
-reset are suppressed as the watch continues. Consumers do not need to compare
-sequence numbers, handle `Lagged`, or replace the subscription themselves.
-Call [`ChildObservationWatch::forward_to`] to deliver both transitions and
-resets through an actor's ordinary mailbox.
+If its bounded queue overflows or the observed supervisor changes lifecycle
+state or incarnation, it reads the latest stable snapshot, advances its
+sequence floor, and yields `Reset`; transitions already reflected by that reset
+are suppressed as the watch continues. `dropped` counts raw lifecycle events
+discarded by the bounded queue (including supervisor-level events), and is zero
+for a lifecycle or incarnation reset. Consumers do not need to compare sequence
+numbers, handle `Lagged`, or replace the subscription themselves. Call
+[`ChildObservationWatch::forward_to`] to deliver both transitions and resets
+through an actor's ordinary mailbox; if that target actor restarts, the pump
+sends its fresh incarnation a complete reset with `dropped == 0`.
 
 ## The recursive lifecycle stream: what happened, in order
 
