@@ -5,6 +5,7 @@ use std::{
     future::Future,
     ops::Deref,
     sync::{Arc, Mutex, PoisonError, Weak},
+    time::Duration,
 };
 
 use crate::{
@@ -274,6 +275,15 @@ pub enum TaskError {
         /// Id of the task that stopped.
         task_id: String,
     },
+    /// The task reached a terminal exit after missing its manual-readiness
+    /// deadline.
+    #[error("task `{task_id}` did not report readiness within {timeout:?}")]
+    ReadinessTimedOut {
+        /// Id of the task that missed its readiness deadline.
+        task_id: String,
+        /// Configured manual-readiness bound.
+        timeout: Duration,
+    },
     /// The task membership ended without an observable exit.
     #[error("task `{task_id}` is no longer available")]
     Unavailable {
@@ -344,8 +354,11 @@ impl TaskRef {
     ///
     /// Ordinary tasks are ready as soon as their future is spawned. A task
     /// configured with [`TaskSpec::manual_readiness`] becomes ready when it calls
-    /// [`crate::TaskContext::mark_ready`]. If it exits or misses its readiness
-    /// deadline first, this returns [`TaskError::StoppedBeforeReady`].
+    /// [`crate::TaskContext::mark_ready`]. The wait follows any replacement
+    /// scheduled by the restart policy. If the task reaches a terminal exit
+    /// first, this returns [`TaskError::StoppedBeforeReady`], or
+    /// [`TaskError::ReadinessTimedOut`] when the terminal exit was a missed
+    /// readiness deadline.
     pub async fn wait_started(&self) -> Result<(), TaskError> {
         self.ensure_tracking();
         let mut state = self.inner.state.subscribe();
@@ -356,6 +369,12 @@ impl TaskRef {
             }
             if let Some(outcome) = current.outcome {
                 return match outcome {
+                    Ok(ExitStatus::ReadinessTimedOut { timeout, .. }) => {
+                        Err(TaskError::ReadinessTimedOut {
+                            task_id: self.id().to_owned(),
+                            timeout,
+                        })
+                    }
                     Ok(_) => Err(TaskError::StoppedBeforeReady {
                         task_id: self.id().to_owned(),
                     }),

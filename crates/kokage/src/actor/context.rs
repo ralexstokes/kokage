@@ -894,7 +894,7 @@ pub(crate) struct ActorReadySignal {
 
 impl ActorReadySignal {
     const IMMEDIATE: u8 = 0;
-    const AUTOMATIC_OR_MANUAL: u8 = 1;
+    const GATED: u8 = 1;
     const READY: u8 = 2;
 
     pub(crate) fn new(sender: oneshot::Sender<()>, manual: bool) -> Self {
@@ -903,7 +903,7 @@ impl ActorReadySignal {
             sender: Arc::new(Mutex::new(Some(sender))),
             ready,
             mode: Arc::new(AtomicU8::new(if manual {
-                Self::AUTOMATIC_OR_MANUAL
+                Self::GATED
             } else {
                 Self::IMMEDIATE
             })),
@@ -932,7 +932,7 @@ impl ActorReadySignal {
     pub(crate) fn defer_automatic(&self) {
         let _ = self.mode.compare_exchange(
             Self::IMMEDIATE,
-            Self::AUTOMATIC_OR_MANUAL,
+            Self::GATED,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
