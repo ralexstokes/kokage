@@ -29,8 +29,9 @@ actor. `running_tree.scope()` gives you a cloneable root ref for observation and
 control. `scope.subtree("press-room")` navigates down, and trees hand refs out
 even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
 means nothing. What it does carry is *control capability*: observation
-(snapshots, lifecycle watches, stats — see [Observability](observability.md))
-and targeted shutdown. A [`DynamicScopeRef`] additionally carries membership
+(snapshots, lifecycle event streams, stats — see
+[Observability](observability.md)) and targeted shutdown. A [`DynamicScopeRef`]
+additionally carries membership
 mutation. `scope.shutdown().await` on a subtree stops just that compartment,
 whose parent then sees a completed child; `scope.request_shutdown()` is the
 non-waiting form suitable inside that scope.

@@ -1082,7 +1082,7 @@ impl DynamicScopeRef {
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled. Task children do
     /// not appear in [`ScopeRef::actor_stats`], but remain visible through
-    /// snapshots and lifecycle watches.
+    /// snapshots and lifecycle event streams.
     ///
     /// # Errors
     ///
