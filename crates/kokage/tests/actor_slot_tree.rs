@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use kokage::{ActorSlot, DynamicTree, ScopeRef, SubtreeSpec, observe::ScopeKind, prelude::*};
+use kokage::{ActorSlot, DynamicTree, ScopeRef, observe::ScopeKind, prelude::*};
 
 enum LeftMsg {
     Connected(Reply<bool>),
@@ -81,10 +81,6 @@ impl Actor for Session {
     }
 }
 
-fn probe_message_size(_message: &ProbeMsg) -> usize {
-    1
-}
-
 fn child_ids(scope: &ScopeRef) -> Vec<String> {
     scope
         .snapshot()
@@ -95,22 +91,14 @@ fn child_ids(scope: &ScopeRef) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn slots_reserve_every_ref_before_nested_tree_wiring() {
-    let left_slot = ActorSlot::<LeftMsg>::new("left-worker");
-    let left = left_slot.actor_ref();
+async fn slots_resolve_cyclic_refs_across_nested_tree_wiring() {
     let right_slot = ActorSlot::<RightMsg>::new("right");
     let right = right_slot.actor_ref();
     let probe_slot = ActorSlot::<ProbeMsg>::new("probe");
     let probe = probe_slot.actor_ref();
 
-    let sessions_tree = DynamicTree::new().mailbox_capacity(4);
-    let sessions = sessions_tree.scope();
-
-    let mut workers_tree = Tree::new()
-        .strategy(Strategy::OneForAll)
-        .default_shutdown(Shutdown::graceful_for(Duration::from_secs(1)));
-    let workers = workers_tree.scope();
-    workers_tree.add_actor_spec(left_slot.define({
+    let mut workers_tree = Tree::new().strategy(Strategy::OneForAll);
+    let left = workers_tree.add_actor_spec(ActorSpec::new("left-worker", {
         let right = right.clone();
         let probe = probe.clone();
         move || Left {
@@ -123,26 +111,14 @@ async fn slots_reserve_every_ref_before_nested_tree_wiring() {
         move || Right { left: left.clone() }
     }));
 
-    let mut tree = Tree::new()
-        .default_restart(RestartPolicy::never())
-        .default_mailbox_shutdown(MailboxShutdown::Drain)
-        .mailbox_capacity(16);
+    let mut tree = Tree::new();
     let root = tree.scope();
-    tree.add_subtree("sessions", sessions_tree);
-    tree.add_subtree_spec(
-        "workers",
-        SubtreeSpec::from(workers_tree).restart(RestartPolicy::always()),
-    );
-    tree.add_actor_spec(
-        probe_slot
-            .define({
-                let left = left.clone();
-                move || Probe { left: left.clone() }
-            })
-            .mailbox(Mailbox::queue(8))
-            .message_size(probe_message_size)
-            .mailbox_shutdown(MailboxShutdown::Discard),
-    );
+    let sessions = tree.add_dynamic_subtree("sessions", DynamicTree::new());
+    let workers = tree.add_subtree("workers", workers_tree);
+    tree.add_actor_spec(probe_slot.define({
+        let left = left.clone();
+        move || Probe { left: left.clone() }
+    }));
 
     assert_eq!(child_ids(&root), ["sessions", "workers", "probe"]);
     assert_eq!(root.kind(), ScopeKind::Ordered);

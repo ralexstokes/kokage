@@ -257,11 +257,10 @@ pub mod observe {
 /// the fully qualified `kokage` path.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Backoff, CallError, ChildHandle, Context, ControlError,
-        DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-        MonitorEventKind, OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError,
-        SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey,
-        Tree,
+        Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
+        DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
+        OneShotTaskSpec, Reply, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind,
+        Shutdown, StopContext, Strategy, TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
     };
 }
 
