@@ -41,29 +41,16 @@ pub enum JournalMsg {
 pub struct Journal {
     store: SharedJournal,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl Journal {
-    pub fn new(store: SharedJournal, evidence: EvidenceTx, generation: u64) -> Self {
-        Self {
-            store,
-            evidence,
-            generation,
-        }
+    pub fn new(store: SharedJournal, evidence: EvidenceTx) -> Self {
+        Self { store, evidence }
     }
 }
 
 impl Actor for Journal {
     type Msg = JournalMsg;
-
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "journal",
-            generation: self.generation,
-        });
-        Ok(())
-    }
 
     async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
@@ -116,8 +103,8 @@ fn belongs_to(entry: &JournalEntry, chat: &str) -> bool {
     match entry {
         JournalEntry::Incoming { chat: owner, .. }
         | JournalEntry::Checkpoint { chat: owner, .. }
-        | JournalEntry::Evicted { chat: owner, .. } => owner == chat,
-        JournalEntry::ModelTurn { chat: owner, .. }
+        | JournalEntry::Evicted { chat: owner, .. }
+        | JournalEntry::ModelTurn { chat: owner, .. }
         | JournalEntry::ToolIntent { chat: owner, .. }
         | JournalEntry::ToolResult { chat: owner, .. }
         | JournalEntry::Assistant { chat: owner, .. } => owner == chat,

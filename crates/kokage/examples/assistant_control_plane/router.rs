@@ -18,7 +18,7 @@ use tokio::sync::Notify;
 use crate::{
     common::{Envelope, Evidence, EvidenceTx},
     safety::GateNotice,
-    session::{Session, SessionDeps, SessionMsg, session_generation},
+    session::{Session, SessionDeps, SessionMsg},
 };
 
 const MEMBERSHIP_BOUND: Duration = Duration::from_secs(1);
@@ -126,18 +126,15 @@ pub struct SessionRouter {
     slots: HashMap<String, Slot>,
     lifecycle: Option<Guard>,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl SessionRouter {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sessions: DynamicScopeRef,
         deps: SessionDeps,
         epochs: Arc<AtomicU64>,
         removal_gate: RemovalGate,
         evidence: EvidenceTx,
-        generation: u64,
     ) -> Self {
         Self {
             sessions,
@@ -147,7 +144,6 @@ impl SessionRouter {
             slots: HashMap::new(),
             lifecycle: None,
             evidence,
-            generation,
         }
     }
 
@@ -237,10 +233,6 @@ impl Actor for SessionRouter {
     type Msg = RouterMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "router",
-            generation: self.generation,
-        });
         self.lifecycle = Some(
             self.sessions
                 .subscribe_lifecycle()
@@ -466,16 +458,9 @@ impl Actor for SessionRouter {
 fn build_session_tree(chat: &str, epoch: u64, deps: SessionDeps) -> (Tree, ActorRef<SessionMsg>) {
     let runs_tree = DynamicTree::new();
     let runs = runs_tree.scope();
-    let generations = Arc::new(AtomicU64::new(0));
     let session_chat = chat.to_owned();
     let spec = ActorSpec::new("orchestrator", move || {
-        Session::new(
-            session_chat.clone(),
-            epoch,
-            runs.clone(),
-            deps.clone(),
-            session_generation(&generations),
-        )
+        Session::new(session_chat.clone(), epoch, runs.clone(), deps.clone())
     });
     let session = spec.actor_ref();
     let mut tree = Tree::new().strategy(Strategy::OneForAll);

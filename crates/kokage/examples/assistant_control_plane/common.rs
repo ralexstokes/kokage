@@ -94,18 +94,12 @@ pub enum JournalEntry {
     },
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum Evidence {
-    ActorStarted {
-        actor: &'static str,
-        generation: u64,
-    },
     BridgeJournaled {
         envelope_id: u64,
         duplicate: bool,
     },
-    BridgeAcked(u64),
     Mounted {
         chat: String,
         epoch: u64,
@@ -163,6 +157,7 @@ pub enum Evidence {
         chat: String,
         epoch: u64,
     },
+    ShutdownStarted,
     ActorStopped(&'static str),
 }
 

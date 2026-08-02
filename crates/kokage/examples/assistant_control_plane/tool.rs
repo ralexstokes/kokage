@@ -49,29 +49,16 @@ pub enum ToolMsg {
 pub struct ToolHost {
     state: Arc<ToolState>,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl ToolHost {
-    pub fn new(state: Arc<ToolState>, evidence: EvidenceTx, generation: u64) -> Self {
-        Self {
-            state,
-            evidence,
-            generation,
-        }
+    pub fn new(state: Arc<ToolState>, evidence: EvidenceTx) -> Self {
+        Self { state, evidence }
     }
 }
 
 impl Actor for ToolHost {
     type Msg = ToolMsg;
-
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "tool-host",
-            generation: self.generation,
-        });
-        Ok(())
-    }
 
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {

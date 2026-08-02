@@ -62,6 +62,7 @@ pub enum BudgetMsg {
     Status(Reply<BudgetStatus>),
     SetCap { cap: u64, reply: Reply<()> },
     Reset { cap: u64, reply: Reply<()> },
+    Crash,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,26 +73,23 @@ pub struct BudgetStatus {
 
 pub struct Budget {
     spent: Arc<AtomicU64>,
-    cap: u64,
+    cap: Arc<AtomicU64>,
     guard: ActorRef<GuardMsg>,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl Budget {
     pub fn new(
         spent: Arc<AtomicU64>,
-        cap: u64,
+        cap: Arc<AtomicU64>,
         guard: ActorRef<GuardMsg>,
         evidence: EvidenceTx,
-        generation: u64,
     ) -> Self {
         Self {
             spent,
             cap,
             guard,
             evidence,
-            generation,
         }
     }
 }
@@ -99,19 +97,11 @@ impl Budget {
 impl Actor for Budget {
     type Msg = BudgetMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "budget",
-            generation: self.generation,
-        });
-        Ok(())
-    }
-
     async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             BudgetMsg::Charge { tokens, reply } => {
                 let spent = self.spent.load(Ordering::Acquire);
-                let allowed = spent.saturating_add(tokens) <= self.cap;
+                let allowed = spent.saturating_add(tokens) <= self.cap.load(Ordering::Acquire);
                 if allowed {
                     self.spent.fetch_add(tokens, Ordering::AcqRel);
                 } else {
@@ -121,18 +111,19 @@ impl Actor for Budget {
             }
             BudgetMsg::Status(reply) => reply.send(BudgetStatus {
                 spent: self.spent.load(Ordering::Acquire),
-                cap: self.cap,
+                cap: self.cap.load(Ordering::Acquire),
             }),
             BudgetMsg::SetCap { cap, reply } => {
-                self.cap = cap;
+                self.cap.store(cap, Ordering::Release);
                 reply.send(());
             }
             BudgetMsg::Reset { cap, reply } => {
                 self.spent.store(0, Ordering::Release);
-                self.cap = cap;
+                self.cap.store(cap, Ordering::Release);
                 let _ = self.guard.try_send(GuardMsg::BudgetRestored);
                 reply.send(());
             }
+            BudgetMsg::Crash => panic!("scripted budget crash"),
         }
         Ok(())
     }
@@ -160,11 +151,9 @@ pub struct GuardActor {
     failures: VecDeque<Instant>,
     probe_backoff: Duration,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl GuardActor {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         budget: ActorRef<BudgetMsg>,
         router: ActorRef<RouterMsg>,
@@ -172,7 +161,6 @@ impl GuardActor {
         notices: broadcast::Sender<GateNotice>,
         model: ModelControl,
         evidence: EvidenceTx,
-        generation: u64,
     ) -> Self {
         Self {
             budget,
@@ -183,7 +171,6 @@ impl GuardActor {
             failures: VecDeque::new(),
             probe_backoff: Duration::from_millis(20),
             evidence,
-            generation,
         }
     }
 
@@ -212,10 +199,6 @@ impl Actor for GuardActor {
 
     async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.gate.set(true);
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "guard",
-            generation: self.generation,
-        });
         Ok(())
     }
 

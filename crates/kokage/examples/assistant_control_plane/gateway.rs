@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -41,7 +41,12 @@ pub enum TransportEvent {
 
 impl ChatTransport {
     pub async fn publish(&self, envelope: Envelope) {
-        self.state.lock().await.queue.push_back(envelope);
+        let mut state = self.state.lock().await;
+        if state.acked.contains(&envelope.id) {
+            return;
+        }
+        state.queue.push_back(envelope);
+        drop(state);
         self.changed.notify_waiters();
     }
 
@@ -66,11 +71,7 @@ impl ChatTransport {
                 if !state.connected {
                     return TransportEvent::Disconnected;
                 }
-                let envelope = state
-                    .queue
-                    .iter()
-                    .find(|candidate| !state.acked.contains(&candidate.id))
-                    .cloned();
+                let envelope = state.queue.front().cloned();
                 if let Some(envelope) = envelope {
                     *state.deliveries.entry(envelope.id).or_default() += 1;
                     if state.disconnect_before_ack.remove(&envelope.id) {
@@ -89,6 +90,7 @@ impl ChatTransport {
             return Err(());
         }
         state.acked.insert(envelope_id);
+        state.queue.retain(|envelope| envelope.id != envelope_id);
         self.changed.notify_waiters();
         Ok(())
     }
@@ -138,28 +140,16 @@ pub enum OutboundMsg {
 
 pub struct OutboundSender {
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl OutboundSender {
-    pub fn new(evidence: EvidenceTx, generation: u64) -> Self {
-        Self {
-            evidence,
-            generation,
-        }
+    pub fn new(evidence: EvidenceTx) -> Self {
+        Self { evidence }
     }
 }
 
 impl Actor for OutboundSender {
     type Msg = OutboundMsg;
-
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "outbound",
-            generation: self.generation,
-        });
-        Ok(())
-    }
 
     async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
@@ -201,35 +191,20 @@ pub struct ProgressSender {
     outbound: ActorRef<OutboundMsg>,
     gate: ProgressGate,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl ProgressSender {
-    pub fn new(
-        outbound: ActorRef<OutboundMsg>,
-        gate: ProgressGate,
-        evidence: EvidenceTx,
-        generation: u64,
-    ) -> Self {
+    pub fn new(outbound: ActorRef<OutboundMsg>, gate: ProgressGate, evidence: EvidenceTx) -> Self {
         Self {
             outbound,
             gate,
             evidence,
-            generation,
         }
     }
 }
 
 impl Actor for ProgressSender {
     type Msg = ProgressMsg;
-
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "progress",
-            generation: self.generation,
-        });
-        Ok(())
-    }
 
     async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.gate.block.load(Ordering::Acquire) {
@@ -261,7 +236,6 @@ pub struct InboundBridge {
     journal: ActorRef<JournalMsg>,
     router: ActorRef<RouterMsg>,
     evidence: EvidenceTx,
-    generation: u64,
 }
 
 impl InboundBridge {
@@ -271,7 +245,6 @@ impl InboundBridge {
         journal: ActorRef<JournalMsg>,
         router: ActorRef<RouterMsg>,
         evidence: EvidenceTx,
-        generation: u64,
     ) -> Self {
         Self {
             transport,
@@ -279,7 +252,6 @@ impl InboundBridge {
             journal,
             router,
             evidence,
-            generation,
         }
     }
 }
@@ -294,10 +266,6 @@ impl RawActor for InboundBridge {
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         self.connect_gate.wait().await;
         self.transport.connect().await;
-        self.evidence.emit(Evidence::ActorStarted {
-            actor: "bridge",
-            generation: self.generation,
-        });
         ctx.mark_ready();
 
         loop {
@@ -310,7 +278,7 @@ impl RawActor for InboundBridge {
                     Some(never) => match never {},
                 },
                 event = self.transport.next_event() => match event {
-                    TransportEvent::Disconnected => panic!("simulated chat transport disconnected"),
+                    TransportEvent::Disconnected => panic!("scripted chat transport disconnected"),
                     TransportEvent::Message(envelope) => {
                         let inserted = self.journal.call(
                             |reply| JournalMsg::AppendIncoming {
@@ -329,15 +297,10 @@ impl RawActor for InboundBridge {
                         if self.transport.ack(envelope.id).await.is_err() {
                             panic!("transport disconnected at the journal-to-ack boundary");
                         }
-                        self.evidence.emit(Evidence::BridgeAcked(envelope.id));
                         self.router.send(RouterMsg::Incoming(envelope)).await?;
                     }
                 }
             }
         }
     }
-}
-
-pub fn next_generation(counter: &AtomicU64) -> u64 {
-    counter.fetch_add(1, Ordering::SeqCst)
 }

@@ -42,10 +42,10 @@ use std::{
     time::Duration,
 };
 
-use common::{CALL_BOUND, Envelope, Evidence, JournalEntry, Stage, WAIT_BOUND};
+use common::{CALL_BOUND, Envelope, Evidence, EvidenceTx, JournalEntry, Stage, WAIT_BOUND};
 use gateway::{
     BridgeMsg, ChatTransport, ConnectGate, InboundBridge, OutboundSender, ProgressGate,
-    ProgressMsg, ProgressSender, next_generation,
+    ProgressMsg, ProgressSender,
 };
 use journal::{Journal, JournalStore, SharedJournal};
 use kokage::{
@@ -80,6 +80,7 @@ struct Acceptance {
     session_settings: SessionSettings,
     progress_gate: ProgressGate,
     removal_gate: RemovalGate,
+    evidence_tx: EvidenceTx,
     evidence: mpsc::UnboundedReceiver<Evidence>,
     evidence_backlog: VecDeque<Evidence>,
     lifecycle: kokage::observe::LifecycleWatch,
@@ -130,6 +131,7 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
     let journal: SharedJournal = Arc::new(Mutex::new(JournalStore::default()));
     let tools = Arc::new(ToolState::default());
     let spent = Arc::new(AtomicU64::new(0));
+    let budget_cap = Arc::new(AtomicU64::new(10_000));
     let model_control = ModelControl::default();
     let scripted_model = ScriptedModel::new(model_control.clone());
     let safety_gate = SafetyGate::new_open();
@@ -149,78 +151,53 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
     let router_slot = ActorSlot::new("session-router");
     let router_ref = router_slot.actor_ref();
 
-    let journal_generations = Arc::new(AtomicU64::new(0));
     let journal_spec = ActorSpec::new("journal", {
         let journal = Arc::clone(&journal);
         let evidence = evidence_tx.clone();
-        move || {
-            Journal::new(
-                Arc::clone(&journal),
-                evidence.clone(),
-                next_generation(&journal_generations),
-            )
-        }
+        move || Journal::new(Arc::clone(&journal), evidence.clone())
     });
     let journal_ref = journal_spec.actor_ref();
 
-    let outbound_generations = Arc::new(AtomicU64::new(0));
     let outbound_spec = ActorSpec::new("outbound-sender", {
         let evidence = evidence_tx.clone();
-        move || OutboundSender::new(evidence.clone(), next_generation(&outbound_generations))
+        move || OutboundSender::new(evidence.clone())
     });
     let outbound_ref = outbound_spec.actor_ref();
 
-    let progress_generations = Arc::new(AtomicU64::new(0));
     let progress_spec = ActorSpec::new("progress-sender", {
         let outbound = outbound_ref.clone();
         let gate = progress_gate.clone();
         let evidence = evidence_tx.clone();
-        move || {
-            ProgressSender::new(
-                outbound.clone(),
-                gate.clone(),
-                evidence.clone(),
-                next_generation(&progress_generations),
-            )
-        }
+        move || ProgressSender::new(outbound.clone(), gate.clone(), evidence.clone())
     })
     .mailbox(Mailbox::latest());
     let progress_ref = progress_spec.actor_ref();
 
-    let tool_generations = Arc::new(AtomicU64::new(0));
     let tool_spec = ActorSpec::new("tool-host", {
         let tools = Arc::clone(&tools);
         let evidence = evidence_tx.clone();
-        move || {
-            ToolHost::new(
-                Arc::clone(&tools),
-                evidence.clone(),
-                next_generation(&tool_generations),
-            )
-        }
+        move || ToolHost::new(Arc::clone(&tools), evidence.clone())
     });
     let tool_ref = tool_spec.actor_ref();
 
     let sessions_tree = DynamicTree::new();
     let sessions = sessions_tree.scope();
 
-    let budget_generations = Arc::new(AtomicU64::new(0));
     let budget_spec = budget_slot.define({
         let spent = Arc::clone(&spent);
+        let cap = Arc::clone(&budget_cap);
         let guard = guard_ref.clone();
         let evidence = evidence_tx.clone();
         move || {
             Budget::new(
                 Arc::clone(&spent),
-                10_000,
+                Arc::clone(&cap),
                 guard.clone(),
                 evidence.clone(),
-                next_generation(&budget_generations),
             )
         }
     });
 
-    let guard_generations = Arc::new(AtomicU64::new(0));
     let guard_spec = guard_slot.define({
         let budget = budget_ref.clone();
         let router = router_ref.clone();
@@ -236,7 +213,6 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
                 notices.clone(),
                 model.clone(),
                 evidence.clone(),
-                next_generation(&guard_generations),
             )
         }
     });
@@ -254,7 +230,6 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
         settings: session_settings.clone(),
         evidence: evidence_tx.clone(),
     };
-    let router_generations = Arc::new(AtomicU64::new(0));
     let router_spec = router_slot.define({
         let sessions = sessions.clone();
         let deps = session_deps;
@@ -268,12 +243,10 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
                 Arc::clone(&epochs),
                 removal_gate.clone(),
                 evidence.clone(),
-                next_generation(&router_generations),
             )
         }
     });
 
-    let bridge_generations = Arc::new(AtomicU64::new(0));
     let bridge_spec = ActorSpec::<BridgeMsg>::new("inbound-bridge", {
         let transport = transport.clone();
         let connect_gate = connect_gate.clone();
@@ -287,7 +260,6 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
                 journal.clone(),
                 router.clone(),
                 evidence.clone(),
-                next_generation(&bridge_generations),
             )
         }
     })
@@ -336,6 +308,7 @@ fn build() -> Result<Acceptance, kokage::BuildError> {
         session_settings,
         progress_gate,
         removal_gate,
+        evidence_tx,
         evidence,
         evidence_backlog: VecDeque::new(),
         lifecycle,
@@ -484,11 +457,11 @@ impl Acceptance {
             matches!(
                 event,
                 Evidence::RunFailed {
+                    chat,
                     envelope_id: 20,
                     attempt: 1,
                     reason,
-                    ..
-                } if reason.contains("model deadline")
+                } if chat == "alpha" && reason.contains("model deadline")
             )
         })
         .await;
@@ -499,10 +472,11 @@ impl Acceptance {
             matches!(
                 event,
                 Evidence::RunStarted {
+                    chat,
                     envelope_id: 2,
                     attempt: 1,
-                    ..
-                }
+                    run_id,
+                } if chat == "alpha" && run_id == "run-2-a1"
             )
         })
         .await;
@@ -642,10 +616,15 @@ impl Acceptance {
             matches!(event, Evidence::Progress { envelope_id: 6, sequence } if *sequence > 1)
         })
         .await;
+        self.publish(Envelope::new(14, "alpha", "cancel flood"))
+            .await;
+        self.publish(Envelope::new(15, "alpha", "after stray cancel"))
+            .await;
+        self.wait_completed(15).await;
         warn!(
             phase = 6,
             conflated = self.progress.stats().messages_conflated,
-            "stream flood: run cancellation stopped production and latest progress survived"
+            "stream flood: cancellation stopped production; a stray cancel did not wedge intake"
         );
         Ok(())
     }
@@ -659,7 +638,7 @@ impl Acceptance {
         self.publish(Envelope::new(9, "alpha", "held during pause"))
             .await;
         self.next_evidence("paused message held", |event| {
-            matches!(event, Evidence::HeldWhilePaused { envelope_id: 9, .. })
+            matches!(event, Evidence::HeldWhilePaused { chat, envelope_id: 9 } if chat == "alpha")
         })
         .await;
         assert!(
@@ -677,15 +656,34 @@ impl Acceptance {
         self.wait_completed(9).await;
 
         let status = self.budget.call(BudgetMsg::Status, CALL_BOUND).await?;
+        let constrained_cap = status.spent + 5;
         self.budget
             .call(
                 |reply| BudgetMsg::SetCap {
-                    cap: status.spent + 5,
+                    cap: constrained_cap,
                     reply,
                 },
                 CALL_BOUND,
             )
             .await?;
+        let budget_generation = self
+            .core
+            .snapshot()
+            .child("budget")
+            .expect("budget present")
+            .generation;
+        self.budget.send(BudgetMsg::Crash).await?;
+        poll_until("budget restart", || {
+            self.core
+                .snapshot()
+                .child("budget")
+                .is_some_and(|child| child.generation > budget_generation)
+        })
+        .await;
+        let restarted = self.budget.call(BudgetMsg::Status, CALL_BOUND).await?;
+        assert_eq!(restarted.spent, status.spent);
+        assert_eq!(restarted.cap, constrained_cap);
+
         self.publish(Envelope::new(10, "alpha", "budget breach"))
             .await;
         self.wait_gate(false, "budget cap exceeded").await;
@@ -695,9 +693,9 @@ impl Acceptance {
             matches!(
                 event,
                 Evidence::HeldWhilePaused {
+                    chat,
                     envelope_id: 11,
-                    ..
-                }
+                } if chat == "alpha"
             )
         })
         .await;
@@ -710,7 +708,7 @@ impl Acceptance {
         assert!(self.safety_gate.is_open());
         warn!(
             phase = 7,
-            "guard: failure window and budget breach paused creation; probes released durable work"
+            "guard: failure and budget pauses released durable work; budget state survived restart"
         );
         Ok(())
     }
@@ -756,7 +754,7 @@ impl Acceptance {
         })
         .await;
         self.next_evidence("router enters Removing", |event| {
-            matches!(event, Evidence::Removing { chat, epoch: observed, .. } if chat == "alpha" && *observed == epoch)
+            matches!(event, Evidence::Removing { chat, epoch: observed, subtree_id: observed_id } if chat == "alpha" && *observed == epoch && observed_id == &subtree_id)
         })
         .await;
         poll_until("removal offload held for race", || {
@@ -768,7 +766,7 @@ impl Acceptance {
             .await;
         self.removal_gate.hold(false);
         self.next_evidence("old incarnation removed", |event| {
-            matches!(event, Evidence::Removed { chat, epoch: observed, .. } if chat == "alpha" && *observed == epoch)
+            matches!(event, Evidence::Removed { chat, epoch: observed, subtree_id: observed_id } if chat == "alpha" && *observed == epoch && observed_id == &subtree_id)
         })
         .await;
         let remounted = self
@@ -813,6 +811,27 @@ impl Acceptance {
         let duplicate_envelopes = self.journal.lock().await.duplicate_envelopes();
         let gateway_restarts = self.gateway.snapshot().total_restarts;
         let core_restarts = self.core.snapshot().total_restarts;
+
+        // Preserve stream order across evidence already held by earlier phase
+        // predicates, then start collecting only after this shutdown marker.
+        self.evidence_tx.emit(Evidence::ShutdownStarted);
+        tokio::time::timeout(WAIT_BOUND, async {
+            loop {
+                let evidence = match self.evidence_backlog.pop_front() {
+                    Some(evidence) => evidence,
+                    None => self
+                        .evidence
+                        .recv()
+                        .await
+                        .expect("evidence stream remains live"),
+                };
+                if matches!(evidence, Evidence::ShutdownStarted) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("shutdown marker must be bounded");
 
         self.root.request_shutdown();
         let mut stop_order = Vec::new();
@@ -868,7 +887,7 @@ impl Acceptance {
 
     async fn wait_completed(&mut self, envelope_id: u64) {
         self.next_evidence("run completion", |event| {
-            matches!(event, Evidence::RunCompleted { envelope_id: observed, .. } if *observed == envelope_id)
+            matches!(event, Evidence::RunCompleted { chat, envelope_id: observed, attempt } if chat == "alpha" && *observed == envelope_id && *attempt > 0)
         })
         .await;
     }

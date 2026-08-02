@@ -3,14 +3,14 @@ use std::{
     io,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use kokage::{
     Actor, ActorRef, ActorSpec, CallError, Context, DynamicScopeRef, ExitResult, MonitorEvent,
-    MonitorEventKind, StopContext, TimerKey,
+    MonitorEventKind, RestartPolicy, StopContext, TimerKey,
 };
 
 use crate::{
@@ -25,7 +25,10 @@ use crate::{
 };
 
 const IDLE: TimerKey = TimerKey::new("session-idle");
+const RETRY: TimerKey = TimerKey::new("session-retry");
 const IDLE_AFTER: Duration = Duration::from_millis(35);
+const RETRY_BASE: Duration = Duration::from_millis(5);
+const MAX_RUN_ATTEMPTS: u32 = 3;
 
 #[derive(Clone)]
 pub struct ScriptedModel {
@@ -178,6 +181,7 @@ impl RunActor {
 
     fn fail(&self, reason: impl Into<String>) -> kokage::BoxError {
         let reason = reason.into();
+        let _ = self.deps.guard.try_send(GuardMsg::Failure(reason.clone()));
         self.deps.evidence.emit(Evidence::RunFailed {
             chat: self.envelope.chat.clone(),
             envelope_id: self.envelope.id,
@@ -253,10 +257,6 @@ impl Actor for RunActor {
                 let turn = match result {
                     Err(_) => return Err(self.fail(format!("{stage} model deadline"))),
                     Ok(Err(ModelFailure::RateLimited)) => {
-                        let _ = self
-                            .deps
-                            .guard
-                            .try_send(GuardMsg::Failure("model rate limited".to_owned()));
                         return Err(self.fail("model rate limited"));
                     }
                     Ok(Ok(turn)) => turn,
@@ -393,6 +393,8 @@ struct ActiveRun {
     envelope: Envelope,
     run_id: String,
     actor: Option<ActorRef<RunMsg>>,
+    cancel: Option<Envelope>,
+    cancelling: bool,
 }
 
 pub enum SessionMsg {
@@ -418,7 +420,9 @@ pub enum SessionMsg {
     RunSucceeded {
         run_id: String,
     },
+    Retry,
     Cancelled {
+        run_id: String,
         command: Envelope,
         cancelled: Envelope,
         result: Result<(), String>,
@@ -439,18 +443,12 @@ pub struct Session {
     pending: VecDeque<Envelope>,
     attempts: HashMap<u64, u32>,
     current: Option<ActiveRun>,
+    retry_scheduled: bool,
     messages: usize,
-    generation: u64,
 }
 
 impl Session {
-    pub fn new(
-        chat: String,
-        epoch: u64,
-        runs: DynamicScopeRef,
-        deps: SessionDeps,
-        generation: u64,
-    ) -> Self {
+    pub fn new(chat: String, epoch: u64, runs: DynamicScopeRef, deps: SessionDeps) -> Self {
         Self {
             chat,
             epoch,
@@ -464,13 +462,16 @@ impl Session {
             pending: VecDeque::new(),
             attempts: HashMap::new(),
             current: None,
+            retry_scheduled: false,
             messages: 0,
-            generation,
         }
     }
 
     fn maybe_start(&mut self, ctx: &mut Context<'_, Self>) {
-        if !matches!(self.phase, SessionPhase::Ready) || self.current.is_some() {
+        if !matches!(self.phase, SessionPhase::Ready)
+            || self.current.is_some()
+            || self.retry_scheduled
+        {
             return;
         }
         let Some(envelope) = self.pending.pop_front() else {
@@ -481,11 +482,6 @@ impl Session {
                 chat: self.chat.clone(),
                 envelope_id: envelope.id,
             });
-            self.pending.push_front(envelope);
-            return;
-        }
-
-        if envelope.text == "cancel flood" {
             self.pending.push_front(envelope);
             return;
         }
@@ -515,7 +511,8 @@ impl Session {
             run_id: actor_run_id.clone(),
             tool_key: None,
         })
-        .temporary();
+        .restart(RestartPolicy::never())
+        .remove_on_terminal_exit();
         let runs = self.runs.clone();
         let completion_envelope = envelope.clone();
         let completion_run_id = run_id.clone();
@@ -539,15 +536,71 @@ impl Session {
             envelope,
             run_id,
             actor: None,
+            cancel: None,
+            cancelling: false,
         });
     }
 
-    fn retry_current(&mut self, run_id: &str, ctx: &mut Context<'_, Self>) {
+    async fn retry_current(
+        &mut self,
+        run_id: &str,
+        reason: &str,
+        ctx: &mut Context<'_, Self>,
+    ) -> Result<(), kokage::BoxError> {
         let Some(active) = self.current.take_if(|active| active.run_id == run_id) else {
+            return Ok(());
+        };
+        let envelope_id = active.envelope.id;
+        let attempts = self.attempts.get(&envelope_id).copied().unwrap_or_default();
+        if attempts >= MAX_RUN_ATTEMPTS {
+            self.append(JournalEntry::Assistant {
+                chat: self.chat.clone(),
+                envelope_id,
+                attempt: attempts,
+                text: format!("failed after {attempts} attempts: {reason}"),
+            })
+            .await?;
+            self.completed.insert(envelope_id);
+            self.attempts.remove(&envelope_id);
+            if self.deps.settings.idle_eviction() && self.pending.is_empty() {
+                ctx.set_timeout(IDLE, SessionMsg::Idle, IDLE_AFTER);
+            }
+            self.maybe_start(ctx);
+            return Ok(());
+        }
+        self.pending.push_front(active.envelope);
+        self.retry_scheduled = true;
+        let multiplier = 1_u32 << attempts.saturating_sub(1);
+        ctx.set_timeout(RETRY, SessionMsg::Retry, RETRY_BASE * multiplier);
+        Ok(())
+    }
+
+    fn start_cancel(&mut self, ctx: &mut Context<'_, Self>) {
+        let Some(active) = &mut self.current else {
             return;
         };
-        self.pending.push_front(active.envelope);
-        self.maybe_start(ctx);
+        if active.cancelling {
+            return;
+        }
+        let (Some(actor), Some(command)) = (active.actor.clone(), active.cancel.clone()) else {
+            return;
+        };
+        active.cancelling = true;
+        let run_id = active.run_id.clone();
+        let cancelled = active.envelope.clone();
+        let runs = self.runs.clone();
+        ctx.offload(
+            CALL_BOUND,
+            async move { runs.remove(&actor).await.map_err(|error| error.to_string()) },
+            move |result| SessionMsg::Cancelled {
+                run_id,
+                command,
+                cancelled,
+                result: result
+                    .map_err(|_| "run cancellation deadline".to_owned())
+                    .and_then(|result| result),
+            },
+        );
     }
 
     async fn append(&self, entry: JournalEntry) -> Result<(), kokage::BoxError> {
@@ -563,10 +616,6 @@ impl Actor for Session {
     type Msg = SessionMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.deps.evidence.emit(Evidence::ActorStarted {
-            actor: "session",
-            generation: self.generation,
-        });
         let runs = self.runs.clone();
         ctx.offload(
             CALL_BOUND,
@@ -590,6 +639,15 @@ impl Actor for Session {
                     return Ok(());
                 }
                 self.messages += 1;
+                if envelope.text == "cancel flood" {
+                    if let Some(active) = &mut self.current
+                        && active.cancel.is_none()
+                    {
+                        active.cancel = Some(envelope);
+                        self.start_cancel(ctx);
+                    }
+                    return Ok(());
+                }
                 if !self.deps.gate.is_open() {
                     self.deps.evidence.emit(Evidence::HeldWhilePaused {
                         chat: self.chat.clone(),
@@ -598,32 +656,8 @@ impl Actor for Session {
                     self.pending.push_back(envelope);
                     return Ok(());
                 }
-                if envelope.text == "cancel flood" {
-                    if let Some(active) = self.current.take()
-                        && let Some(actor) = active.actor
-                    {
-                        let cancelled = active.envelope;
-                        let runs = self.runs.clone();
-                        ctx.offload(
-                            CALL_BOUND,
-                            async move {
-                                runs.remove(&actor).await.map_err(|error| error.to_string())
-                            },
-                            move |result| SessionMsg::Cancelled {
-                                command: envelope,
-                                cancelled,
-                                result: result
-                                    .map_err(|_| "run cancellation deadline".to_owned())
-                                    .and_then(|result| result),
-                            },
-                        );
-                    } else {
-                        self.pending.push_back(envelope);
-                    }
-                } else {
-                    self.pending.push_back(envelope);
-                    self.maybe_start(ctx);
-                }
+                self.pending.push_back(envelope);
+                self.maybe_start(ctx);
             }
             SessionMsg::GateChanged(notice) => {
                 debug_assert!(!notice.reason.is_empty());
@@ -703,16 +737,27 @@ impl Actor for Session {
                         run_id: watched_run.clone(),
                         event,
                     });
+                    self.start_cancel(ctx);
                     let _ = (envelope, attempt);
                 }
                 Err(reason) => {
-                    self.deps.evidence.emit(Evidence::RunFailed {
-                        chat: self.chat.clone(),
-                        envelope_id: envelope.id,
-                        attempt,
-                        reason,
-                    });
-                    self.retry_current(&run_id, ctx);
+                    let cancelled_before_mount = self
+                        .current
+                        .as_ref()
+                        .is_some_and(|active| active.run_id == run_id && active.cancel.is_some());
+                    if cancelled_before_mount {
+                        self.current = None;
+                        self.attempts.remove(&envelope.id);
+                        self.maybe_start(ctx);
+                    } else {
+                        self.deps.evidence.emit(Evidence::RunFailed {
+                            chat: self.chat.clone(),
+                            envelope_id: envelope.id,
+                            attempt,
+                            reason: reason.clone(),
+                        });
+                        self.retry_current(&run_id, &reason, ctx).await?;
+                    }
                 }
             },
             SessionMsg::RunLifecycle { run_id, event } => match event.kind {
@@ -726,33 +771,37 @@ impl Actor for Session {
                     }
                 }
                 MonitorEventKind::Exited { status, .. } if status.is_failure() => {
-                    self.retry_current(&run_id, ctx);
+                    self.retry_current(&run_id, "run actor exited", ctx).await?;
                 }
                 _ => {}
             },
             SessionMsg::RunFailed { run_id, reason } => {
-                let _ = reason;
-                self.retry_current(&run_id, ctx);
+                self.retry_current(&run_id, &reason, ctx).await?;
             }
             SessionMsg::RunSucceeded { run_id } => {
-                if self
-                    .current
-                    .as_ref()
-                    .is_some_and(|active| active.run_id == run_id)
-                {
-                    self.current = None;
+                if let Some(active) = self.current.take_if(|active| active.run_id == run_id) {
+                    self.attempts.remove(&active.envelope.id);
                 }
                 if self.deps.settings.idle_eviction() && self.pending.is_empty() {
                     ctx.set_timeout(IDLE, SessionMsg::Idle, IDLE_AFTER);
                 }
                 self.maybe_start(ctx);
             }
+            SessionMsg::Retry => {
+                self.retry_scheduled = false;
+                self.maybe_start(ctx);
+            }
             SessionMsg::Cancelled {
+                run_id,
                 command,
                 cancelled,
                 result,
             } => {
                 result.map_err(io::Error::other)?;
+                let Some(_active) = self.current.take_if(|active| active.run_id == run_id) else {
+                    return Ok(());
+                };
+                self.attempts.remove(&cancelled.id);
                 self.append(JournalEntry::Assistant {
                     chat: self.chat.clone(),
                     envelope_id: cancelled.id,
@@ -803,8 +852,4 @@ impl Actor for Session {
         self.deps.evidence.emit(Evidence::ActorStopped("session"));
         Ok(())
     }
-}
-
-pub fn session_generation(counter: &AtomicU64) -> u64 {
-    counter.fetch_add(1, Ordering::SeqCst)
 }
