@@ -26,14 +26,17 @@ Every feature in this book has a runnable counterpart under
   `supervisor_snapshot_trace` — observability patterns ready to adapt.
 - `json_edge` — decoding a byte-oriented edge into typed messages.
 
-Three larger examples put everything together the way this book did, and are
+Four larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry), **`assistant_control_plane`** (an LLM-agent control
 plane with offloaded model calls), and **`build_farm`** (a finite dependency
 build over restarting service tasks and dynamic one-shot workers). The first
 two run with `--features metrics,derive`; `build_farm` runs with
 `--features serde` so it can validate and round-trip its declaration outline
-before spawn.
+before spawn. **`sidecar`** is the task-first embedding case: a host-owned
+process starts and stops plain supervised services, mixes in one actor subtree,
+rolls back failed startup, and re-embeds supervision without surrendering
+`main` or the Tokio runtime. It runs with the default feature set.
 
 ## Watch a tree live
 
