@@ -36,7 +36,7 @@ two run with `--features metrics,derive`; `build_farm` runs with
 before spawn. **`sidecar`** is the task-first embedding case: a host-owned
 process starts and stops plain supervised services, mixes in one actor subtree,
 rolls back failed startup, and re-embeds supervision without surrendering
-`main` or the Tokio runtime.
+`main` or the Tokio runtime. It runs with the default feature set.
 
 ## Watch a tree live
 

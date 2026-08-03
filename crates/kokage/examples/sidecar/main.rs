@@ -37,7 +37,6 @@
 //! ```
 
 use std::{
-    error::Error,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicUsize, Ordering},
@@ -52,10 +51,9 @@ use kokage::{
 };
 
 const START_BOUND: Duration = Duration::from_secs(2);
+const ROUND_TRIP_BOUND: Duration = Duration::from_secs(2);
 const STOP_BOUND: Duration = Duration::from_secs(2);
-const PROBER_GRACE: Duration = Duration::from_millis(40);
-
-type AnyError = Box<dyn Error + Send + Sync>;
+const PROBER_GRACE: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Default)]
 struct Journal(Arc<Mutex<Vec<String>>>);
@@ -76,10 +74,11 @@ impl Journal {
     }
 
     fn position(&self, event: &str) -> usize {
-        self.events()
+        let events = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        events
             .iter()
             .position(|candidate| candidate == event)
-            .unwrap_or_else(|| panic!("missing `{event}` in journal: {:?}", self.events()))
+            .unwrap_or_else(|| panic!("missing `{event}` in journal: {events:?}"))
     }
 }
 
@@ -90,11 +89,11 @@ struct AbortWitness {
 
 impl Drop for AbortWitness {
     fn drop(&mut self) {
-        self.journal.record(event(self.epoch, "rotator:aborted"));
+        self.journal
+            .record(event(self.epoch, "log-rotator:aborted"));
     }
 }
 
-#[derive(Clone)]
 struct AuditActor {
     epoch: u8,
     journal: Journal,
@@ -134,7 +133,7 @@ struct EmbeddedSidecar {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), AnyError> {
+async fn main() -> Result<(), BoxError> {
     let journal = Journal::default();
 
     journal.record("host:init");
@@ -158,11 +157,11 @@ async fn main() -> Result<(), AnyError> {
     journal.record("host:teardown");
     assert!(journal.position("2:sidecar:stopped") < journal.position("host:teardown"));
 
-    println!("PHASE 4 OK — host teardown began only after the re-embedded sidecar stopped");
+    println!("HOST OK — teardown began only after the re-embedded sidecar stopped");
     Ok(())
 }
 
-async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), AnyError> {
+async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), BoxError> {
     let failed = assemble(0, journal.clone(), true)?;
     let failed_scope = failed.scope.clone();
 
@@ -172,7 +171,7 @@ async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), AnyErr
     let start_order = [
         event(0, "config-watcher:started"),
         event(0, "cache-refresher:started"),
-        event(0, "rotator:started"),
+        event(0, "log-rotator:started"),
         event(0, "audit-actor:started"),
         event(0, "health-prober:start-failed"),
     ];
@@ -188,7 +187,7 @@ async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), AnyErr
     let terminal_prefix_events = [
         event(0, "config-watcher:stopped"),
         event(0, "cache-refresher:stopped"),
-        event(0, "rotator:aborted"),
+        event(0, "log-rotator:aborted"),
         event(0, "audit-actor:stopped"),
     ];
     let before_rollback = journal.events();
@@ -273,7 +272,7 @@ async fn verify_failed_startup_rolls_back(journal: Journal) -> Result<(), AnyErr
     Ok(())
 }
 
-async fn embed(epoch: u8, journal: Journal) -> Result<EmbeddedSidecar, AnyError> {
+async fn embed(epoch: u8, journal: Journal) -> Result<EmbeddedSidecar, BoxError> {
     journal.record(event(epoch, "sidecar:embedding"));
     let sidecar = assemble(epoch, journal.clone(), false)?;
     tokio::time::timeout(START_BOUND, sidecar.scope.wait_started()).await??;
@@ -306,10 +305,7 @@ async fn embed(epoch: u8, journal: Journal) -> Result<EmbeddedSidecar, AnyError>
         ["audit"]
     );
 
-    println!(
-        "PHASE {} OK — host embedded a task-first root with one actor subtree",
-        epoch
-    );
+    println!("PHASE {epoch} OK — host embedded a task-first root with one actor subtree");
     Ok(sidecar)
 }
 
@@ -334,10 +330,7 @@ fn assemble(
     root.add_task_spec(cooperative_task(epoch, "config-watcher", journal.clone()));
     root.add_task_spec(cooperative_task(epoch, "cache-refresher", journal.clone()));
     root.add_task_spec(rotator(epoch, journal.clone()));
-    root.add_subtree_spec(
-        "actor-services",
-        SubtreeSpec::from(actors).restart(RestartPolicy::never()),
-    );
+    root.add_subtree_spec("actor-services", SubtreeSpec::from(actors));
     root.add_task_spec(prober(epoch, journal.clone(), fail_startup));
 
     let running = root.spawn()?;
@@ -362,7 +355,6 @@ fn cooperative_task(epoch: u8, name: &'static str, journal: Journal) -> TaskSpec
             Ok(())
         }
     })
-    .restart(RestartPolicy::never())
     .shutdown(Shutdown::graceful_for(Duration::from_millis(200)))
     .manual_readiness(START_BOUND)
 }
@@ -375,13 +367,12 @@ fn rotator(epoch: u8, journal: Journal) -> TaskSpec {
                 epoch,
                 journal: journal.clone(),
             };
-            journal.record(event(epoch, "rotator:started"));
+            journal.record(event(epoch, "log-rotator:started"));
             ctx.mark_ready();
             std::future::pending::<()>().await;
             Ok(())
         }
     })
-    .restart(RestartPolicy::never())
     .shutdown(Shutdown::abort())
     .manual_readiness(START_BOUND)
 }
@@ -405,14 +396,13 @@ fn prober(epoch: u8, journal: Journal, fail_startup: bool) -> TaskSpec {
             Ok(())
         }
     })
-    .restart(RestartPolicy::never())
     .shutdown(Shutdown::graceful_for(PROBER_GRACE))
     .manual_readiness(START_BOUND)
 }
 
-async fn exercise(sidecar: &EmbeddedSidecar) -> Result<(), AnyError> {
+async fn exercise(sidecar: &EmbeddedSidecar) -> Result<(), BoxError> {
     sidecar.audit.send("host-health-report").await?;
-    tokio::time::timeout(START_BOUND, async {
+    tokio::time::timeout(ROUND_TRIP_BOUND, async {
         while sidecar.reports.load(Ordering::SeqCst) != 1 {
             tokio::task::yield_now().await;
         }
@@ -422,7 +412,7 @@ async fn exercise(sidecar: &EmbeddedSidecar) -> Result<(), AnyError> {
     Ok(())
 }
 
-async fn stop(sidecar: EmbeddedSidecar, journal: &Journal) -> Result<(), AnyError> {
+async fn stop(sidecar: EmbeddedSidecar, journal: &Journal) -> Result<(), BoxError> {
     let epoch = sidecar.epoch;
     let shutdown_started = Instant::now();
     let shutdown = tokio::time::timeout(STOP_BOUND, sidecar.running.shutdown()).await?;
@@ -470,14 +460,11 @@ async fn stop(sidecar: EmbeddedSidecar, journal: &Journal) -> Result<(), AnyErro
             < journal.position(&event(epoch, "sidecar:stopped"))
     );
     assert!(
-        journal.position(&event(epoch, "rotator:aborted"))
+        journal.position(&event(epoch, "log-rotator:aborted"))
             < journal.position(&event(epoch, "sidecar:stopped"))
     );
 
-    println!(
-        "PHASE {} STOP OK — abort was immediate and strict cooperative grace expired",
-        epoch
-    );
+    println!("PHASE {epoch} STOP OK — abort was immediate and strict cooperative grace expired");
     Ok(())
 }
 
