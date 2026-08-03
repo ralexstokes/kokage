@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -79,8 +79,14 @@ pub struct TransitionGate {
     entries: Arc<AtomicU64>,
     entered: Arc<Notify>,
     released: Arc<Notify>,
+    pending: Arc<AtomicU64>,
+    pending_changed: Arc<Notify>,
     buffered: Arc<AtomicU64>,
     buffered_changed: Arc<Notify>,
+    requests_held: Arc<AtomicBool>,
+    request_entries: Arc<AtomicU64>,
+    request_entered: Arc<Notify>,
+    requests_released: Arc<Notify>,
     recovery_held: Arc<AtomicBool>,
     recovery_entries: Arc<AtomicU64>,
     recovery_entered: Arc<Notify>,
@@ -94,9 +100,7 @@ impl TransitionGate {
     }
 
     pub async fn wait_entered(&self, ticket: u64) {
-        while self.entries.load(Ordering::Acquire) < ticket {
-            self.entered.notified().await;
-        }
+        wait_for_counter(&self.entries, &self.entered, ticket).await;
     }
 
     pub fn release(&self) {
@@ -109,9 +113,39 @@ impl TransitionGate {
     }
 
     pub async fn wait_buffered(&self, target: u64) {
-        while self.buffered.load(Ordering::Acquire) < target {
-            self.buffered_changed.notified().await;
-        }
+        wait_for_counter(&self.buffered, &self.buffered_changed, target).await;
+    }
+
+    #[cfg(test)]
+    pub fn pending(&self) -> u64 {
+        self.pending.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub async fn wait_pending(&self, target: u64) {
+        wait_for_counter(&self.pending, &self.pending_changed, target).await;
+    }
+
+    #[cfg(test)]
+    pub fn has_entered(&self, ticket: u64) -> bool {
+        self.entries.load(Ordering::Acquire) >= ticket
+    }
+
+    #[cfg(test)]
+    pub fn hold_requests(&self, count: u64) -> u64 {
+        self.requests_held.store(true, Ordering::Release);
+        self.request_entries.load(Ordering::Acquire) + count
+    }
+
+    #[cfg(test)]
+    pub async fn wait_requests_entered(&self, ticket: u64) {
+        wait_for_counter(&self.request_entries, &self.request_entered, ticket).await;
+    }
+
+    #[cfg(test)]
+    pub fn release_requests(&self) {
+        self.requests_held.store(false, Ordering::Release);
+        self.requests_released.notify_waiters();
     }
 
     #[cfg(test)]
@@ -122,9 +156,7 @@ impl TransitionGate {
 
     #[cfg(test)]
     pub async fn wait_recovery_entered(&self, ticket: u64) {
-        while self.recovery_entries.load(Ordering::Acquire) < ticket {
-            self.recovery_entered.notified().await;
-        }
+        wait_for_counter(&self.recovery_entries, &self.recovery_entered, ticket).await;
     }
 
     #[cfg(test)]
@@ -138,15 +170,27 @@ impl TransitionGate {
         self.buffered_changed.notify_waiters();
     }
 
+    fn record_pending(&self) {
+        self.pending.fetch_add(1, Ordering::AcqRel);
+        self.pending_changed.notify_waiters();
+    }
+
     async fn pause_if_armed(&self) {
         if !self.held.load(Ordering::Acquire) {
             return;
         }
         self.entries.fetch_add(1, Ordering::AcqRel);
         self.entered.notify_waiters();
-        while self.held.load(Ordering::Acquire) {
-            self.released.notified().await;
+        wait_for_clear(&self.held, &self.released).await;
+    }
+
+    async fn pause_request_if_armed(&self) {
+        if !self.requests_held.load(Ordering::Acquire) {
+            return;
         }
+        self.request_entries.fetch_add(1, Ordering::AcqRel);
+        self.request_entered.notify_waiters();
+        wait_for_clear(&self.requests_held, &self.requests_released).await;
     }
 
     async fn pause_recovery_if_armed(&self) {
@@ -155,9 +199,31 @@ impl TransitionGate {
         }
         self.recovery_entries.fetch_add(1, Ordering::AcqRel);
         self.recovery_entered.notify_waiters();
-        while self.recovery_held.load(Ordering::Acquire) {
-            self.recovery_released.notified().await;
+        wait_for_clear(&self.recovery_held, &self.recovery_released).await;
+    }
+}
+
+async fn wait_for_counter(counter: &AtomicU64, changed: &Notify, target: u64) {
+    loop {
+        let notified = changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if counter.load(Ordering::Acquire) >= target {
+            return;
         }
+        notified.await;
+    }
+}
+
+async fn wait_for_clear(flag: &AtomicBool, changed: &Notify) {
+    loop {
+        let notified = changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !flag.load(Ordering::Acquire) {
+            return;
+        }
+        notified.await;
     }
 }
 
@@ -205,6 +271,23 @@ struct Pending {
     ranges: Vec<KeyRange>,
     buffered: Vec<BufferedRequest>,
     reply: PendingReply,
+    transition: Option<PendingTransition>,
+}
+
+enum PendingTransition {
+    Split {
+        transition: TransitionContext,
+        source: Member,
+        at: Key,
+        epochs: (u64, u64),
+    },
+    Reload {
+        transition: TransitionContext,
+        source: Member,
+        config: ShardConfig,
+        epoch: u64,
+        crash_during_handoff: bool,
+    },
 }
 
 pub(crate) struct TransitionOutcome {
@@ -240,10 +323,12 @@ pub(crate) enum RouterMsg {
         reply: Reply<Result<TransitionReport, String>>,
     },
     RequestFinishedWrite {
+        key: Key,
         reply: Reply<Result<WriteReceipt, String>>,
         result: Result<WriteReceipt, String>,
     },
     RequestFinishedRead {
+        key: Key,
         reply: Reply<Result<ReadReceipt, String>>,
         result: Result<ReadReceipt, String>,
     },
@@ -256,6 +341,7 @@ pub(crate) struct MembershipRouter {
     gate: TransitionGate,
     faults: FaultInjector,
     members: Vec<Member>,
+    in_flight: BTreeMap<Key, usize>,
     pending: Option<Pending>,
     next_epoch: u64,
 }
@@ -273,6 +359,7 @@ impl MembershipRouter {
             gate,
             faults,
             members: Vec::new(),
+            in_flight: BTreeMap::new(),
             pending: None,
             next_epoch: 0,
         }
@@ -296,14 +383,21 @@ impl MembershipRouter {
             .is_some_and(|pending| pending.ranges.iter().any(|range| range.contains(key)))
     }
 
-    fn dispatch(&self, request: BufferedRequest, ctx: &mut Context<'_, Self>) {
+    fn dispatch(&mut self, request: BufferedRequest, ctx: &mut Context<'_, Self>) {
+        let request_key = request.key();
+        *self.in_flight.entry(request_key).or_default() += 1;
         match request {
             BufferedRequest::Write { command, reply } => {
                 let directory = self.directory.clone();
+                let gate = self.gate.clone();
                 ctx.offload(
                     CALL_BOUND,
-                    execute_write(directory, command),
+                    async move {
+                        gate.pause_request_if_armed().await;
+                        execute_write(directory, command).await
+                    },
                     move |result| RouterMsg::RequestFinishedWrite {
+                        key: request_key,
                         reply,
                         result: flatten_offload(result),
                     },
@@ -311,13 +405,84 @@ impl MembershipRouter {
             }
             BufferedRequest::Read { key, reply } => {
                 let directory = self.directory.clone();
-                ctx.offload(CALL_BOUND, execute_read(directory, key), move |result| {
-                    RouterMsg::RequestFinishedRead {
+                let gate = self.gate.clone();
+                ctx.offload(
+                    CALL_BOUND,
+                    async move {
+                        gate.pause_request_if_armed().await;
+                        execute_read(directory, key).await
+                    },
+                    move |result| RouterMsg::RequestFinishedRead {
+                        key: request_key,
                         reply,
                         result: flatten_offload(result),
-                    }
-                });
+                    },
+                );
             }
+        }
+    }
+
+    fn has_in_flight(&self, ranges: &[KeyRange]) -> bool {
+        self.in_flight
+            .iter()
+            .any(|(key, count)| *count > 0 && ranges.iter().any(|range| range.contains(*key)))
+    }
+
+    fn finish_request(&mut self, key: Key) {
+        let remove = {
+            let count = self
+                .in_flight
+                .get_mut(&key)
+                .expect("request completion has a tracked in-flight key");
+            *count -= 1;
+            *count == 0
+        };
+        if remove {
+            self.in_flight.remove(&key);
+        }
+    }
+
+    fn start_pending_transition(&mut self, ctx: &mut Context<'_, Self>) {
+        let Some(pending) = self.pending.as_ref() else {
+            return;
+        };
+        if pending.transition.is_none() || self.has_in_flight(&pending.ranges) {
+            return;
+        }
+        let transition = self
+            .pending
+            .as_mut()
+            .and_then(|pending| pending.transition.take())
+            .expect("ready pending transition has its launch state");
+
+        match transition {
+            PendingTransition::Split {
+                transition,
+                source,
+                at,
+                epochs,
+            } => ctx.offload(
+                TRANSITION_BOUND,
+                async move {
+                    transition.gate.pause_if_armed().await;
+                    split(transition, source, at, epochs).await
+                },
+                |result| RouterMsg::TransitionFinished(flatten_offload(result)),
+            ),
+            PendingTransition::Reload {
+                transition,
+                source,
+                config,
+                epoch,
+                crash_during_handoff,
+            } => ctx.offload(
+                TRANSITION_BOUND,
+                async move {
+                    transition.gate.pause_if_armed().await;
+                    reload(transition, source, config, epoch, crash_during_handoff).await
+                },
+                |result| RouterMsg::TransitionFinished(flatten_offload(result)),
+            ),
         }
     }
 
@@ -339,6 +504,7 @@ impl MembershipRouter {
             ranges: vec![range],
             buffered: Vec::new(),
             reply: PendingReply::Bootstrap(reply),
+            transition: None,
         });
         ctx.offload(
             TRANSITION_BOUND,
@@ -377,15 +543,15 @@ impl MembershipRouter {
             ranges: vec![source.endpoint.view.range],
             buffered: Vec::new(),
             reply: PendingReply::Change(reply),
+            transition: Some(PendingTransition::Split {
+                transition,
+                source,
+                at,
+                epochs,
+            }),
         });
-        ctx.offload(
-            TRANSITION_BOUND,
-            async move {
-                transition.gate.pause_if_armed().await;
-                split(transition, source, at, epochs).await
-            },
-            |result| RouterMsg::TransitionFinished(flatten_offload(result)),
-        );
+        self.gate.record_pending();
+        self.start_pending_transition(ctx);
     }
 
     fn start_reload(
@@ -415,15 +581,16 @@ impl MembershipRouter {
             ranges: vec![source.endpoint.view.range],
             buffered: Vec::new(),
             reply: PendingReply::Change(reply),
+            transition: Some(PendingTransition::Reload {
+                transition,
+                source,
+                config,
+                epoch,
+                crash_during_handoff,
+            }),
         });
-        ctx.offload(
-            TRANSITION_BOUND,
-            async move {
-                transition.gate.pause_if_armed().await;
-                reload(transition, source, config, epoch, crash_during_handoff).await
-            },
-            |result| RouterMsg::TransitionFinished(flatten_offload(result)),
-        );
+        self.gate.record_pending();
+        self.start_pending_transition(ctx);
     }
 
     fn finish_transition(
@@ -520,8 +687,16 @@ impl Actor for MembershipRouter {
                 crash_during_handoff,
                 reply,
             } => self.start_reload(source_id, config, crash_during_handoff, reply, ctx),
-            RouterMsg::RequestFinishedWrite { reply, result } => reply.send(result),
-            RouterMsg::RequestFinishedRead { reply, result } => reply.send(result),
+            RouterMsg::RequestFinishedWrite { key, reply, result } => {
+                self.finish_request(key);
+                reply.send(result);
+                self.start_pending_transition(ctx);
+            }
+            RouterMsg::RequestFinishedRead { key, reply, result } => {
+                self.finish_request(key);
+                reply.send(result);
+                self.start_pending_transition(ctx);
+            }
             RouterMsg::TransitionFinished(outcome) => self.finish_transition(outcome, ctx),
         }
         Ok(())
@@ -1008,5 +1183,38 @@ async fn cutover(
             Ok((snapshot, true))
         }
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transition_gate_waits_do_not_lose_notifications() {
+        for _ in 0..512 {
+            let gate = TransitionGate::default();
+            let ticket = gate.arm();
+            let paused_gate = gate.clone();
+            let paused = tokio::spawn(async move { paused_gate.pause_if_armed().await });
+
+            gate.wait_entered(ticket).await;
+            gate.release();
+            tokio::time::timeout(Duration::from_secs(1), paused)
+                .await
+                .expect("transition release notification must not be lost")
+                .expect("transition waiter task succeeds");
+
+            let buffered_target = gate.buffered() + 1;
+            let buffered_gate = gate.clone();
+            let buffered =
+                tokio::spawn(async move { buffered_gate.wait_buffered(buffered_target).await });
+            tokio::task::yield_now().await;
+            gate.record_buffered();
+            tokio::time::timeout(Duration::from_secs(1), buffered)
+                .await
+                .expect("buffer counter notification must not be lost")
+                .expect("buffer waiter task succeeds");
+        }
     }
 }

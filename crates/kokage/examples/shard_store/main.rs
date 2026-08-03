@@ -594,6 +594,62 @@ mod tests {
         directory_snapshot(&acceptance.directory).await
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn accepted_requests_quiesce_before_handoff() -> Result<(), AnyError> {
+        let acceptance = started(FaultInjector::default()).await?;
+        let initial = bootstrap(&acceptance.router).await?;
+
+        let request_ticket = acceptance.gate.hold_requests(2);
+        let early_write = spawn_write(
+            acceptance.router.clone(),
+            Write {
+                effect: 41,
+                key: 10,
+                delta: 4,
+            },
+        );
+        let early_read = spawn_read(acceptance.router.clone(), 60);
+        acceptance.gate.wait_requests_entered(request_ticket).await;
+
+        let transition_ticket = acceptance.gate.arm();
+        let pending_before = acceptance.gate.pending();
+        let buffered_before = acceptance.gate.buffered();
+        let router = acceptance.router.clone();
+        let source = initial.routes[0].shard_id.clone();
+        let transition = tokio::spawn(async move { split(&router, source, 50).await });
+        acceptance.gate.wait_pending(pending_before + 1).await;
+
+        assert!(
+            !acceptance.gate.has_entered(transition_ticket),
+            "handoff must not start while accepted requests are in flight"
+        );
+        let buffered_write = spawn_write(
+            acceptance.router.clone(),
+            Write {
+                effect: 42,
+                key: 20,
+                delta: 6,
+            },
+        );
+        acceptance.gate.wait_buffered(buffered_before + 1).await;
+        assert!(!acceptance.gate.has_entered(transition_ticket));
+
+        acceptance.gate.release_requests();
+        assert!(early_write.await??.applied);
+        let _ = early_read.await??;
+        acceptance.gate.wait_entered(transition_ticket).await;
+        acceptance.gate.release();
+
+        let report = transition.await??;
+        assert_eq!(report.buffered_requests, 1);
+        assert!(buffered_write.await??.applied);
+        let image = durable_image(&endpoint(&acceptance.directory, 10).await?).await?;
+        assert_eq!(image.applied.get(&41), Some(&10));
+        assert_eq!(image.applied.get(&42), Some(&20));
+        acceptance.running.shutdown().await?;
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn crash_recovery_waits_for_a_fresh_incarnation() -> Result<(), AnyError> {
         install_deliberate_panic_filter();

@@ -42,10 +42,18 @@ persisted its handoff image.
   way to await the next `ActorRef` incarnation would remove the need for the
   application-owned start signal.
 - Calls already offloaded before the router marks a range as transitioning are
-  not part of its buffer. The durable fence closes that race: the shard mutex
-  orders each write either before the snapshot (and therefore includes it) or
-  after the fence (and explicitly rejects it for retry). Focused tests pause
-  between crash recovery and prepare retry to exercise this stale-endpoint
-  window, inject failures before both split mounts and cutover, and reconcile
-  lost cutover and retirement outcomes. The same test target repeats crash
-  recovery 128 times to guard the previously observed `ReplyDropped` flake.
+  tracked by key. The router records the transition first, buffers every later
+  request for that range, and launches handoff only after the accepted prefix
+  has completed. This keeps caller-visible operations live instead of exposing
+  the shard's internal drain fence. Direct holders of a stale endpoint are
+  still protected by that durable fence: the shard mutex orders each write
+  either before the snapshot (and therefore includes it) or after the fence
+  (and explicitly rejects it for retry).
+- The example's deterministic transition gates use Tokio `Notify` together
+  with atomic evidence. Every wait registers and enables its notification
+  future before testing the atomic predicate, avoiding the check-then-subscribe
+  lost-wakeup race. Focused tests cover accepted-request quiescence, pause and
+  counter notifications, the stale-endpoint crash window, failures before both
+  split mounts and cutover, and reconciliation of lost cutover and retirement
+  outcomes. The same test target repeats crash recovery 128 times to guard the
+  previously observed `ReplyDropped` flake.
