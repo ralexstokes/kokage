@@ -33,6 +33,7 @@ smoke:
     cargo run --locked -p kokage --example assistant_control_plane --features metrics,derive
     cargo run --locked -p kokage --example build_farm --features serde
     cargo run --locked -p kokage --example shard_store --features serde
+    cargo run --locked -p kokage --example sidecar
 
 all-examples:
     bash scripts/run-all-examples.sh

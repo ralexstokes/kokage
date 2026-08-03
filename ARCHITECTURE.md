@@ -79,8 +79,7 @@ Policies are deliberately split:
 
 `SupervisorRuntime` (`runtime/supervision.rs`) is the per-scope state machine,
 running as one Tokio task. All children spawn into a single `JoinSet`; a
-`biased` select loop prioritizes shutdown > control commands > child readiness
-> nested snapshots > deadlines > child joins.
+`biased` select loop prioritizes shutdown > control commands > child readiness > nested snapshots > deadlines > child joins.
 
 Identity is a triple: **key** (slab slot) / **lineage** (which membership) /
 **generation** (which restart of that membership). Nearly every event handler
