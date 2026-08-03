@@ -1,16 +1,40 @@
-//! A host-owned process that embeds Kokage around its background machinery.
+//! # Embedded sidecar
 //!
-//! The host owns `main`, initialization, teardown, and the Tokio runtime. Its
-//! sidecar root is task-first: config watching, cache refresh, health probing,
-//! and log rotation are plain supervised futures with no actor runtime or
-//! mailbox. One small actor subtree sits beside those tasks to prove that an
-//! application can mix both execution models without making the host itself
-//! an actor system.
+//! `sidecar` is an assertion-driven acceptance script for embedding Kokage in
+//! a host process that owns `main`, the Tokio runtime, initialization, and
+//! teardown. Its task-first root contains four plain supervised services and
+//! one actor subtree as siblings:
 //!
-//! The executable is an assertion-driven acceptance script. It first rolls
-//! back a deliberately failed ordered startup, then embeds, detaches, and
-//! re-embeds the sidecar while the host remains alive. Shutdown proves both
-//! immediate abort and strict grace-bound escalation behavior.
+//! ```text
+//! sidecar (ordered)
+//! ├── config-watcher       plain task, cooperative
+//! ├── cache-refresher      plain task, cooperative
+//! ├── log-rotator          plain task, immediate abort
+//! ├── actor-services       nested actor subtree
+//! │   └── audit            typed actor/mailbox
+//! └── health-prober        plain task, strict bounded cooperation
+//! ```
+//!
+//! The script deliberately fails the last ordered child once. The host first
+//! observes that the declaration-ordered prefix remains live, then explicitly
+//! rolls it back. It subsequently completes two successful embed/run/stop
+//! cycles with ordinary host work between them, proving that the library
+//! composes with a process it does not own.
+//!
+//! Shutdown assertions require the log rotator's immediate
+//! [`Shutdown::abort`] classification. From the host's shutdown boundary they
+//! also prove that the stubborn health prober reaches its configured
+//! [`Shutdown::graceful_for`] bound before the timeout error and
+//! `after_grace: true` exit classification. The prober's own events establish
+//! cancellation-before-escalation ordering without treating its
+//! scheduler-dependent wake time as the start of the grace period. Host
+//! teardown begins only after the re-embedded sidecar has stopped.
+//!
+//! Run the acceptance script from the repository root:
+//!
+//! ```sh
+//! ./scripts/dev cargo run --locked -p kokage --example sidecar
+//! ```
 
 use std::{
     error::Error,
