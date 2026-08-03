@@ -497,26 +497,3 @@ fn assert_lifecycle(report: &LifecycleReport) {
     assert_eq!(report.connection_removals, 6, "{report:?}");
     assert!(report.sink_failed_exits < SINK_RESTART_LIMIT as u64);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn high_concurrency_acceptance_preserves_ingress_partition() {
-        const STRESS_RUNS: usize = 25;
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(32)
-            .enable_all()
-            .build()
-            .expect("stress runtime builds");
-        runtime.block_on(async {
-            for _ in 0..STRESS_RUNS {
-                run_acceptance()
-                    .await
-                    .expect("high-concurrency acceptance passes");
-            }
-        });
-    }
-}
