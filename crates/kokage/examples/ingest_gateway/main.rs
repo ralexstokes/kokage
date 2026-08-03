@@ -12,10 +12,29 @@
 //!
 //! Scripted clients send length-prefixed JSON over real TCP. The script holds
 //! the sink, fills every FIFO from the far end back to ingress, and then
-//! asserts exact `ActorStats` while `try_send` sheds only `Full` frames.
-//! Malformed clients fail only their own connection actors. Run with
-//! `--console` to keep the verified tree attached to `kokage-console` until
-//! Ctrl-C.
+//! asserts exact `ActorStats` while `try_send` sheds only `Full` frames. The
+//! application report distinguishes that intentional loss of non-replaceable
+//! events from pipeline unavailability, which fails the connection so its
+//! client can reconnect.
+//!
+//! Partial headers, truncated bodies, oversized declarations, and invalid
+//! JSON each fail and remove only their own connection actor. A later healthy
+//! client still reaches the sink. The sink's first two startup attempts fail
+//! beneath equal-jitter exponential backoff; lifecycle evidence checks their
+//! generation order and delay intervals, all four malformed failures, all six
+//! connection removals, and the absence of observation lag.
+//!
+//! Run the same headless acceptance path used by CI:
+//!
+//! ```sh
+//! ./scripts/dev cargo run --locked -p kokage --example ingest_gateway --features serde
+//! ```
+//!
+//! Attach `kokage-console` to the verified tree until Ctrl-C:
+//!
+//! ```sh
+//! ./scripts/dev cargo run --locked -p kokage --example ingest_gateway --features serde -- --console
+//! ```
 
 mod model;
 mod network;
