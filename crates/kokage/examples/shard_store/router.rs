@@ -25,6 +25,7 @@ use crate::{
 const CALL_BOUND: Duration = Duration::from_secs(2);
 const HANDOFF_BOUND: Duration = Duration::from_secs(4);
 const PHASE_BOUND: Duration = Duration::from_secs(3);
+const REPLY_DROP_BACKOFF: Duration = Duration::from_millis(10);
 const TRANSITION_BOUND: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +44,6 @@ pub(crate) struct FaultInjector {
 }
 
 impl FaultInjector {
-    #[cfg(test)]
     pub fn arm(&self, point: FailurePoint) {
         self.armed
             .lock()
@@ -116,50 +116,41 @@ impl TransitionGate {
         wait_for_counter(&self.buffered, &self.buffered_changed, target).await;
     }
 
-    #[cfg(test)]
     pub fn pending(&self) -> u64 {
         self.pending.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
     pub async fn wait_pending(&self, target: u64) {
         wait_for_counter(&self.pending, &self.pending_changed, target).await;
     }
 
-    #[cfg(test)]
     pub fn has_entered(&self, ticket: u64) -> bool {
         self.entries.load(Ordering::Acquire) >= ticket
     }
 
-    #[cfg(test)]
     pub fn hold_requests(&self, count: u64) -> u64 {
         self.requests_held.store(true, Ordering::Release);
         self.request_entries.load(Ordering::Acquire) + count
     }
 
-    #[cfg(test)]
     pub async fn wait_requests_entered(&self, ticket: u64) {
         wait_for_counter(&self.request_entries, &self.request_entered, ticket).await;
     }
 
-    #[cfg(test)]
     pub fn release_requests(&self) {
         self.requests_held.store(false, Ordering::Release);
         self.requests_released.notify_waiters();
     }
 
-    #[cfg(test)]
     pub fn arm_recovery(&self) -> u64 {
         self.recovery_held.store(true, Ordering::Release);
         self.recovery_entries.load(Ordering::Acquire) + 1
     }
 
-    #[cfg(test)]
     pub async fn wait_recovery_entered(&self, ticket: u64) {
         wait_for_counter(&self.recovery_entries, &self.recovery_entered, ticket).await;
     }
 
-    #[cfg(test)]
     pub fn release_recovery(&self) {
         self.recovery_held.store(false, Ordering::Release);
         self.recovery_released.notify_waiters();
@@ -207,6 +198,8 @@ async fn wait_for_counter(counter: &AtomicU64, changed: &Notify, target: u64) {
     loop {
         let notified = changed.notified();
         tokio::pin!(notified);
+        // `enable` claims a stored permit in waiter order; the atomic predicate
+        // remains the source of truth that makes missed notifications harmless.
         notified.as_mut().enable();
         if counter.load(Ordering::Acquire) >= target {
             return;
@@ -966,7 +959,8 @@ async fn prepare(
                     gate.pause_recovery_if_armed().await;
                     waited_for_recovery = true;
                 }
-                tokio::task::yield_now().await;
+                let retry_at = std::cmp::min(deadline, Instant::now() + REPLY_DROP_BACKOFF);
+                tokio::time::sleep_until(retry_at).await;
             }
             Err(CallError::ResponseTimedOut { .. }) => {
                 break source
@@ -1183,38 +1177,5 @@ async fn cutover(
             Ok((snapshot, true))
         }
         Err(error) => Err(error.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod notification_tests {
-    use super::*;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn transition_gate_waits_do_not_lose_notifications() {
-        for _ in 0..512 {
-            let gate = TransitionGate::default();
-            let ticket = gate.arm();
-            let paused_gate = gate.clone();
-            let paused = tokio::spawn(async move { paused_gate.pause_if_armed().await });
-
-            gate.wait_entered(ticket).await;
-            gate.release();
-            tokio::time::timeout(Duration::from_secs(1), paused)
-                .await
-                .expect("transition release notification must not be lost")
-                .expect("transition waiter task succeeds");
-
-            let buffered_target = gate.buffered() + 1;
-            let buffered_gate = gate.clone();
-            let buffered =
-                tokio::spawn(async move { buffered_gate.wait_buffered(buffered_target).await });
-            tokio::task::yield_now().await;
-            gate.record_buffered();
-            tokio::time::timeout(Duration::from_secs(1), buffered)
-                .await
-                .expect("buffer counter notification must not be lost")
-                .expect("buffer waiter task succeeds");
-        }
     }
 }

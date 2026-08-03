@@ -32,7 +32,6 @@ smoke:
     cargo run --locked -p kokage --example trading_engine --features metrics,derive
     cargo run --locked -p kokage --example assistant_control_plane --features metrics,derive
     cargo run --locked -p kokage --example build_farm --features serde
-    cargo test --locked -p kokage --example shard_store --features serde
     cargo run --locked -p kokage --example shard_store --features serde
 
 all-examples:

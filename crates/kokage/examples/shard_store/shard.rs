@@ -42,8 +42,11 @@ pub struct DurableShard {
 #[derive(Debug)]
 struct DurableInner {
     image: DurableImage,
+    // Bounded by this script's finite transitions; a long-lived service must
+    // garbage-collect completed operation ids after their retry horizon.
     prepared: BTreeMap<String, DurableImage>,
-    crashed_handoffs: BTreeSet<String>,
+    // The same production GC rule applies to attempted handoff ids.
+    attempted_handoffs: BTreeSet<String>,
     active_handoff: Option<String>,
 }
 
@@ -53,7 +56,7 @@ impl DurableShard {
             inner: Mutex::new(DurableInner {
                 image,
                 prepared: BTreeMap::new(),
-                crashed_handoffs: BTreeSet::new(),
+                attempted_handoffs: BTreeSet::new(),
                 active_handoff: None,
             }),
             starts: AtomicU64::new(0),
@@ -103,19 +106,35 @@ impl DurableShard {
             return Err(format!("key {} is outside {shard_id}", command.key));
         }
 
-        let applied = !inner.image.applied.contains_key(&command.effect);
-        if applied {
-            inner.image.applied.insert(command.effect, command.key);
+        if let Some(&recorded_key) = inner.image.applied.get(&command.effect) {
+            if recorded_key != command.key {
+                return Err(format!(
+                    "effect {} was already applied to key {recorded_key}",
+                    command.effect
+                ));
+            }
+            let value = inner
+                .image
+                .values
+                .get(&command.key)
+                .copied()
+                .unwrap_or_default();
+            return Ok(WriteReceipt {
+                shard_id: shard_id.to_owned(),
+                epoch,
+                applied: false,
+                value,
+            });
         }
+
+        inner.image.applied.insert(command.effect, command.key);
         let value = inner.image.values.entry(command.key).or_default();
-        if applied {
-            value.total += command.delta;
-            value.version += 1;
-        }
+        value.total += command.delta;
+        value.version += 1;
         Ok(WriteReceipt {
             shard_id: shard_id.to_owned(),
             epoch,
-            applied,
+            applied: true,
             value: *value,
         })
     }
@@ -162,7 +181,7 @@ impl DurableShard {
             .entry(handoff_id.to_owned())
             .or_insert(current)
             .clone();
-        let should_crash = inner.crashed_handoffs.insert(handoff_id.to_owned());
+        let should_crash = inner.attempted_handoffs.insert(handoff_id.to_owned());
         drop(inner);
         self.handoff_changed.notify_waiters();
         Ok((image, should_crash))

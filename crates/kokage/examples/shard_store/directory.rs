@@ -38,7 +38,9 @@ pub enum DirectoryMsg {
 pub struct Directory {
     revision: u64,
     planned_rebinds: u64,
-    routes: BTreeMap<String, Endpoint>,
+    routes: BTreeMap<Key, Endpoint>,
+    // Bounded by the acceptance script; production must expire operation ids
+    // only after callers can no longer retry an unknown cutover outcome.
     completed_cutovers: BTreeMap<String, CompletedCutover>,
 }
 
@@ -83,24 +85,55 @@ impl Directory {
             return Ok(completed.snapshot.clone());
         }
 
+        let previous_extent = self
+            .routes
+            .first_key_value()
+            .zip(self.routes.last_key_value())
+            .map(|((_, first), (_, last))| (first.view.range.start, last.view.range.end));
         let mut candidate = self.routes.clone();
         for id in &remove {
-            if candidate.remove(id).is_none() {
-                return Err(format!("directory has no route named {id}"));
-            }
+            let start = candidate
+                .iter()
+                .find_map(|(start, endpoint)| (endpoint.view.shard_id == *id).then_some(*start))
+                .ok_or_else(|| format!("directory has no route named {id}"))?;
+            candidate.remove(&start);
         }
         for endpoint in insert {
             let id = endpoint.view.shard_id.clone();
-            if candidate.insert(id.clone(), endpoint).is_some() {
+            if candidate
+                .values()
+                .any(|existing| existing.view.shard_id == id)
+            {
                 return Err(format!("duplicate directory route {id}"));
+            }
+            let start = endpoint.view.range.start;
+            if candidate.insert(start, endpoint).is_some() {
+                return Err(format!("duplicate directory range start {start}"));
             }
         }
 
-        let mut ordered: Vec<_> = candidate.values().collect();
-        ordered.sort_by_key(|endpoint| endpoint.view.range);
+        let ordered: Vec<_> = candidate.values().collect();
+        if ordered.is_empty() {
+            return Err("directory cutover would remove every route".to_owned());
+        }
         for adjacent in ordered.windows(2) {
             if adjacent[0].view.range.end > adjacent[1].view.range.start {
                 return Err("directory cutover would create overlapping ranges".to_owned());
+            }
+            if adjacent[0].view.range.end < adjacent[1].view.range.start {
+                return Err("directory cutover would create a coverage gap".to_owned());
+            }
+        }
+        if let Some((previous_start, previous_end)) = previous_extent {
+            let next_start = ordered[0].view.range.start;
+            let next_end = ordered
+                .last()
+                .expect("non-empty directory candidate")
+                .view
+                .range
+                .end;
+            if (next_start, next_end) != (previous_start, previous_end) {
+                return Err("directory cutover would change the covered key extent".to_owned());
             }
         }
 
@@ -130,8 +163,10 @@ impl Actor for Directory {
             DirectoryMsg::Resolve { key, reply } => {
                 reply.send(
                     self.routes
-                        .values()
-                        .find(|endpoint| endpoint.view.range.contains(key))
+                        .range(..=key)
+                        .next_back()
+                        .map(|(_, endpoint)| endpoint)
+                        .filter(|endpoint| endpoint.view.range.contains(key))
                         .cloned(),
                 );
             }

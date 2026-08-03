@@ -29,7 +29,7 @@ Every feature in this book has a runnable counterpart under
 Four larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry), **`assistant_control_plane`** (an LLM-agent control
-plane with offloaded model calls), and **`build_farm`** (a finite dependency
+plane with offloaded model calls), **`build_farm`** (a finite dependency
 build over restarting service tasks and dynamic one-shot workers), and
 **`shard_store`** (planned sharded-state handoff, directory rebinding, rolling
 reload, and crash recovery). The first two run with
