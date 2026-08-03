@@ -42,9 +42,6 @@ process starts and stops plain supervised services, mixes in one actor subtree,
 rolls back failed startup, and re-embeds supervision without surrendering
 `main` or the Tokio runtime. It runs with the default feature set.
 
-The ingest gateway stays headless in CI. Pass `-- --console` to attach
-`kokage-console` to its live tree and keep it open until Ctrl-C.
-
 ## Watch a tree live
 
 The experimental `kokage-console` crate serves a local web dashboard over a

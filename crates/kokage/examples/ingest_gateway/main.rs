@@ -33,12 +33,6 @@
 //! ```sh
 //! ./scripts/dev cargo run --locked -p kokage --example ingest_gateway --features serde
 //! ```
-//!
-//! Attach `kokage-console` to the verified tree until Ctrl-C:
-//!
-//! ```sh
-//! ./scripts/dev cargo run --locked -p kokage --example ingest_gateway --features serde -- --console
-//! ```
 
 mod model;
 mod network;
@@ -55,7 +49,6 @@ use kokage::{
     Strategy, Tree,
     observe::{ActorStats, ChildEventKind, LifecycleEvent, LifecycleEventKind, LifecycleWatch},
 };
-use kokage_console::{ConsoleBuilder, ConsoleHandle};
 use tokio::{net::TcpStream, sync::watch, time::timeout};
 
 use model::{Evidence, GatewayReport, MalformedKind, PipelineGate, TelemetryEvent};
@@ -153,14 +146,10 @@ async fn main() -> Result<(), AnyError> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::WARN)
         .try_init()?;
-    let console_enabled = std::env::args()
-        .skip(1)
-        .any(|argument| argument == "--console");
-
-    run_acceptance(console_enabled).await
+    run_acceptance().await
 }
 
-async fn run_acceptance(console_enabled: bool) -> Result<(), AnyError> {
+async fn run_acceptance() -> Result<(), AnyError> {
     let mut gateway = assemble()?;
     let mut lifecycle = gateway
         .lifecycle
@@ -200,7 +189,6 @@ async fn run_acceptance(console_enabled: bool) -> Result<(), AnyError> {
         .await;
     println!("PHASE 1 OK — flaky sink recovered after two supervised backoffs");
 
-    let console = attach_console(console_enabled, &gateway.root).await?;
     let address = wait_for_address(gateway.address.clone()).await?;
 
     let mut flood = TcpStream::connect(address).await?;
@@ -313,12 +301,6 @@ async fn run_acceptance(console_enabled: bool) -> Result<(), AnyError> {
     );
     println!("PHASE 4 OK — overload report and cumulative ActorStats agree");
 
-    if let Some(console) = console {
-        println!("acceptance complete; press Ctrl-C to stop the attached console");
-        tokio::signal::ctrl_c().await?;
-        console.shutdown_and_wait().await?;
-    }
-
     gateway.running.shutdown().await?;
     timeout(ACCEPTANCE_BOUND, lifecycle_collector).await??;
     let lifecycle_report = lifecycle_evidence.snapshot();
@@ -399,18 +381,6 @@ fn assemble() -> Result<Gateway, AnyError> {
         gate,
         lifecycle: Some(lifecycle),
     })
-}
-
-async fn attach_console(enabled: bool, root: &ScopeRef) -> Result<Option<ConsoleHandle>, AnyError> {
-    if !enabled {
-        return Ok(None);
-    }
-    let console = ConsoleBuilder::for_runtime(root)
-        .bind(([127, 0, 0, 1], 0))
-        .spawn()
-        .await?;
-    println!("console available at http://{}", console.local_addr());
-    Ok(Some(console))
 }
 
 async fn wait_for_address(
@@ -543,7 +513,7 @@ mod tests {
             .expect("stress runtime builds");
         runtime.block_on(async {
             for _ in 0..STRESS_RUNS {
-                run_acceptance(false)
+                run_acceptance()
                     .await
                     .expect("high-concurrency acceptance passes");
             }

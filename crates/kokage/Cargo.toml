@@ -28,7 +28,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
-kokage-console = { path = "../kokage-console" }
 metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
 serde.workspace = true
