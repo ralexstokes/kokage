@@ -33,7 +33,7 @@ plane with offloaded model calls), **`build_farm`** (a finite dependency
 build over restarting service tasks and dynamic one-shot workers), and
 **`shard_store`** (planned sharded-state handoff, directory rebinding, rolling
 reload, and crash recovery), and **`ingest_gateway`** (real loopback TCP,
-dynamic connection actors, bounded FIFO overload, and a flaky downstream
+dynamic connection tasks, bounded FIFO overload, and a flaky downstream
 sink). The first two run with `--features metrics,derive`; `build_farm`,
 `shard_store`, and `ingest_gateway` run with `--features serde` so they can
 validate and round-trip declarations, runtime snapshots, or network frames.

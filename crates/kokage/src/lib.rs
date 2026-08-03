@@ -52,8 +52,7 @@
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`ActorSpec`] / [`TaskSpec`] | Restartable actor and arbitrary async-task declarations. |
-//! | [`OneShotActorSpec`] / [`OneShotTaskSpec`] | Consuming declarations for finite dynamic work. |
+//! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
 //! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
 //! | [`RunningTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
@@ -204,8 +203,6 @@
 //!   tasks, dynamic one-shot workers, and a durable content-addressed cache.
 //! - `examples/sidecar/` — task-first supervision embedded in a host-owned
 //!   process, with one actor subtree beside raw task children.
-//! - `examples/ingest_gateway/` — a real loopback TCP edge using one-shot
-//!   connection actors, bounded FIFO backpressure, and a flaky sink.
 //!
 //! # Cargo features
 //!
@@ -260,7 +257,7 @@ pub mod observe {
 /// handler timers.
 ///
 /// Policy configuration, concrete errors, peer-monitor event types, one-shot
-/// declarations, and cyclic-wiring declarations remain explicit imports
+/// task declarations, and cyclic-wiring declarations remain explicit imports
 /// from the crate root. Snapshots and lifecycle types live in [`observe`], and
 /// raw actor hosting lives in [`raw`].
 ///
@@ -280,8 +277,8 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
-    ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, OneShotActorSpec, Reply,
-    ReplyError, ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
+    ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
+    ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
 pub use runtime::{
     ChildHandle, DynamicScopeRef, RunningScope, RunningTree, ScopeRef, TaskError, TaskRef,

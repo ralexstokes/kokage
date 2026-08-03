@@ -6,9 +6,13 @@
 //! ├── batcher        actor, bounded FIFO (2)
 //! ├── shipper        actor, bounded FIFO (1), jittered exponential restart
 //! ├── connections    dynamic scope
-//! │   └── connection-N  one-shot raw actor owning one TcpStream
+//! │   └── connection-N  one-shot task owning one TcpStream
 //! └── listener       readiness-gated supervised loopback accept task
 //! ```
+//!
+//! A connection has no actor mailbox: its inputs are socket frames and its
+//! only control signal is shutdown. The existing one-shot task API consumes
+//! the unique `TcpStream` and removes the connection membership after exit.
 //!
 //! Scripted clients send length-prefixed JSON over real TCP. The script holds
 //! the sink, fills every FIFO from the far end back to ingress, and then
@@ -18,7 +22,7 @@
 //! client can reconnect.
 //!
 //! Partial headers, truncated bodies, oversized declarations, and invalid
-//! JSON each fail and remove only their own connection actor. A later healthy
+//! JSON each fail and remove only their own connection task. A later healthy
 //! client still reaches the sink. The sink's first two startup attempts fail
 //! beneath equal-jitter exponential backoff; lifecycle evidence checks their
 //! generation order and delay intervals, all four malformed failures, all six
@@ -301,7 +305,7 @@ async fn run_acceptance(console_enabled: bool) -> Result<(), AnyError> {
     let final_report = gateway.evidence.snapshot();
     assert_report(&final_report);
     let scoped_stats = gateway.root.actor_stats();
-    assert_eq!(scoped_stats.len(), 3, "connection actors were torn down");
+    assert_eq!(scoped_stats.len(), 3, "only pipeline actors expose stats");
     assert!(
         scoped_stats
             .iter()

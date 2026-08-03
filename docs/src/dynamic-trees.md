@@ -48,8 +48,6 @@ they belong to ordered scopes. Membership is managed through the
 [`DynamicScopeRef`]:
 
 - `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
-- `scope.spawn_actor_once(id, factory).await?` — consumes a unique resource
-  into a finite actor and removes its membership on terminal exit.
 - `scope.add_task(id, task).await?` — supervised tasks work too.
 - `scope.spawn_once(id, task).await?` — finite, non-restarting work that removes
   its membership on terminal exit.
@@ -61,19 +59,18 @@ they belong to ordered scopes. Membership is managed through the
 - `scope.remove_named(id).await?` — the id-based escape hatch for an
   external registry or operator command.
 
-The adjacent `add_actor_spec`, `spawn_actor_once_spec`, `add_task_spec`, and
-`spawn_once_spec` forms accept explicitly configured declarations.
-`OneShotActorSpec` and `OneShotTaskSpec` preserve consuming factories while
-configuring their relevant shutdown, readiness, or terminal-membership
-options. `add_subtree` accepts a `SubtreeSpec` directly when the subtree edge
-needs policy overrides.
+The adjacent `add_actor_spec`, `add_task_spec`, and `spawn_once_spec` forms
+accept explicitly configured declarations. `OneShotTaskSpec` preserves a
+consuming factory while configuring shutdown, readiness, or whether the
+terminal membership remains visible. `add_subtree` accepts a `SubtreeSpec`
+directly when the subtree edge needs policy overrides.
 
-Ordinary actors use repeatable factories. When one actor must take ownership
-of a non-cloneable resource and cannot meaningfully restart, use a one-shot
-actor declaration:
+Actors always use a repeatable factory, so there is no one-shot actor
+declaration. For the rare actor that should run until a terminal exit and then
+leave the dynamic scope, spell out both policies:
 
 ```rust
-# use kokage::{OneShotActorSpec, prelude::*};
+# use kokage::{ActorSpec, RestartPolicy, prelude::*};
 # struct Session;
 # impl Actor for Session {
 #     type Msg = ();
@@ -81,11 +78,9 @@ actor declaration:
 #         Ok(())
 #     }
 # }
-let resource = String::from("owned socket");
-let session = OneShotActorSpec::new("session", move || {
-    let _resource = resource;
-    Session
-});
+let session = ActorSpec::new("session", || Session)
+    .restart(RestartPolicy::never())
+    .remove_on_terminal_exit();
 # let _ = session;
 ```
 

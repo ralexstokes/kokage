@@ -1,9 +1,8 @@
 use std::{fmt, io, net::SocketAddr, time::Duration};
 
 use kokage::{
-    ActorRef, DynamicScopeRef, ExitResult, OneShotActorSpec, RestartPolicy, SendErrorKind,
-    Shutdown, TaskSpec,
-    raw::{RawActor, RawContext},
+    ActorRef, DynamicScopeRef, ExitResult, OneShotTaskSpec, RestartPolicy, SendErrorKind, Shutdown,
+    TaskContext, TaskSpec,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -101,8 +100,6 @@ impl From<io::Error> for ReadEventError {
     }
 }
 
-pub enum ConnectionMsg {}
-
 pub struct Connection {
     stream: TcpStream,
     intake: ActorRef<TelemetryEvent>,
@@ -117,18 +114,11 @@ impl Connection {
             evidence,
         }
     }
-}
 
-impl RawActor for Connection {
-    type Msg = ConnectionMsg;
-
-    async fn run(&mut self, ctx: &mut RawContext<Self::Msg>) -> ExitResult {
+    async fn run(mut self, ctx: TaskContext) -> ExitResult {
         loop {
             tokio::select! {
-                command = ctx.recv() => match command {
-                    None => return Ok(()),
-                    Some(never) => match never {},
-                },
+                _ = ctx.shutdown_token().cancelled() => return Ok(()),
                 read = read_event(&mut self.stream) => {
                     let event = match read {
                         Ok(ReadEvent::CleanEof) => {
@@ -184,11 +174,11 @@ pub fn listener(
                         evidence.connection_accepted();
                         stream.set_nodelay(true)?;
                         let id = next_connection.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        connections.spawn_actor_once_spec(
-                            OneShotActorSpec::new(format!("connection-{id}"), {
+                        connections.spawn_once_spec(
+                            OneShotTaskSpec::new(format!("connection-{id}"), {
                                 let intake = intake.clone();
                                 let evidence = evidence.clone();
-                                move || Connection::new(stream, intake, evidence)
+                                move |ctx| Connection::new(stream, intake, evidence).run(ctx)
                             })
                             .shutdown(Shutdown::graceful_for(Duration::from_millis(250))),
                         ).await?;
