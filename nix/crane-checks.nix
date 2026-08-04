@@ -78,6 +78,7 @@ in
         cargo run --locked -p kokage --example build_farm --features serde
         cargo run --locked -p kokage --example shard_store --features serde
         cargo run --locked -p kokage --example sidecar
+        cargo run --locked -p kokage --example ingest_gateway --features serde
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
         bash scripts/test-docs.sh
       '';
