@@ -1,4 +1,4 @@
-use std::{fmt, io, net::SocketAddr, time::Duration};
+use std::{fmt, io, net::SocketAddr, sync::Arc, time::Duration};
 
 use kokage::{
     ActorRef, DynamicScopeRef, ExitResult, OneShotTaskSpec, RestartPolicy, SendErrorKind, Shutdown,
@@ -7,7 +7,7 @@ use kokage::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::watch,
+    sync::{Notify, watch},
 };
 
 use crate::model::{Evidence, IngressOutcome, MalformedKind, TelemetryEvent};
@@ -162,29 +162,44 @@ pub fn listener(
         let address = address.clone();
         let next_connection = next_connection.clone();
         async move {
-            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
-            address.send_replace(Some(listener.local_addr()?));
-            ctx.mark_ready();
+            address.send_replace(None);
+            let result: ExitResult = async {
+                let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+                address.send_replace(Some(listener.local_addr()?));
+                ctx.mark_ready();
 
-            loop {
-                tokio::select! {
-                    _ = ctx.shutdown_token().cancelled() => return Ok(()),
-                    accepted = listener.accept() => {
-                        let (stream, _) = accepted?;
-                        evidence.connection_accepted();
-                        stream.set_nodelay(true)?;
-                        let id = next_connection.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        connections.spawn_once_spec(
-                            OneShotTaskSpec::new(format!("connection-{id}"), {
-                                let intake = intake.clone();
-                                let evidence = evidence.clone();
-                                move |ctx| Connection::new(stream, intake, evidence).run(ctx)
-                            })
-                            .shutdown(Shutdown::graceful_for(Duration::from_millis(250))),
-                        ).await?;
+                loop {
+                    tokio::select! {
+                        _ = ctx.shutdown_token().cancelled() => return Ok(()),
+                        accepted = listener.accept() => {
+                            let (stream, _) = accepted?;
+                            stream.set_nodelay(true)?;
+                            let id = next_connection.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            let start = Arc::new(Notify::new());
+                            connections.spawn_once_spec(
+                                OneShotTaskSpec::new(format!("connection-{id}"), {
+                                    let intake = intake.clone();
+                                    let evidence = evidence.clone();
+                                    let start = start.clone();
+                                    move |ctx| async move {
+                                        start.notified().await;
+                                        Connection::new(stream, intake, evidence).run(ctx).await
+                                    }
+                                })
+                                .shutdown(Shutdown::graceful_for(Duration::from_millis(250))),
+                            ).await?;
+
+                            // Count only successful membership insertion, before the
+                            // connection can publish any outcome of its own.
+                            evidence.connection_accepted();
+                            start.notify_one();
+                        }
                     }
                 }
             }
+            .await;
+            address.send_replace(None);
+            result
         }
     })
     .manual_readiness(Duration::from_secs(2))

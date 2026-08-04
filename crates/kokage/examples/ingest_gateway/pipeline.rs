@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::io;
 
 use kokage::{Actor, ActorRef, Context, ExitResult, Reply};
 
@@ -136,8 +136,4 @@ pub fn ship_batch_size(batch: &ShipBatch) -> usize {
 
 pub fn event_size(event: &TelemetryEvent) -> usize {
     event.source.len() + size_of::<u64>() + size_of::<i64>()
-}
-
-pub fn shared_attempt_counter() -> Arc<std::sync::atomic::AtomicU64> {
-    Arc::new(std::sync::atomic::AtomicU64::new(0))
 }

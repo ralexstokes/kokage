@@ -30,7 +30,7 @@ Six larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry), **`assistant_control_plane`** (an LLM-agent control
 plane with offloaded model calls), **`build_farm`** (a finite dependency
-build over restarting service tasks and dynamic one-shot workers), and
+build over restarting service tasks and dynamic one-shot workers),
 **`shard_store`** (planned sharded-state handoff, directory rebinding, rolling
 reload, and crash recovery), and **`ingest_gateway`** (real loopback TCP,
 dynamic connection tasks, bounded FIFO overload, and a flaky downstream

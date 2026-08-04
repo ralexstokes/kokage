@@ -28,6 +28,11 @@
 //! generation order and delay intervals, all four malformed failures, all six
 //! connection removals, and the absence of observation lag.
 //!
+//! `ExitStatus::failure_message` retains application errors for tasks, but an
+//! actor failure is represented only as ``actor `<id>` returned an error``.
+//! The sink's application-owned attempt counter therefore proves the scripted
+//! failure cause; snapshots and lifecycle events prove restart behavior.
+//!
 //! Run the same headless acceptance path used by CI:
 //!
 //! ```sh
@@ -40,7 +45,11 @@ mod pipeline;
 
 use std::{
     error::Error,
-    sync::{Arc, Mutex, PoisonError, atomic::Ordering},
+    io,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -49,7 +58,11 @@ use kokage::{
     Strategy, Tree,
     observe::{ActorStats, ChildEventKind, LifecycleEvent, LifecycleEventKind, LifecycleWatch},
 };
-use tokio::{net::TcpStream, sync::watch, time::timeout};
+use tokio::{
+    net::TcpStream,
+    sync::watch,
+    time::{sleep, timeout},
+};
 
 use model::{Evidence, GatewayReport, MalformedKind, PipelineGate, TelemetryEvent};
 use pipeline::{BatchMsg, Batcher, Enricher, ScriptedSink, ShipBatch};
@@ -168,7 +181,9 @@ async fn run_acceptance() -> Result<(), AnyError> {
         }
     });
 
-    timeout(ACCEPTANCE_BOUND, gateway.root.wait_started()).await??;
+    timeout(ACCEPTANCE_BOUND, gateway.root.wait_started())
+        .await
+        .map_err(|_| timeout_error("gateway root to start", &gateway.root.snapshot()))??;
     let sink = gateway
         .root
         .snapshot()
@@ -177,31 +192,31 @@ async fn run_acceptance() -> Result<(), AnyError> {
         .ok_or("shipper snapshot missing")?;
     assert_eq!(sink.generation, 2);
     assert_eq!(sink.restart_count, 2);
-    assert!(
-        sink.state
-            .last_exit()
-            .and_then(kokage::observe::ExitStatus::failure_message)
-            .is_some_and(|message| message.contains("shipper"))
-    );
-    gateway
-        .evidence
-        .wait_for(|report| report.sink_connect_attempts == 3)
-        .await;
+    wait_evidence(
+        "sink to complete its third connection attempt",
+        &gateway.evidence,
+        |report| report.sink_connect_attempts == 3,
+    )
+    .await?;
     println!("PHASE 1 OK — flaky sink recovered after two supervised backoffs");
 
-    let address = wait_for_address(gateway.address.clone()).await?;
-
-    let mut flood = TcpStream::connect(address).await?;
-    flood.set_nodelay(true)?;
+    let mut flood = connect_to_listener(&gateway.address).await?;
     for id in 0..=1 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    timeout(ACCEPTANCE_BOUND, gateway.gate.wait_entered()).await?;
+    timeout(ACCEPTANCE_BOUND, gateway.gate.wait_entered())
+        .await
+        .map_err(|_| {
+            timeout_error(
+                "first sink batch to enter the pipeline gate",
+                &gateway.shipper.stats(),
+            )
+        })?;
 
     for id in 2..=3 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    wait_stats(&gateway.shipper, |stats| {
+    wait_stats("shipper saturation", &gateway.shipper, |stats| {
         stats.messages_accepted == 2 && stats.messages_received == 1 && stats.mailbox_depth == 1
     })
     .await?;
@@ -209,22 +224,32 @@ async fn run_acceptance() -> Result<(), AnyError> {
     for id in 4..=5 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    wait_stats(&gateway.batcher, |stats| stats.messages_received == 6).await?;
+    wait_stats(
+        "batcher to receive the first three batches",
+        &gateway.batcher,
+        |stats| stats.messages_received == 6,
+    )
+    .await?;
 
     for id in 6..=7 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    wait_stats(&gateway.batcher, |stats| {
+    wait_stats("batcher mailbox saturation", &gateway.batcher, |stats| {
         stats.mailbox_depth == BATCHER_CAPACITY
     })
     .await?;
 
     network::write_event(&mut flood, &TelemetryEvent::scripted(8)).await?;
-    wait_stats(&gateway.enricher, |stats| stats.messages_received == 9).await?;
+    wait_stats(
+        "enricher to receive the ninth frame",
+        &gateway.enricher,
+        |stats| stats.messages_received == 9,
+    )
+    .await?;
     for id in 9..=12 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    wait_stats(&gateway.enricher, |stats| {
+    wait_stats("enricher mailbox saturation", &gateway.enricher, |stats| {
         stats.mailbox_depth == ENRICHER_CAPACITY
     })
     .await?;
@@ -232,11 +257,10 @@ async fn run_acceptance() -> Result<(), AnyError> {
     for id in 13..=20 {
         network::write_event(&mut flood, &TelemetryEvent::scripted(id)).await?;
     }
-    let overload = timeout(
-        ACCEPTANCE_BOUND,
-        gateway
-            .evidence
-            .wait_for(|report| report.valid_frames == 21),
+    let overload = wait_evidence(
+        "ingress to publish all overload outcomes",
+        &gateway.evidence,
+        |report| report.valid_frames == 21,
     )
     .await?;
     assert_overload_stats(&gateway, &overload);
@@ -246,45 +270,46 @@ async fn run_acceptance() -> Result<(), AnyError> {
     );
 
     gateway.gate.open();
-    wait_stats(&gateway.batcher, |stats| stats.messages_received == 13).await?;
+    wait_stats(
+        "batcher to drain all accepted overload frames",
+        &gateway.batcher,
+        |stats| stats.messages_received == 13,
+    )
+    .await?;
     let flushed = gateway
         .batcher
         .call(|reply| BatchMsg::Flush { reply }, CALL_BOUND)
         .await?;
     assert_eq!(flushed, 1);
-    timeout(
-        ACCEPTANCE_BOUND,
-        gateway
-            .evidence
-            .wait_for(|report| report.shipped_ids.len() == 13),
+    wait_evidence(
+        "sink to ship the overload sequence",
+        &gateway.evidence,
+        |report| report.shipped_ids.len() == 13,
     )
     .await?;
     drop(flood);
 
     for (index, kind) in MalformedKind::ALL.into_iter().enumerate() {
-        let mut malformed = TcpStream::connect(address).await?;
+        let mut malformed = connect_to_listener(&gateway.address).await?;
         network::write_malformed(&mut malformed, kind).await?;
         drop(malformed);
         let expected = u64::try_from(index + 1).expect("scripted malformed count fits in u64");
-        timeout(
-            ACCEPTANCE_BOUND,
-            gateway
-                .evidence
-                .wait_for(|report| report.malformed_clients == expected),
-        )
+        let label = format!("gateway to record malformed client {kind:?}");
+        wait_evidence(&label, &gateway.evidence, |report| {
+            report.malformed_clients == expected
+        })
         .await?;
     }
 
-    let mut healthy = TcpStream::connect(address).await?;
+    let mut healthy = connect_to_listener(&gateway.address).await?;
     for id in 100..=101 {
         network::write_event(&mut healthy, &TelemetryEvent::scripted(id)).await?;
     }
     drop(healthy);
-    timeout(
-        ACCEPTANCE_BOUND,
-        gateway
-            .evidence
-            .wait_for(|report| report.shipped_ids.len() == 15),
+    wait_evidence(
+        "sink to ship the post-failure healthy frames",
+        &gateway.evidence,
+        |report| report.shipped_ids.len() == 15,
     )
     .await?;
     wait_for_empty_scope(&gateway.connections).await?;
@@ -302,7 +327,14 @@ async fn run_acceptance() -> Result<(), AnyError> {
     println!("PHASE 4 OK — overload report and cumulative ActorStats agree");
 
     gateway.running.shutdown().await?;
-    timeout(ACCEPTANCE_BOUND, lifecycle_collector).await??;
+    timeout(ACCEPTANCE_BOUND, lifecycle_collector)
+        .await
+        .map_err(|_| {
+            timeout_error(
+                "lifecycle collector to observe supervisor shutdown",
+                &lifecycle_evidence.snapshot(),
+            )
+        })??;
     let lifecycle_report = lifecycle_evidence.snapshot();
     assert_lifecycle(&lifecycle_report);
     println!("PHASE 5 OK — lifecycle report observed backoff, isolation, and teardown");
@@ -312,7 +344,7 @@ async fn run_acceptance() -> Result<(), AnyError> {
 fn assemble() -> Result<Gateway, AnyError> {
     let evidence = Evidence::default();
     let gate = PipelineGate::default();
-    let attempts = pipeline::shared_attempt_counter();
+    let attempts = Arc::new(AtomicU64::new(0));
 
     let shipper_spec = ActorSpec::new("shipper", {
         let evidence = evidence.clone();
@@ -389,15 +421,42 @@ async fn wait_for_address(
     timeout(ACCEPTANCE_BOUND, async {
         loop {
             if let Some(address) = *address.borrow() {
-                return Ok(address);
+                return Ok::<_, watch::error::RecvError>(address);
             }
             address.changed().await?;
         }
     })
-    .await?
+    .await
+    .map_err(|_| timeout_error("listener to publish an address", &*address.borrow()))?
+    .map_err(Into::into)
+}
+
+async fn connect_to_listener(
+    address: &watch::Receiver<Option<std::net::SocketAddr>>,
+) -> Result<TcpStream, AnyError> {
+    let current = wait_for_address(address.clone()).await?;
+    let stream = TcpStream::connect(current).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to connect to current listener address {current}: {error}"),
+        )
+    })?;
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
+async fn wait_evidence(
+    label: &str,
+    evidence: &Evidence,
+    predicate: impl Fn(&GatewayReport) -> bool,
+) -> Result<GatewayReport, AnyError> {
+    timeout(ACCEPTANCE_BOUND, evidence.wait_for(predicate))
+        .await
+        .map_err(|_| timeout_error(label, &evidence.snapshot()))
 }
 
 async fn wait_stats<M: Send + 'static>(
+    label: &str,
     actor: &ActorRef<M>,
     predicate: impl Fn(&ActorStats) -> bool,
 ) -> Result<ActorStats, AnyError> {
@@ -407,11 +466,21 @@ async fn wait_stats<M: Send + 'static>(
             if predicate(&stats) {
                 return stats;
             }
-            tokio::task::yield_now().await;
+            sleep(Duration::from_millis(1)).await;
         }
     })
     .await
-    .map_err(Into::into)
+    .map_err(|_| timeout_error(label, &actor.stats()))
+}
+
+fn timeout_error(label: &str, last_observed: &impl std::fmt::Debug) -> AnyError {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!(
+            "timed out after {ACCEPTANCE_BOUND:?} waiting for {label}; last observed: {last_observed:?}"
+        ),
+    )
+    .into()
 }
 
 async fn wait_for_empty_scope(scope: &DynamicScopeRef) -> Result<(), AnyError> {
@@ -420,7 +489,8 @@ async fn wait_for_empty_scope(scope: &DynamicScopeRef) -> Result<(), AnyError> {
         ACCEPTANCE_BOUND,
         snapshots.wait_for(|snapshot| snapshot.children.is_empty()),
     )
-    .await??;
+    .await
+    .map_err(|_| timeout_error("connection scope to become empty", &scope.snapshot()))??;
     Ok(())
 }
 
@@ -495,5 +565,4 @@ fn assert_lifecycle(report: &LifecycleReport) {
     );
     assert_eq!(report.connection_failed_exits, 4, "{report:?}");
     assert_eq!(report.connection_removals, 6, "{report:?}");
-    assert!(report.sink_failed_exits < SINK_RESTART_LIMIT as u64);
 }
